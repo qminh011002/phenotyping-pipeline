@@ -1,8 +1,41 @@
-# Phenotyping Ecosystem — Setup Guide
+# 🧬 Phenotyping Ecosystem
 
-## Prerequisites
+*A computer vision desktop application for automated insect phenotyping — built with YOLOv8, FastAPI, React, and Tauri.*
 
-Install the following tools before running the setup:
+---
+
+## ⚡ What It Does
+
+Detect and count insect embryos (eggs, larvae, pupae, neonates) in high-resolution microscopy images using a tiling inference pipeline. Results are visualized with bounding box overlays and stored for historical analysis.
+
+| Feature | Status |
+|---------|--------|
+| 🔬 Egg Detection (YOLOv8) | ✅ Active |
+| 📦 Batch Processing | ✅ Active |
+| 🎨 Bounding Box Overlays | ✅ Active |
+| 📊 Historical Analysis | 🔜 Coming Soon |
+| 🧫 Larvae / Pupae / Neonate | 🔜 Coming Soon |
+| 📷 Camera Capture | 🔜 Coming Soon |
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Desktop Shell** | Tauri 2 |
+| **Frontend** | React 18 + TypeScript + Vite |
+| **UI Components** | shadcn/ui + Tailwind CSS |
+| **Backend API** | FastAPI (Python 3.11+) |
+| **Inference Engine** | Ultralytics YOLOv8 |
+| **Database** | PostgreSQL (async) |
+| **Image Pipeline** | OpenCV tiling + NMS dedup |
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
 
 | Tool | Version | Install |
 |------|---------|---------|
@@ -12,12 +45,9 @@ Install the following tools before running the setup:
 | Docker | latest | [docker.com](https://www.docker.com/get-started/) |
 | Rust | stable | [rust-lang.org](https://www.rust-lang.org/tools/install) |
 
-> **WSL2 users:** Install Docker Desktop for Windows or configure the `docker` CLI in WSL.
-> See [WSL Docker guide](https://docs.docker.com/desktop/wsl/).
+> **WSL2 users:** Install Docker Desktop for Windows or configure the `docker` CLI in WSL. See the [WSL Docker guide](https://docs.docker.com/desktop/wsl/).
 
----
-
-## Quick Start (Fresh Clone)
+### One-command Setup
 
 ```bash
 # 1. Clone and enter the project
@@ -26,7 +56,6 @@ cd phenotyping-ecosystem
 
 # 2. Copy environment file
 cp backend/.env.example backend/.env
-# Edit backend/.env if PIPELINE_ROOT needs adjustment
 
 # 3. Start everything with one command
 ./dev.sh
@@ -41,7 +70,34 @@ The script will:
 
 ---
 
-## Manual Setup (Step by Step)
+## 📁 Project Structure
+
+```
+phenotyping-ecosystem/
+├── docker-compose.yml      ← PostgreSQL (do NOT edit)
+├── dev.sh                  ← One-command startup (do NOT edit)
+│
+├── backend/
+│   ├── app/
+│   │   ├── main.py         ← FastAPI entry point
+│   │   ├── database.py     ← Async SQLAlchemy setup
+│   │   ├── models/         ← Database models
+│   │   ├── routers/        ← API route handlers
+│   │   ├── services/       ← Business logic
+│   │   ├── schemas/        ← Pydantic models
+│   │   └── ...
+│   ├── alembic/             ← Database migrations
+│   ├── data/results/       ← Overlay images (created at runtime)
+│   └── .env                ← Environment variables
+│
+└── phenotyping-client/
+    ├── src/                ← React frontend source
+    └── ...                 ← Tauri + Vite config
+```
+
+---
+
+## 🔧 Manual Setup
 
 ### 1. PostgreSQL
 
@@ -59,8 +115,8 @@ docker compose up -d
 cd backend
 
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate   # On Windows: venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate    # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -e ".[dev]"
@@ -77,42 +133,51 @@ uvicorn app.main:app --reload
 ```bash
 cd phenotyping-client
 pnpm install
-pnpm dev
+pnpm tauri dev    # Full desktop app (Tauri + React)
+# OR
+pnpm dev          # Web-only (React + Vite, no Rust)
 ```
 
 ---
 
-## Project Structure
+## 🧪 Inference Pipeline
 
 ```
-phenotyping-ecosystem/
-├── docker-compose.yml      ← PostgreSQL (do NOT edit)
-├── dev.sh                 ← One-command startup (do NOT edit)
-├── SETUP.md               ← You are here
-│
-├── backend/
-│   ├── app/
-│   │   ├── main.py        ← FastAPI entry point
-│   │   ├── database.py    ← Async SQLAlchemy setup
-│   │   ├── models/        ← Database models
-│   │   ├── routers/       ← API route handlers
-│   │   ├── services/      ← Business logic
-│   │   ├── schemas/       ← Pydantic models
-│   │   └── ...
-│   ├── alembic/           ← Database migrations
-│   ├── data/results/      ← Overlay images (created at runtime)
-│   └── .env               ← Environment variables (copy from .env.example)
-│
-└── phenotyping-client/
-    ├── src/               ← React frontend source
-    └── ...                ← Tauri + Vite config
+Input Image (6000×4000 px)
+        │
+        ▼
+┌───────────────────┐
+│  Tiling Engine    │  ← Tile size: 512px, 50% overlap
+│  (OpenCV)         │
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│  YOLOv8 Detector  │  ← Confidence threshold: 0.4
+│  (Ultralytics)    │
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────┐
+│  Dedup Engine     │  ← center_zone (default) or edge_nms
+│  (NMS / Zones)    │
+└────────┬──────────┘
+         │
+         ▼
+  Overlay PNG + JSON
 ```
 
 ---
 
-## Environment Variables
+## 🌐 API Reference
 
-All variables are in `backend/.env`:
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+- **OpenAPI JSON**: `http://localhost:8000/openapi.json`
+
+---
+
+## 🔐 Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -125,94 +190,35 @@ All variables are in `backend/.env`:
 
 ---
 
-## Tauri Development
-
-For full Tauri development (including Rust backend compilation):
+## 🐛 Common Tasks
 
 ```bash
-./dev.sh --tauri
-```
-
-> First run downloads Rust toolchain — allow 5–10 minutes.
-
----
-
-## Common Tasks
-
-### Run migrations
-
-```bash
-cd backend
-source venv/bin/activate
+# Run migrations
+cd backend && source .venv/bin/activate
 alembic upgrade head        # Apply migrations
-alembic downgrade -1       # Roll back last migration
-alembic history            # Show migration history
-```
+alembic downgrade -1        # Roll back last migration
 
-### Reset database
+# Reset database
+alembic downgrade base && alembic upgrade head
 
-```bash
-cd backend
-source venv/bin/activate
-alembic downgrade base      # Drop all tables
-alembic upgrade head       # Recreate
-```
-
-### Backend API docs
-
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-- OpenAPI JSON: `http://localhost:8000/openapi.json`
-
----
-
-## Troubleshooting
-
-### PostgreSQL connection refused
-
-```bash
-# Check if container is running
-docker compose ps
-
-# Check logs
-docker compose logs postgres
-
-# Restart
-docker compose restart postgres
-```
-
-### Port already in use
-
-```bash
-# Find what's using port 8000 or 5432
-lsof -i :8000
-lsof -i :5432
-
-# Stop the conflicting process or change the port in .env
-```
-
-### Frontend: "Module not found"
-
-```bash
+# Frontend: fix module errors
 cd phenotyping-client
-rm -rf node_modules pnpm-lock.yaml
-pnpm install
-```
-
-### Backend: "Module not found"
-
-```bash
-cd backend
-source venv/bin/activate
-pip install -e ".[dev]"
+rm -rf node_modules pnpm-lock.yaml && pnpm install
 ```
 
 ---
 
-## Development Workflow
+## 🔥 Troubleshooting
 
-1. Start services: `./dev.sh`
-2. Make code changes
-3. Backend auto-reloads on file changes
-4. Frontend hot-reloads via Vite HMR
-5. Press Ctrl+C to stop all services
+| Problem | Fix |
+|---------|-----|
+| PostgreSQL connection refused | `docker compose ps` → `docker compose logs postgres` |
+| Port already in use | `lsof -i :8000` / `lsof -i :5432` |
+| Backend: Module not found | `pip install -e ".[dev]"` in `.venv` |
+| Tauri first run slow | Normal — downloads Rust toolchain (5–10 min) |
+
+---
+
+## 📜 License
+
+MIT — Genetics Team Internal Tool
