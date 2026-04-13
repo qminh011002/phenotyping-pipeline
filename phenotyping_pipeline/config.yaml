@@ -1,0 +1,47 @@
+egg:
+  model: models/egg_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.4
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24
+
+larvae:
+  model: models/larvae_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.4
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24
+
+pupae:
+  model: models/pupae_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.4
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24
+
+neonate:
+  model: models/neonate_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.4
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24

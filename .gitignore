@@ -1,0 +1,87 @@
+# ==========================================
+# Python
+# ==========================================
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+backend/venv/
+backend/.env
+backend/data/results/*
+backend/data/overlays/*
+!backend/data/results/.gitkeep
+!backend/data/overlays/.gitkeep
+backend/alembic.ini
+
+# ==========================================
+# Node / pnpm
+# ==========================================
+phenotyping-client/node_modules/
+phenotyping-client/dist/
+phenotyping-client/.parcel-cache/
+pnpm-store/
+.pnpm-store/
+
+# ==========================================
+# Rust (Tauri)
+# ==========================================
+phenotyping-client/src-tauri/target/
+
+# ==========================================
+# Build artifacts
+# ==========================================
+*.egg-info/
+dist/
+build/
+*.whl
+
+# ==========================================
+# IDE
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+
+# ==========================================
+# OS
+# ==========================================
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Logs
+# ==========================================
+*.log
+npm-debug.log*
+uvicorn.log*
+
+# ==========================================
+# Environment (sensitive)
+# ==========================================
+.env
+.env.local
+.env.production
+.env.*.local
+
+# ==========================================
+# Cursor / Agent artifacts
+# ==========================================
+.cursor/
+.agent/
+agent-transcripts/
+
+# ==========================================
+# Task docs (not source code)
+# ==========================================
+tasks/
+ROADMAP.md
+IMPLEMENTATION_ORDER.md
+
+# ==========================================
+# Docs (not source code)
+# ==========================================
+README.md
+SETUP.md
+*.md
+!*.md
