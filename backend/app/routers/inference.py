@@ -60,8 +60,9 @@ def _validate_extension(filename: str) -> str:
     },
 )
 async def run_single_inference(
-    file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
     inference_svc: AnnotatedEggInferenceService,
+    file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
+    batch_id: Annotated[str | None, Query(description="Optional batch ID for overlay path")] = None,
 ) -> DetectionResult:
     """Run egg detection on a single uploaded image.
 
@@ -96,11 +97,11 @@ async def run_single_inference(
             detail="Uploaded file is empty.",
         )
 
-    batch_id = str(uuid.uuid4())
+    resolved_batch_id = batch_id or str(uuid.uuid4())
 
     # Delegate to service
     try:
-        result = await inference_svc.process_single(data, stem, batch_id)
+        result = await inference_svc.process_single(data, stem, resolved_batch_id)
     except InvalidImageError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

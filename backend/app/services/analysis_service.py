@@ -88,9 +88,29 @@ class AnalysisService:
     ) -> AnalysisImage:
         """Record a single image's inference result into the database.
 
-        The overlay image is already saved to disk by EggInferenceService.
-        We store only the overlay reference string and the structured annotation data.
+        The overlay image is already saved to disk by EggInferenceService at:
+            {image_storage_dir}/{batch_id}/{filename}_overlay.png
+
+        We store the RELATIVE filesystem path as overlay_path (not the API overlay_url).
+        The overlay_url points to /inference/results/{batch_id}/{filename}/overlay.png which
+        the overlay router uses to serve the file from the same storage directory.
         """
+        # The detection result's overlay_url is the API path like
+        # "/inference/results/{batch_id}/{filename}/overlay.png".
+        # We need to store the filesystem path {batch_id}/{filename}_overlay.png
+        # in overlay_path so the analyses router can resolve it correctly.
+        overlay_path_value: str | None = None
+        if result.overlay_url:
+            # Parse the API overlay_url to extract the filesystem path.
+            # overlay_url format: "/inference/results/{batch_id}/{filename}/overlay.png"
+            # filesystem format:   "{batch_id}/{filename}_overlay.png"
+            url = result.overlay_url.rstrip("/")
+            if url.startswith("/inference/results/"):
+                suffix = url.removeprefix("/inference/results/")  # "{batch_id}/{filename}/overlay.png"
+                # Drop the "/overlay.png" suffix and add "_overlay.png"
+                if suffix.endswith("/overlay.png"):
+                    overlay_path_value = suffix.removesuffix("/overlay.png") + "_overlay.png"
+
         image = AnalysisImage(
             batch_id=batch_id,
             original_filename=result.filename,
@@ -102,7 +122,7 @@ class AnalysisService:
             avg_confidence=result.avg_confidence,
             elapsed_secs=result.elapsed_seconds,
             annotations=result.annotations,
-            overlay_path=result.overlay_url,
+            overlay_path=overlay_path_value,
         )
         db.add(image)
         await db.flush()

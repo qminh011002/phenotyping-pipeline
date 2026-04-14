@@ -32,8 +32,8 @@ export async function ping() {
 // ── Inference ───────────────────────────────────────────────────────────────
 
 /** POST /inference/egg — run egg detection on a single image */
-export async function inferSingleEgg(file: File): Promise<DetectionResult> {
-  return http.postFormData<DetectionResult>("inference/egg", "file", file);
+export async function inferSingleEgg(file: File, batchId?: string): Promise<DetectionResult> {
+  return http.postFormData<DetectionResult>("inference/egg", "file", file, batchId ? { batch_id: batchId } : undefined);
 }
 
 /** POST /inference/egg/batch — run egg detection on multiple images */
@@ -41,11 +41,28 @@ export async function inferBatchEgg(files: File[]): Promise<BatchDetectionResult
   return http.postFormDataMulti<BatchDetectionResult>("inference/egg/batch", "files", files);
 }
 
+// ── Overlay URLs ───────────────────────────────────────────────────────────────
+
 /**
- * Return the absolute URL for a previously processed overlay image.
- * The overlay_url from DetectionResult is relative; this builds the full URL.
+ * Return the absolute URL for a recorded overlay image from the analyses DB.
+ * Uses the /analyses/{batch_id}/images/{image_id}/overlay endpoint.
+ * Call this for overlays of saved batches (from the Recorded page / detail view).
+ */
+export function getAnalysesOverlayUrl(batchId: string, imageId: string): string {
+  return `${getBaseUrl().replace(/\/$/, "")}/analyses/${batchId}/images/${imageId}/overlay`;
+}
+
+/**
+ * Return the absolute URL for a processing-session overlay image.
+ * Uses the /inference/results/{batch_id}/{filename}/overlay endpoint.
+ * Call this for overlays during the active processing session (before DB persistence).
  */
 export function getOverlayUrl(batchId: string, filename: string): string {
+  // If batchId already looks like a full relative path (starts with "/"), it's the
+  // stored overlay_path from the database — use it directly without appending filename.
+  if (batchId.startsWith("/")) {
+    return `${getBaseUrl().replace(/\/$/, "")}${batchId}`;
+  }
   return `${getBaseUrl().replace(/\/$/, "")}/inference/results/${batchId}/${filename}/overlay.png`;
 }
 
@@ -91,6 +108,37 @@ export async function getRecentLogs(limit = 200): Promise<{ logs: LogEntry[] }> 
 }
 
 // ── Analyses ───────────────────────────────────────────────────────────────
+
+/** POST /analyses — create a new analysis batch */
+export async function createBatch(data: {
+  organism_type: string;
+  mode: string;
+  device: string;
+  config_snapshot: Record<string, unknown>;
+  total_image_count: number;
+}): Promise<AnalysisBatchDetail> {
+  return http.post<AnalysisBatchDetail>("analyses", data);
+}
+
+/** POST /analyses/{batch_id}/images — record a single image's inference result */
+export async function addImageResult(
+  batchId: string,
+  data: {
+    filename: string;
+    count: number;
+    avg_confidence: number;
+    elapsed_seconds: number;
+    annotations: Array<{ label: string; bbox: [number, number, number, number]; confidence: number }>;
+    overlay_url: string;
+  },
+): Promise<{ status: string; batch_id: string }> {
+  return http.post<{ status: string; batch_id: string }>(`analyses/${batchId}/images`, data);
+}
+
+/** POST /analyses/{batch_id}/complete — mark batch as completed */
+export async function completeBatch(batchId: string): Promise<AnalysisBatchDetail> {
+  return http.post<AnalysisBatchDetail>(`analyses/${batchId}/complete`);
+}
 
 /** GET /analyses — list batches with pagination and optional filters */
 export async function listAnalyses(params: {

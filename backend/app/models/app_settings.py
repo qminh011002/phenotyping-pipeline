@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import TIMESTAMP, CheckConstraint, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.db.base import Base
 
 
 class AppSettingsRow(Base):

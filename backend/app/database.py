@@ -7,19 +7,25 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from typing_extensions import Self
 from app.db.base import Base
 
 
 class DatabaseSettings(BaseSettings):
     """Database connection settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix="",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
 

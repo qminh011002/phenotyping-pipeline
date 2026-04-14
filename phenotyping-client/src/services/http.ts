@@ -39,8 +39,12 @@ async function _fetch<T>(method: HttpMethod, path: string, body?: unknown): Prom
   return _parseResponse(response);
 }
 
-async function _fetchFormData<T>(method: HttpMethod, path: string, fieldName: string, files: File[]): Promise<T> {
-  const url = _url(path);
+async function _fetchFormData<T>(method: HttpMethod, path: string, fieldName: string, files: File[], params?: Record<string, string>): Promise<T> {
+  let url = _url(path);
+  if (params) {
+    const qs = new URLSearchParams(params).toString();
+    url = `${url}?${qs}`;
+  }
   const form = new FormData();
   for (const file of files) {
     form.append(fieldName, file, file.name);
@@ -94,15 +98,17 @@ export const http = {
 
   /**
    * Multipart single-file upload — sends FormData with the file under `fieldName`.
+   * Optionally appends query params.
    */
-  async postFormData<T>(path: string, fieldName: string, file: File): Promise<T> {
-    return _fetchFormData<T>("POST", path, fieldName, [file]);
+  async postFormData<T>(path: string, fieldName: string, file: File, params?: Record<string, string>): Promise<T> {
+    return _fetchFormData<T>("POST", path, fieldName, [file], params);
   },
 
   /**
    * Multipart multi-file upload — sends FormData with multiple files under `fieldName`.
+   * Optionally appends query params.
    */
-  async postFormDataMulti<T>(path: string, fieldName: string, files: File[]): Promise<T> {
-    return _fetchFormData<T>("POST", path, fieldName, files);
+  async postFormDataMulti<T>(path: string, fieldName: string, files: File[], params?: Record<string, string>): Promise<T> {
+    return _fetchFormData<T>("POST", path, fieldName, files, params);
   },
 };

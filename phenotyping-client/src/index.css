@@ -2,6 +2,74 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Keyframes
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@keyframes slideInFromRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes slideOutToRight {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+@keyframes slideInFromLeft {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes slideOutToLeft {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
+}
+@keyframes slideInFromTop {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes slideOutToTop {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-100%); }
+}
+@keyframes slideInFromBottom {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes slideOutToBottom {
+  from { transform: translateY(0); }
+  to   { transform: translateY(100%); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes zoomOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.96); }
+}
+@keyframes accordionDown {
+  from { height: 0; overflow: hidden; }
+  to   { height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height)); overflow: hidden; }
+}
+@keyframes accordionUp {
+  from { height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height)); overflow: hidden; }
+  to   { height: 0; overflow: hidden; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Tailwind v4 @theme — animation tokens
+   ═══════════════════════════════════════════════════════════════════════ */
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -22,12 +90,113 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Radius scale */
+  --radius-sm:   calc(var(--radius) - 4px);  /* 4px  — badges, small buttons */
+  --radius-md:   calc(var(--radius) - 2px);  /* 6px  — buttons default, inputs, selects */
+  --radius-lg:   var(--radius);              /* 8px  — cards, dialogs, popovers */
+  --radius-xl:   calc(var(--radius) + 4px);  /* 12px — large cards, sheets on mobile */
+  --radius-full: 9999px;                     /* 9999px — pills, avatars, status dots */
+
+  /* Elevation / shadow ramp */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  /* Typography */
+  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
+
+  /* Z-index scale */
+  --z-base:     0;
+  --z-sticky:   20;
+  --z-dropdown: 40;
+  --z-overlay:  50;
+  --z-modal:    60;
+  --z-popover:  70;
+  --z-toast:    80;
+  --z-tooltip:  90;
+
+  /* Sheet slide */
+  --animate-slide-in-from-right:  slideInFromRight  300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-out-to-right:   slideOutToRight   300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-in-from-left:   slideInFromLeft   300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-out-to-left:    slideOutToLeft    300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-in-from-top:    slideInFromTop    300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-out-to-top:     slideOutToTop     300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-in-from-bottom: slideInFromBottom 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-slide-out-to-bottom:  slideOutToBottom  300ms cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Fade / zoom */
+  --animate-fade-in:      fadeIn  200ms ease-out;
+  --animate-fade-out:     fadeOut 200ms ease-in;
+  --animate-zoom-in-95:   zoomIn  200ms ease-out;
+  --animate-zoom-out-95:  zoomOut 200ms ease-in;
+
+  /* Accordion */
+  --animate-accordion-down: accordionDown 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-accordion-up:  accordionUp  300ms cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Motion duration tokens */
+  --duration-fast:   150ms;
+  --duration-base:   200ms;
+  --duration-medium: 300ms;
+  --duration-slow:   500ms;
+
+  /* Motion easing tokens */
+  --ease-out:      cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in:       cubic-bezier(0.64, 0, 0.78, 0);
+  --ease-in-out:   cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Custom @utility classes shadcn components depend on
+   ═══════════════════════════════════════════════════════════════════════ */
+@utility animate-in          { animation-fill-mode: both; animation-duration: 200ms; }
+@utility animate-out         { animation-fill-mode: both; animation-duration: 200ms; }
+@utility fade-in-0           { animation-name: fadeIn; }
+@utility fade-out-0          { animation-name: fadeOut; }
+@utility zoom-in-95          { animation-name: zoomIn; }
+@utility zoom-out-95         { animation-name: zoomOut; }
+@utility duration-200        { animation-duration: 200ms; }
+@utility duration-300        { animation-duration: 300ms; }
+@utility duration-500        { animation-duration: 500ms; }
+@utility slide-in-from-right  { animation-name: slideInFromRight; }
+@utility slide-out-to-right   { animation-name: slideOutToRight; }
+@utility slide-in-from-left   { animation-name: slideInFromLeft; }
+@utility slide-out-to-left    { animation-name: slideOutToLeft; }
+@utility slide-in-from-top    { animation-name: slideInFromTop; }
+@utility slide-out-to-top     { animation-name: slideOutToTop; }
+@utility slide-in-from-bottom { animation-name: slideInFromBottom; }
+@utility slide-out-to-bottom  { animation-name: slideOutToBottom; }
+@utility animate-accordion-down { animation-name: accordionDown; }
+@utility animate-accordion-up  { animation-name: accordionUp; }
+@utility slide-in-from-top-2     { animation-name: slideInFromTop; }
+@utility slide-in-from-bottom-2  { animation-name: slideInFromBottom; }
+@utility slide-in-from-left-2    { animation-name: slideInFromLeft; }
+@utility slide-in-from-right-2   { animation-name: slideInFromRight; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Skeleton shimmer
+   ═══════════════════════════════════════════════════════════════════════ */
+@utility animate-shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    oklch(0.935 0.002 265) 0%,
+    oklch(0.9  0.003 265) 20%,
+    oklch(0.935 0.002 265) 40%,
+    oklch(0.935 0.002 265) 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Design tokens
+   ═══════════════════════════════════════════════════════════════════════ */
 :root {
   --radius: 0.5rem;
   --background: oklch(0.985 0.002 270);
@@ -49,6 +218,8 @@
   --border: oklch(0.9 0.003 265);
   --input: oklch(0.9 0.003 265);
   --ring: oklch(0.556 0.008 265);
+  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
 }
 
 .dark {
@@ -72,6 +243,8 @@
   --border: oklch(0.29 0.004 265);
   --input: oklch(0.29 0.004 265);
   --ring: oklch(0.556 0.008 265);
+  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
 }
 
 *,
@@ -83,4 +256,61 @@
 body {
   background-color: var(--background);
   color: var(--foreground);
+  font-family: var(--font-sans);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Dark mode shimmer — reads from dark theme tokens
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dark .animate-shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    oklch(0.26 0.004 265) 0%,
+    oklch(0.30 0.005 265) 20%,
+    oklch(0.26 0.004 265) 40%,
+    oklch(0.26 0.004 265) 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Custom scrollbar — slim, themed, matches design tokens in light + dark
+   ═══════════════════════════════════════════════════════════════════════════ */
+@layer base {
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+    border: 2px solid var(--background);
+    transition: background-color 150ms ease-out;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+  /* Firefox */
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Progress indeterminate bar
+   ═══════════════════════════════════════════════════════════════════════════ */
+@keyframes progress-indeterminate {
+  0%   { transform: translateX(-150%); }
+  50%  { transform: translateX(0%); }
+  100% { transform: translateX(250%); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Reduced Motion — collapse all CSS and Framer animations
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -18,7 +18,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.database import AsyncSession, get_session
 from app.deps import get_analysis_service, get_settings
 from app.schemas.analysis import (
+    AnalysisBatchCreate,
     AnalysisBatchDetail,
+    AnalysisBatchSummary,
+    AnalysisImageResult,
     AnalysisListResponse,
 )
 from app.services.analysis_service import AnalysisService
@@ -30,6 +33,35 @@ router = APIRouter(prefix="/analyses", tags=["analyses"])
 # Default pagination
 _DEFAULT_PAGE = 1
 _DEFAULT_PAGE_SIZE = 20
+
+
+@router.post(
+    "",
+    response_model=AnalysisBatchDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new analysis batch",
+    responses={
+        201: {"description": "Batch created"},
+        422: {"description": "Validation error"},
+    },
+)
+async def create_analysis(
+    data: AnalysisBatchCreate,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisBatchDetail:
+    """Create a new analysis batch with status 'processing'.
+
+    Call this when the operator clicks "Process Images" to register the batch
+    before inference begins. After processing each image, call POST /analyses/{id}/images
+    to record results. When all images are done, call POST /analyses/{id}/complete.
+    """
+    batch = await analysis_svc.create_batch(data=data, db=db)
+    await db.commit()
+    # Re-fetch full detail for the response
+    detail = await analysis_svc.get_batch_detail(batch_id=batch.id, db=db)
+    assert detail is not None
+    return detail
 
 
 @router.get(
@@ -182,3 +214,71 @@ async def get_overlay(
         media_type="image/png",
         headers={"Content-Disposition": f'inline; filename="{overlay_path.name}"'},
     )
+
+
+@router.post(
+    "/{batch_id}/images",
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a single image's inference result",
+    responses={
+        201: {"description": "Image result recorded"},
+        404: {"description": "Batch not found"},
+    },
+)
+async def add_image_result(
+    batch_id: UUID,
+    data: AnalysisImageResult,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> dict:
+    """Record one image's inference result into an existing batch.
+
+    Call this once per image after processing. The overlay PNG must already be
+    saved to disk — only the path reference is stored in the database.
+    """
+    # Verify batch exists
+    detail = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+
+    await analysis_svc.add_image_result(batch_id=batch_id, result=data, db=db)
+    await db.commit()
+    return {"status": "ok", "batch_id": str(batch_id)}
+
+
+@router.post(
+    "/{batch_id}/complete",
+    response_model=AnalysisBatchDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Mark a batch as completed and compute aggregates",
+    responses={
+        200: {"description": "Batch marked as completed"},
+        404: {"description": "Batch not found"},
+    },
+)
+async def complete_analysis(
+    batch_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisBatchDetail:
+    """Mark a batch as completed and compute aggregate statistics.
+
+    Call this after all images have been recorded via POST /analyses/{id}/images.
+    """
+    detail = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+
+    await analysis_svc.complete_batch(batch_id=batch_id, db=db)
+    await db.commit()
+
+    # Re-fetch updated detail
+    updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    assert updated is not None
+    return updated

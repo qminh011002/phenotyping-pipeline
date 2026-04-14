@@ -1,8 +1,23 @@
 import { NavLink } from "react-router-dom";
-import { Home, Microscope, History, Settings, ChevronLeft, ChevronRight, Sun, Moon } from "lucide-react";
+import { motion } from "framer-motion";
+import {
+  Home,
+  Microscope,
+  History,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  Sun,
+  Moon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useTheme } from "@/hooks/useTheme";
 
 const NAV_ITEMS = [
@@ -26,15 +41,20 @@ export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) 
   return (
     <aside
       className={cn(
-        "flex flex-col border-r bg-card transition-all duration-200",
+        "flex flex-col border-r bg-card transition-[width] duration-200 ease-out",
         collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH
       )}
     >
       {/* Header */}
-      <div className="flex h-14 items-center border-b px-3">
-        {!collapsed && (
-          <span className="truncate text-sm font-semibold tracking-tight">Phenotyping</span>
-        )}
+      <div className="flex h-14 shrink-0 items-center border-b px-3">
+        <span
+          className={cn(
+            "truncate text-sm font-semibold tracking-tight transition-opacity duration-150",
+            collapsed ? "opacity-0 pointer-events-none" : "opacity-100"
+          )}
+        >
+          Phenotyping
+        </span>
         {collapsed && (
           <span className="mx-auto text-base font-bold tracking-tight">P</span>
         )}
@@ -49,16 +69,37 @@ export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) 
             end={to === "/"}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                "hover:bg-accent hover:text-accent-foreground",
+                "relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-100",
+                "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+                "hover:bg-accent/50",
                 isActive
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground"
+                  ? "text-accent-foreground"
+                  : "text-muted-foreground hover:text-foreground"
               )
             }
           >
-            <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <motion.div
+                    layoutId="sidebar-active-pill"
+                    className="absolute inset-0 rounded-md bg-accent"
+                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                  />
+                )}
+                <span className="relative z-10 flex items-center gap-3">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span
+                    className={cn(
+                      "truncate transition-opacity duration-150",
+                      collapsed ? "opacity-0 pointer-events-none w-0" : "opacity-100"
+                    )}
+                  >
+                    {label}
+                  </span>
+                </span>
+              </>
+            )}
           </NavLink>
         ))}
       </nav>
@@ -67,16 +108,37 @@ export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) 
 
       {/* Theme toggle */}
       <div className="p-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn("w-full", collapsed ? "justify-center" : "justify-start")}
-          onClick={toggleTheme}
-          aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-        >
-          {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-          {!collapsed && <span className="text-xs">Theme</span>}
-        </Button>
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-center"
+                onClick={toggleTheme}
+                aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+              >
+                {theme === "light" ? (
+                  <Moon className="h-4 w-4" />
+                ) : (
+                  <Sun className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Theme</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-start"
+            onClick={toggleTheme}
+            aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          >
+            {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+            <span className="ml-2 text-xs">Theme</span>
+          </Button>
+        )}
       </div>
 
       <Separator />
@@ -86,18 +148,25 @@ export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) 
         <Button
           variant="ghost"
           size="sm"
-          className="w-full justify-center"
+          className={cn("w-full", collapsed ? "justify-center" : "justify-start")}
           onClick={() => onCollapsedChange?.(!collapsed)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-          {!collapsed && <span className="text-xs">Collapse</span>}
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className="h-4 w-4" />
+          )}
+          {!collapsed && <span className="ml-2 text-xs">Collapse</span>}
         </Button>
-        {!collapsed && (
-          <div className="px-3 py-1 text-[10px] text-muted-foreground">
-            v0.1.0
-          </div>
-        )}
+        <div
+          className={cn(
+            "px-3 py-1 text-[10px] text-muted-foreground transition-opacity duration-150",
+            collapsed ? "opacity-0 pointer-events-none h-0 p-0" : "opacity-100"
+          )}
+        >
+          v0.1.0
+        </div>
       </div>
     </aside>
   );
