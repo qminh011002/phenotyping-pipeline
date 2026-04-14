@@ -1,8 +1,19 @@
 # ==========================================
 # Python
 # ==========================================
-backend/__pycache__/
-backend/*.pyc
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc.*
+*.py,cover
+
+# virtual env
+.venv/
+venv/
+env/
+
+# backend specific
 backend/.venv/
 backend/venv/
 backend/.env

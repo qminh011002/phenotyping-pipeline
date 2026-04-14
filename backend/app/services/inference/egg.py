@@ -611,7 +611,10 @@ class EggInferenceService:
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _get_storage_dir(self) -> Path:
-        """Return the configured image storage directory as a Path."""
-        from app.deps import get_settings
+        """Return the current image storage directory from the DB-backed cache.
 
-        return get_settings().image_storage_dir
+        Reads the latest path from the DB cache (invalidated on PUT /settings/storage),
+        falling back to the env default if the DB is unavailable.
+        """
+        from app.deps import get_cached_storage_dir
+        return Path(get_cached_storage_dir())

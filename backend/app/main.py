@@ -87,10 +87,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _set_inference_service(inference_svc)
 
     # Initialize database (INF-003)
+    from app.config import AppSettings
     from app.database import get_db
 
     db = get_db()
     db.init()
+
+    # Seed app_settings singleton if not present (INF-003)
+    # If the database is unavailable (e.g. PostgreSQL not yet running), log a
+    # warning and continue — GET /settings will fail at runtime with a clear
+    # error message, and the user must ensure the DB is up before using those endpoints.
+    settings = AppSettings()
+    try:
+        async with db.session() as session:
+            from app.models.app_settings import AppSettingsRow
+            from sqlalchemy import select
+
+            result = await session.execute(select(AppSettingsRow).where(AppSettingsRow.id == 1))
+            if result.scalar_one_or_none() is None:
+                session.add(AppSettingsRow(
+                    id=1,
+                    image_storage_dir=str(settings.image_storage_dir),
+                    data_dir=str(settings.data_dir),
+                ))
+                await session.commit()
+                settings_logger.info(
+                    "Seeded app_settings singleton row",
+                    extra={"context": {"image_storage_dir": str(settings.image_storage_dir)}},
+                )
+    except OSError as exc:
+        settings_logger.warning(
+            "Could not seed app_settings row — database unavailable: %s",
+            exc,
+            extra={"context": {"exception": str(exc)}},
+        )
 
     # Start the 1-second heartbeat task for WebSocket log streaming
     log_buffer.start_heartbeat()

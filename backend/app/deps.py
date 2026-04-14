@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 # resolve EggInferenceService at module-load time.
 from app.services.inference.egg import EggInferenceService  # noqa: E402
 from app.services.analysis_service import AnalysisService  # noqa: E402
+from app.services.app_settings_service import AppSettingsService  # noqa: E402
 
 # Module-level singletons set by main.py lifespan
 _model_registry: "ModelRegistry | None" = None
@@ -145,3 +146,41 @@ def get_analysis_service() -> AnalysisService:
     Stateless; safe to reuse across all requests.
     """
     return AnalysisService()
+
+
+@lru_cache
+def get_app_settings_service() -> AppSettingsService:
+    """Return a cached AppSettingsService instance.
+
+    Stateless; safe to reuse across all requests.
+    """
+    return AppSettingsService()
+
+
+# ── Cached storage_dir ( invalidated on PUT /settings/storage ) ─────────────────
+
+_storage_dir_cache: str | None = None
+_storage_dir_cache_etag: int = 0  # bumped on every invalidation
+
+
+def get_cached_storage_dir() -> str:
+    """Return the current image_storage_dir, reading from the DB if the cache is cold.
+
+    The cache is invalidated whenever PUT /settings/storage successfully updates
+    the DB row (see invalidate_storage_dir_cache below).
+    """
+    global _storage_dir_cache, _storage_dir_cache_etag
+    if _storage_dir_cache is None:
+        from app.config import AppSettings
+        _storage_dir_cache = str(AppSettings().image_storage_dir)
+    return _storage_dir_cache
+
+
+def invalidate_storage_dir_cache() -> None:
+    """Bump the cache generation counter so the next call re-reads from the DB.
+
+    Called by PUT /settings/storage after a successful DB update.
+    """
+    global _storage_dir_cache, _storage_dir_cache_etag
+    _storage_dir_cache = None
+    _storage_dir_cache_etag += 1
