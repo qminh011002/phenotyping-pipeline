@@ -80,15 +80,25 @@ class ModelRegistry:
         else:
             self._device = "cpu"
 
-        # Apply CPU thread tuning
+        # CPU thread tuning — match the reference `infer_egg.py` script, which
+        # leaves torch at its default (all physical cores). An env override is
+        # exposed so operators can cap threads if they need to.
         if self._device == "cpu":
-            n_threads = max(1, (os.cpu_count() or 1) // 2)
-            torch.set_num_threads(n_threads)
-            logger.info(
-                "CPU mode: set torch.set_num_threads to %d",
-                n_threads,
-                extra={"context": {"n_threads": n_threads}},
-            )
+            override = os.environ.get("TORCH_NUM_THREADS")
+            if override:
+                try:
+                    n_threads = max(1, int(override))
+                    torch.set_num_threads(n_threads)
+                    logger.info(
+                        "CPU mode: torch.set_num_threads=%d (from TORCH_NUM_THREADS)",
+                        n_threads,
+                        extra={"context": {"n_threads": n_threads}},
+                    )
+                except ValueError:
+                    logger.warning(
+                        "Invalid TORCH_NUM_THREADS=%r — using torch default",
+                        override,
+                    )
 
         # Load YOLO model synchronously (blocking, 1-2s)
         logger.info(

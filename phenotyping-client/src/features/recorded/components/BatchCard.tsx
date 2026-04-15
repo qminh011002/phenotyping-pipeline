@@ -1,8 +1,19 @@
-// BatchCard — compact summary card for one analysis batch.
-// Shows date, organism, image count, total eggs, and a status badge.
+// BatchCard — rich summary card for one analysis batch.
+// Shows status, organism, image count, total eggs, confidence, and elapsed time.
 
 import { useState } from "react";
-import { Calendar, Image, Egg, AlertCircle, Loader2, CheckCircle2, Clock, Trash2, ChevronRight } from "lucide-react";
+import {
+  Calendar,
+  ImageIcon,
+  Egg,
+  AlertCircle,
+  Loader2,
+  CheckCircle2,
+  Clock,
+  Trash2,
+  ChevronRight,
+  Cpu,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertDialog,
@@ -15,6 +26,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { AnalysisBatchSummary } from "@/types/api";
@@ -29,13 +42,33 @@ type Status = "completed" | "failed" | "processing" | "unknown";
 function statusInfo(status: Status) {
   switch (status) {
     case "completed":
-      return { label: "Completed", icon: CheckCircle2, className: "bg-green-500/10 text-green-600 dark:text-green-400" };
+      return {
+        label: "Completed",
+        icon: CheckCircle2,
+        badgeVariant: "success" as const,
+        accentClass: "border-l-green-500 dark:border-l-green-400",
+      };
     case "failed":
-      return { label: "Failed", icon: AlertCircle, className: "bg-red-500/10 text-red-600 dark:text-red-400" };
+      return {
+        label: "Failed",
+        icon: AlertCircle,
+        badgeVariant: "destructive" as const,
+        accentClass: "border-l-destructive",
+      };
     case "processing":
-      return { label: "Processing", icon: Loader2, className: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 animate-spin" };
+      return {
+        label: "Processing",
+        icon: Loader2,
+        badgeVariant: "warning" as const,
+        accentClass: "border-l-amber-500 dark:border-l-amber-400",
+      };
     default:
-      return { label: "Unknown", icon: Clock, className: "bg-muted text-muted-foreground" };
+      return {
+        label: "Unknown",
+        icon: Clock,
+        badgeVariant: "secondary" as const,
+        accentClass: "border-l-border",
+      };
   }
 }
 
@@ -48,7 +81,7 @@ function parseStatus(status: string): Status {
 
 function formatDate(isoString: string): string {
   const d = new Date(isoString);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function formatTime(isoString: string): string {
@@ -60,6 +93,12 @@ function formatCount(n: number | null): string {
   return n.toLocaleString();
 }
 
+function formatElapsed(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  return `${(seconds / 60).toFixed(1)}m`;
+}
+
 export function BatchCard({ batch, onDelete }: BatchCardProps) {
   const navigate = useNavigate();
   const [deleting, setDeleting] = useState(false);
@@ -67,6 +106,7 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
   const status = parseStatus(batch.status);
   const info = statusInfo(status);
   const StatusIcon = info.icon;
+  const confidencePct = batch.avg_confidence != null ? Math.round(batch.avg_confidence * 100) : null;
 
   async function handleDelete() {
     if (!onDelete) return;
@@ -83,113 +123,139 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
 
   return (
     <div
-      className={cn(
-        "group relative flex flex-col gap-3 rounded-lg border bg-card p-4",
-        "transition-shadow duration-200 hover:shadow-md",
-        "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        "active:scale-[0.99] cursor-pointer",
-      )}
+      role="button"
+      tabIndex={0}
       onClick={() => navigate(`/recorded?batch=${batch.id}`)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          navigate(`/recorded?batch=${batch.id}`);
+        }
+      }}
+      className={cn(
+        "group relative flex flex-col gap-4 rounded-xl border-l-4 border border-border bg-card px-4 py-4",
+        "transition-all duration-200 hover:shadow-md hover:bg-accent/20",
+        "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "active:scale-[0.99] cursor-pointer select-none",
+        info.accentClass,
+      )}
     >
-      {/* Header row */}
+      {/* Top row: status badge + timestamp */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", info.className)}>
-              <StatusIcon className="h-3 w-3" />
-              {info.label}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {batch.organism_type} · {batch.mode}
-            </span>
-          </div>
-          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-            <Calendar className="h-3 w-3 shrink-0" />
-            {formatDate(batch.created_at)} · {formatTime(batch.created_at)}
-          </div>
-        </div>
-
-        {/* Row-level chevron — slides in on hover, implies drill-in */}
-        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-all duration-150 group-hover:translate-x-0.5 group-hover:text-foreground opacity-0 group-hover:opacity-100 -translate-x-1" />
-
-        {/* Delete button */}
-        {onDelete && (
-          <div
-            className="opacity-0 group-hover:opacity-100 transition-opacity"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "rounded-md p-1.5 text-muted-foreground",
-                    "hover:bg-destructive/10 hover:text-destructive transition-colors",
-                    deleting && "opacity-50 pointer-events-none"
-                  )}
-                  title="Delete batch"
-                  disabled={deleting}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </AlertDialogTrigger>
-              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently remove analysis &ldquo;{batch.organism_type} — {formatDate(batch.created_at)}&rdquo;
-                    with {batch.total_image_count} image{batch.total_image_count !== 1 ? "s" : ""}.
-                    This action cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleDelete}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                  >
-                    {deleting ? "Deleting…" : "Delete"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        )}
-      </div>
-
-      {/* Metrics row */}
-      <div className="flex items-center gap-4 text-sm">
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <Image className="h-3.5 w-3.5" />
-          <span>{batch.total_image_count} image{batch.total_image_count !== 1 ? "s" : ""}</span>
-        </div>
-
-        {batch.total_count !== null && (
-          <div className="flex items-center gap-1.5 text-muted-foreground">
-            <Egg className="h-3.5 w-3.5" />
-            <span>{formatCount(batch.total_count)} eggs</span>
-          </div>
-        )}
-
-        {batch.avg_confidence !== null && (
-          <div className="text-xs text-muted-foreground">
-            avg {(batch.avg_confidence * 100).toFixed(1)}% confidence
-          </div>
-        )}
-      </div>
-
-      {/* Device / mode footer */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{batch.device}</span>
-        <span className="rounded bg-muted px-1.5 py-0.5">{batch.mode}</span>
-        {batch.total_elapsed_secs !== null && (
-          <span className="ml-auto">
-            {batch.total_elapsed_secs < 60
-              ? `${batch.total_elapsed_secs.toFixed(1)}s`
-              : `${(batch.total_elapsed_secs / 60).toFixed(1)}m`}
+        <div className="flex items-center gap-2">
+          <Badge variant={info.badgeVariant} className="gap-1">
+            <StatusIcon className={cn("h-3 w-3", status === "processing" && "animate-spin")} />
+            {info.label}
+          </Badge>
+          <span className="text-xs font-medium text-muted-foreground capitalize">
+            {batch.organism_type}
           </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Calendar className="h-3 w-3" />
+            <span className="hidden sm:inline">{formatDate(batch.created_at)} · </span>
+            {formatTime(batch.created_at)}
+          </div>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 -translate-x-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-x-0" />
+        </div>
+      </div>
+
+      {/* Stat row */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <ImageIcon className="h-3 w-3" />
+            Images
+          </div>
+          <span className="text-sm font-semibold tabular-nums">{batch.total_image_count}</span>
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Egg className="h-3 w-3" />
+            Eggs
+          </div>
+          <span className="text-sm font-semibold tabular-nums">{formatCount(batch.total_count)}</span>
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            Time
+          </div>
+          <span className="text-sm font-semibold tabular-nums">{formatElapsed(batch.total_elapsed_secs)}</span>
+        </div>
+      </div>
+
+      {/* Footer: device tag + confidence bar */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <Badge variant="outline" className="font-mono text-[10px] gap-1 h-5">
+            <Cpu className="h-2.5 w-2.5" />
+            {batch.device}
+          </Badge>
+          <Badge variant="outline" className="text-[10px] h-5">{batch.mode}</Badge>
+        </div>
+
+        {confidencePct !== null && (
+          <div className="ml-auto flex items-center gap-2">
+            <Progress
+              value={confidencePct}
+              variant={confidencePct >= 75 ? "success" : "default"}
+              className="h-1.5 w-14"
+            />
+            <span className="text-[11px] tabular-nums text-muted-foreground w-8 text-right">
+              {confidencePct}%
+            </span>
+          </div>
         )}
       </div>
+
+      {/* Delete button — shown on hover, stop propagation */}
+      {onDelete && (
+        <div
+          className="absolute top-3 right-7 opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "rounded-md p-1.5 text-muted-foreground",
+                  "hover:bg-destructive/10 hover:text-destructive transition-colors",
+                  deleting && "opacity-50 pointer-events-none"
+                )}
+                title="Delete batch"
+                disabled={deleting}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently remove the {batch.organism_type} analysis from{" "}
+                  {formatDate(batch.created_at)} with {batch.total_image_count} image
+                  {batch.total_image_count !== 1 ? "s" : ""}. This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {deleting ? "Deleting…" : "Delete"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      )}
     </div>
   );
 }

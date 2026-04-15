@@ -14,12 +14,10 @@ export function AppShell() {
         collapsed={sidebarCollapsed}
         onCollapsedChange={setSidebarCollapsed}
       />
-      <main className="flex-1 overflow-hidden">
-        <AnimatePresence mode="wait" initial={false}>
+      <main className="relative flex-1 overflow-hidden">
+        <AnimatePresence initial={false}>
           <MotionPage key={location.pathname}>
-            <div className="h-full overflow-y-auto">
-              <Outlet />
-            </div>
+            <Outlet />
           </MotionPage>
         </AnimatePresence>
       </main>

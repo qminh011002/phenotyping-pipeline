@@ -1,5 +1,7 @@
 // BatchList — paginated grid of BatchCards with empty / loading states.
 
+import type { Variants } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Pagination,
   PaginationContent,
@@ -10,7 +12,9 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Microscope } from "lucide-react";
+import { Microscope, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 import { BatchCard } from "./BatchCard";
 import type { AnalysisBatchSummary } from "@/types/api";
 
@@ -22,22 +26,37 @@ interface BatchListProps {
   error: string | null;
   onPageChange: (page: number) => void;
   onDelete?: (batchId: string) => Promise<void>;
+  itemVariants?: Variants;
 }
 
 function SkeletonCard() {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
-      <div className="flex items-center gap-2">
-        <Skeleton className="h-5 w-20 rounded-full" />
-        <Skeleton className="h-4 w-16" />
+    <div className="flex flex-col gap-4 rounded-xl border border-l-4 border-l-border bg-card px-4 py-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-5 w-20 rounded-full" />
+          <Skeleton className="h-4 w-12" />
+        </div>
+        <Skeleton className="h-4 w-24" />
       </div>
-      <div className="flex items-center gap-1.5">
-        <Skeleton className="h-3 w-24" />
-        <Skeleton className="h-3 w-16" />
+      <div className="grid grid-cols-3 gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3 w-10" />
+          <Skeleton className="h-5 w-8" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3 w-8" />
+          <Skeleton className="h-5 w-12" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3 w-8" />
+          <Skeleton className="h-5 w-10" />
+        </div>
       </div>
       <div className="flex items-center gap-2">
-        <Skeleton className="h-3 w-12" />
-        <Skeleton className="h-3 w-12" />
+        <Skeleton className="h-5 w-14 rounded-md" />
+        <Skeleton className="h-5 w-16 rounded-md" />
+        <Skeleton className="ml-auto h-1.5 w-14 rounded-full" />
       </div>
     </div>
   );
@@ -69,18 +88,21 @@ export function BatchList({
   error,
   onPageChange,
   onDelete,
+  itemVariants,
 }: BatchListProps) {
+  const navigate = useNavigate();
+
   if (error !== null) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <p className="text-destructive">{error}</p>
-        <button
-          type="button"
+      <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+        <p className="text-sm text-destructive">{error}</p>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => onPageChange(page)}
-          className="mt-2 text-sm text-primary hover:underline"
         >
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -97,12 +119,20 @@ export function BatchList({
 
   if (batches.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <Microscope className="mb-3 h-10 w-10 text-muted-foreground" />
-        <p className="text-base font-medium">No analyses recorded yet.</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Run your first analysis to see results here.
-        </p>
+      <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+          <Microscope className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <div>
+          <p className="text-base font-medium">No analyses recorded yet</p>
+          <p className="mt-1 text-sm text-muted-foreground max-w-xs">
+            Run your first analysis to see the results here.
+          </p>
+        </div>
+        <Button size="sm" onClick={() => navigate("/analyze")}>
+          <Plus className="mr-2 h-4 w-4" />
+          Start Analysis
+        </Button>
       </div>
     );
   }
@@ -111,7 +141,13 @@ export function BatchList({
     <div className="flex flex-col gap-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {batches.map((batch) => (
-          <BatchCard key={batch.id} batch={batch} onDelete={onDelete} />
+          itemVariants ? (
+            <motion.div key={batch.id} variants={itemVariants}>
+              <BatchCard batch={batch} onDelete={onDelete} />
+            </motion.div>
+          ) : (
+            <BatchCard key={batch.id} batch={batch} onDelete={onDelete} />
+          )
         ))}
       </div>
 

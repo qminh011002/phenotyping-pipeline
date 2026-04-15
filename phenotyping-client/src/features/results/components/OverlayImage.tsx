@@ -54,13 +54,21 @@ export function OverlayImage({ src, alt = "Overlay", className }: OverlayImagePr
     });
   }, []);
 
-  function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const rect = containerRef.current!.getBoundingClientRect();
-    const pivotX = e.clientX - rect.left - rect.width / 2;
-    const pivotY = e.clientY - rect.top - rect.height / 2;
-    zoom(e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR, pivotX, pivotY);
-  }
+  // React attaches onWheel as a passive listener, which forbids preventDefault.
+  // Attach a native non-passive wheel listener so we can suppress page scroll.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const pivotX = e.clientX - rect.left - rect.width / 2;
+      const pivotY = e.clientY - rect.top - rect.height / 2;
+      zoom(e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR, pivotX, pivotY);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [zoom]);
 
   // ── Pan ────────────────────────────────────────────────────────────────────
 
@@ -158,7 +166,6 @@ export function OverlayImage({ src, alt = "Overlay", className }: OverlayImagePr
             ? "cursor-grabbing"
             : "transition-transform duration-100 ease-out",
         )}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

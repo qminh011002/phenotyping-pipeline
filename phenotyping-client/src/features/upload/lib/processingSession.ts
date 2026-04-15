@@ -9,6 +9,8 @@ const KEY_ORGANISM = "phenotyping_processing_organism";
 const KEY_BATCH_ID = "phenotyping_processing_batch_id";
 const KEY_DB_BATCH_ID = "phenotyping_processing_db_batch_id";
 const KEY_BATCH_SUMMARY = "phenotyping_processing_batch_summary";
+const KEY_BATCH_DETAIL = "phenotyping_processing_batch_detail";
+const KEY_CONFIG = "phenotyping_processing_config";
 
 export interface StoredFile {
   id: string;
@@ -66,7 +68,12 @@ export function storeProcessingFiles(
   sessionStorage.setItem(KEY_FILES, JSON.stringify(stored));
   sessionStorage.setItem(KEY_ORGANISM, organism);
   sessionStorage.setItem(KEY_BATCH_ID, batchId);
+  // Clear any per-run artifacts from a prior Process click so a new run can
+  // never inherit a stale db batch id (which would 404) or stale results.
   sessionStorage.removeItem(KEY_RESULTS);
+  sessionStorage.removeItem(KEY_DB_BATCH_ID);
+  sessionStorage.removeItem(KEY_BATCH_SUMMARY);
+  sessionStorage.removeItem(KEY_BATCH_DETAIL);
 }
 
 // ── Retrieve stored files ────────────────────────────────────────────────────
@@ -137,9 +144,6 @@ export function loadBatchId(): string {
 }
 
 // ── Store / Load batch detail ─────────────────────────────────────────────────
-
-const KEY_BATCH_DETAIL = "phenotyping_processing_batch_detail";
-const KEY_CONFIG = "phenotyping_processing_config";
 
 export function storeBatchDetail(detail: StoredBatchDetail): void {
   sessionStorage.setItem(KEY_BATCH_DETAIL, JSON.stringify(detail));
