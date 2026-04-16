@@ -22,14 +22,16 @@ from app.schemas.analysis import (
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchSummary,
+    AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisImageSummary,
     AnalysisListResponse,
     DashboardStats,
+    EditedAnnotationsUpdate,
 )
 
 if TYPE_CHECKING:
-    from app.deps import AppSettings
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +116,10 @@ class AnalysisService:
         image = AnalysisImage(
             batch_id=batch_id,
             original_filename=result.filename,
-            original_width=result.original_width,
-            original_height=result.original_height,
-            file_size_bytes=result.file_size_bytes,
             status="completed",
             count=result.count,
             avg_confidence=result.avg_confidence,
             elapsed_secs=result.elapsed_seconds,
-            annotations=result.annotations,
             overlay_path=overlay_path_value,
         )
         db.add(image)
@@ -291,6 +289,7 @@ class AnalysisService:
                 overlay_path=img.overlay_path,
                 error_message=img.error_message,
                 created_at=img.created_at,
+                edited_annotations=img.edited_annotations,
             )
             for img in sorted(batch.images, key=lambda i: i.created_at)
         ]
@@ -422,6 +421,92 @@ class AnalysisService:
             ),
             recent_analyses=[self._to_summary(b) for b in recent_batches],
         )
+
+    # ── Edit annotations ───────────────────────────────────────────────────────
+
+    async def update_edited_annotations(
+        self,
+        batch_id: UUID,
+        image_id: UUID,
+        data: EditedAnnotationsUpdate,
+        db: AsyncSession,
+    ) -> AnalysisImageDetail | None:
+        """Replace the edited_annotations for a single image (full-replace semantics).
+
+        Returns the updated image detail, or None if the batch or image was not found.
+        """
+        stmt = (
+            select(AnalysisImage)
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisBatch.id == batch_id)
+        )
+        result = await db.execute(stmt)
+        image = result.scalar_one_or_none()
+        if image is None:
+            return None
+
+        image.edited_annotations = data.edited_annotations
+        await db.flush()
+        await db.refresh(image)
+
+        logger.info(
+            "Edited annotations saved",
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "image_id": str(image_id),
+                    "box_count": len(data.edited_annotations),
+                }
+            },
+        )
+        return AnalysisImageDetail(
+            id=image.id,
+            original_filename=image.original_filename,
+            status=image.status,
+            count=image.count,
+            avg_confidence=image.avg_confidence,
+            elapsed_secs=image.elapsed_secs,
+            overlay_path=image.overlay_path,
+            error_message=image.error_message,
+            created_at=image.created_at,
+            edited_annotations=image.edited_annotations,
+        )
+
+    async def clear_edited_annotations(
+        self,
+        batch_id: UUID,
+        image_id: UUID,
+        db: AsyncSession,
+    ) -> bool:
+        """Clear edited_annotations back to NULL (reset to model output).
+
+        Returns True if the image was found and updated, False otherwise.
+        """
+        stmt = (
+            select(AnalysisImage)
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisBatch.id == batch_id)
+        )
+        result = await db.execute(stmt)
+        image = result.scalar_one_or_none()
+        if image is None:
+            return False
+
+        image.edited_annotations = None
+        await db.flush()
+
+        logger.info(
+            "Edited annotations cleared",
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "image_id": str(image_id),
+                }
+            },
+        )
+        return True
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

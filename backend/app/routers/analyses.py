@@ -8,21 +8,21 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID
 
-from typing import Annotated
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from app.database import AsyncSession, get_session
 from app.deps import get_analysis_service, get_settings
 from app.schemas.analysis import (
     AnalysisBatchCreate,
     AnalysisBatchDetail,
-    AnalysisBatchSummary,
+    AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisListResponse,
+    EditedAnnotationsUpdate,
 )
 from app.services.analysis_service import AnalysisService
 
@@ -53,8 +53,9 @@ async def create_analysis(
     """Create a new analysis batch with status 'processing'.
 
     Call this when the operator clicks "Process Images" to register the batch
-    before inference begins. After processing each image, call POST /analyses/{id}/images
-    to record results. When all images are done, call POST /analyses/{id}/complete.
+    before inference begins. After processing each image,
+    call POST /analyses/{id}/images to record results.
+    When all images are done, call POST /analyses/{id}/complete.
     """
     batch = await analysis_svc.create_batch(data=data, db=db)
     await db.commit()
@@ -73,7 +74,9 @@ async def list_analyses(
     db: Annotated[AsyncSession, Depends(get_session)],
     analysis_svc: AnalysisService = Depends(get_analysis_service),
     page: int = Query(default=_DEFAULT_PAGE, ge=1, description="1-indexed page number"),
-    page_size: int = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=100, description="Items per page"),
+    page_size: int = Query(
+        default=_DEFAULT_PAGE_SIZE, ge=1, le=100, description="Items per page"
+    ),
     q: str | None = Query(default=None, description="Search by original filename"),
     organism: str | None = Query(default=None, description="Filter by organism type"),
 ) -> AnalysisListResponse:
@@ -168,7 +171,6 @@ async def get_overlay(
     Returns 404 if the batch, image, or overlay file does not exist.
     """
     from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
 
     from app.models.analysis import AnalysisBatch, AnalysisImage
 
@@ -213,6 +215,78 @@ async def get_overlay(
         file_iterator(overlay_path),
         media_type="image/png",
         headers={"Content-Disposition": f'inline; filename="{overlay_path.name}"'},
+    )
+
+
+@router.get(
+    "/{batch_id}/images/{image_id}/raw",
+    summary="Serve the raw (un-annotated) source image for a processed image",
+    responses={
+        200: {"content": {"image/png": {}}, "description": "Raw PNG image"},
+        404: {"description": "Batch, image, or raw file not found"},
+    },
+)
+async def get_raw(
+    batch_id: UUID,
+    image_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> StreamingResponse:
+    """Stream the raw source image the operator uploaded.
+
+    The raw PNG is saved alongside the overlay by the inference service.
+    We derive its path from the overlay path instead of adding a new DB
+    column: both live in the same batch directory, differing only by the
+    ``_overlay.png`` → ``_raw.png`` suffix.
+    """
+    from sqlalchemy import select
+
+    from app.models.analysis import AnalysisBatch, AnalysisImage
+
+    stmt = (
+        select(AnalysisImage)
+        .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+        .where(AnalysisImage.id == image_id)
+        .where(AnalysisImage.batch_id == batch_id)
+    )
+    result = await db.execute(stmt)
+    image = result.scalar_one_or_none()
+
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+
+    if image.status != "completed" or not image.overlay_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} has no completed result.",
+        )
+
+    settings = get_settings()
+    overlay_path = Path(image.overlay_path)
+    if not overlay_path.is_absolute():
+        overlay_path = Path(settings.image_storage_dir) / overlay_path
+
+    raw_path = overlay_path.with_name(
+        overlay_path.name.replace("_overlay.png", "_raw.png"),
+    )
+
+    if not raw_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Raw file not found on disk: {raw_path}",
+        )
+
+    async def file_iterator(path: Path):
+        with open(path, "rb") as f:
+            while chunk := f.read(8192):
+                yield chunk
+
+    return StreamingResponse(
+        file_iterator(raw_path),
+        media_type="image/png",
+        headers={"Content-Disposition": f'inline; filename="{raw_path.name}"'},
     )
 
 
@@ -282,3 +356,75 @@ async def complete_analysis(
     updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
     assert updated is not None
     return updated
+
+
+@router.put(
+    "/{batch_id}/images/{image_id}/annotations",
+    response_model=AnalysisImageDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Save edited annotations for a single image",
+    responses={
+        200: {"description": "Edited annotations saved"},
+        404: {"description": "Batch or image not found"},
+        422: {"description": "Validation error"},
+    },
+)
+async def save_edited_annotations(
+    batch_id: UUID,
+    image_id: UUID,
+    data: EditedAnnotationsUpdate,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisImageDetail:
+    """Replace the edited_annotations for a single image (full-replace semantics).
+
+    The model's original annotations are preserved in the `annotations` column.
+    Edited boxes each carry `origin: "model" | "user"` and an optional `edited_at`
+    ISO-8601 timestamp.
+    """
+    updated = await analysis_svc.update_edited_annotations(
+        batch_id=batch_id,
+        image_id=image_id,
+        data=data,
+        db=db,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    await db.commit()
+    return updated
+
+
+@router.delete(
+    "/{batch_id}/images/{image_id}/annotations",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Reset edited annotations to model output",
+    responses={
+        204: {"description": "Edited annotations cleared"},
+        404: {"description": "Batch or image not found"},
+    },
+)
+async def reset_edited_annotations(
+    batch_id: UUID,
+    image_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> None:
+    """Clear edited_annotations back to NULL — restores the model's original output.
+
+    This is a destructive reset with no undo on the server side; the operator is
+    prompted with an AlertDialog confirmation before this is called.
+    """
+    cleared = await analysis_svc.clear_edited_annotations(
+        batch_id=batch_id,
+        image_id=image_id,
+        db=db,
+    )
+    if not cleared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    await db.commit()

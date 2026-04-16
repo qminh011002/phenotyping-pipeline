@@ -508,9 +508,8 @@ export default function ProcessingPage() {
 
   function handleViewResults() {
     resetStore();
-    // Clear blob URL list only — ResultViewer needs the results, batch detail,
-    // DB batch id, and batch summary to render overlays.
-    sessionStorage.removeItem("phenotyping_processing_files");
+    // Keep phenotyping_processing_files — ResultViewer uses the raw blob URLs
+    // to render the original images with client-side bbox overlays.
     sessionStorage.removeItem("phenotyping_processing_organism");
     sessionStorage.removeItem("phenotyping_processing_batch_id");
     navigate("/analyze/results");

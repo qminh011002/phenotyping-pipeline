@@ -1,5 +1,4 @@
-"""Analysis batch and image models for storing inference results."""
-
+"""SQLAlchemy models for analysis batches and images."""
 from __future__ import annotations
 
 import uuid
@@ -12,85 +11,69 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-TZ_TS = TIMESTAMP(timezone=True)
-
-
 class AnalysisBatch(Base):
-    """Represents one "Process" action (a batch of one or more images)."""
+    """A batch of images processed together as a single analysis run."""
 
     __tablename__ = "analysis_batch"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True,
-        default=uuid.uuid4,
+        primary_key=True, default=uuid.uuid4
     )
-    created_at: Mapped[datetime] = mapped_column(
-        TZ_TS,
-        server_default="now()",
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        TZ_TS,
-        nullable=True,
-    )
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(20), default="processing")
     organism_type: Mapped[str] = mapped_column(String(20), default="egg")
     mode: Mapped[str] = mapped_column(String(20), default="upload")
     device: Mapped[str] = mapped_column(String(20), default="cpu")
-    config_snapshot: Mapped[dict] = mapped_column(JSONB)
+    config_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
     total_image_count: Mapped[int] = mapped_column(default=0)
     total_count: Mapped[int | None] = mapped_column(nullable=True)
     avg_confidence: Mapped[float | None] = mapped_column(nullable=True)
     total_elapsed_secs: Mapped[float | None] = mapped_column(nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    images: Mapped[list["AnalysisImage"]] = relationship(
-        back_populates="batch",
-        cascade="all, delete-orphan",
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
     )
 
-    __table_args__ = (
-        Index("idx_batch_created_at", created_at.desc()),
-        Index("idx_batch_status", status),
-        Index("idx_batch_organism", organism_type),
+    images: Mapped[list["AnalysisImage"]] = relationship(
+        "AnalysisImage",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="AnalysisImage.created_at",
     )
 
 
 class AnalysisImage(Base):
-    """One row per processed image within a batch."""
+    """A single image within an analysis batch."""
 
     __tablename__ = "analysis_image"
+    __table_args__ = (
+        Index("ix_analysis_image_batch_id", "batch_id"),
+        Index("ix_analysis_image_original_filename", "original_filename"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True,
-        default=uuid.uuid4,
+        primary_key=True, default=uuid.uuid4
     )
     batch_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("analysis_batch.id", ondelete="CASCADE"),
+        ForeignKey("analysis_batch.id", ondelete="CASCADE")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        TZ_TS,
-        server_default="now()",
-    )
-    original_filename: Mapped[str] = mapped_column(String(500))
-    original_width: Mapped[int | None] = mapped_column(nullable=True)
-    original_height: Mapped[int | None] = mapped_column(nullable=True)
-    file_size_bytes: Mapped[int | None] = mapped_column(nullable=True)
-    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     count: Mapped[int | None] = mapped_column(nullable=True)
     avg_confidence: Mapped[float | None] = mapped_column(nullable=True)
     elapsed_secs: Mapped[float | None] = mapped_column(nullable=True)
-    annotations: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    overlay_path: Mapped[str | None] = mapped_column(
-        String(1000),
-        nullable=True,
+    overlay_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow
     )
-    tile_count: Mapped[int | None] = mapped_column(nullable=True)
+    # FS-009: operator-corrected bounding boxes — supersedes model annotations when set
+    edited_annotations: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
-    batch: Mapped["AnalysisBatch"] = relationship(back_populates="images")
-
-    __table_args__ = (
-        Index("idx_image_batch_id", batch_id),
-        Index("idx_image_filename", original_filename),
+    batch: Mapped["AnalysisBatch"] = relationship(
+        "AnalysisBatch", back_populates="images"
     )

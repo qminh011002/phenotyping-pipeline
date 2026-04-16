@@ -469,12 +469,21 @@ class EggInferenceService:
         ]
         self._draw_board(overlay, result_lines, board_x, bottom + 10)
 
-        # ── 9. Save overlay to disk ──────────────────────────────────────────
-        overlay_filename = f"{filename}_overlay.png"
+        # ── 9. Save overlay + raw image to disk ──────────────────────────────
         batch_dir = self._get_storage_dir() / batch_id
         batch_dir.mkdir(parents=True, exist_ok=True)
+
+        overlay_filename = f"{filename}_overlay.png"
         overlay_path = batch_dir / overlay_filename
         cv2.imwrite(str(overlay_path), overlay)
+
+        # Persist the un-annotated source image so the frontend can render its
+        # own bbox overlays on top of it. `image` is the normalized BGR array
+        # (pre-drawing), and `overlay = image.copy()` above means drawing on
+        # `overlay` never mutates `image`.
+        raw_filename = f"{filename}_raw.png"
+        raw_path = batch_dir / raw_filename
+        cv2.imwrite(str(raw_path), image)
 
         # ── 10. Build result ─────────────────────────────────────────────────
         overlay_url = f"/inference/results/{batch_id}/{filename}/overlay.png"

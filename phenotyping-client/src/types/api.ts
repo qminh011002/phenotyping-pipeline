@@ -8,6 +8,10 @@ export interface BBox {
   label: string;
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
   confidence: number;
+  /** Whether this box was drawn by the user (default: undefined = model origin) */
+  origin?: "model" | "user";
+  /** ISO-8601 timestamp when the box was created or last edited */
+  edited_at?: string;
 }
 
 export interface DetectionResult {
@@ -84,6 +88,12 @@ export interface AnalysisImageSummary {
   overlay_path: string | null;
   error_message: string | null;
   created_at: string; // ISO 8601
+  /** User-edited annotations; if present, supersedes annotations for display. */
+  edited_annotations?: BBox[] | null;
+}
+
+export interface AnalysisImageDetail extends AnalysisImageSummary {
+  /** Full image detail includes edited_annotations explicitly. */
 }
 
 export interface AnalysisBatchSummary {

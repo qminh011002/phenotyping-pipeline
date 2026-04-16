@@ -1,7 +1,7 @@
 // Processing session — stores selected files and results in sessionStorage.
 // Used to pass state between UploadPage and ProcessingPage / ResultPage.
 
-import type { DetectionResult } from "@/types/api";
+import type { BBox, DetectionResult } from "@/types/api";
 
 const KEY_FILES = "phenotyping_processing_files";
 const KEY_RESULTS = "phenotyping_processing_results";
@@ -41,6 +41,8 @@ export interface StoredImageDetail {
   overlay_path: string | null;
   error_message: string | null;
   created_at: string;
+  /** User-edited annotations (FS-009); supersedes model annotations if present */
+  edited_annotations?: BBox[] | null;
 }
 
 export interface StoredBatchDetail {

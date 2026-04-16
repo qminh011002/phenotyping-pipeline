@@ -1,18 +1,34 @@
 // StatBoard — displays egg detection statistics for a single result.
+// The confidence slider lives here too: moving it updates both the displayed
+// Egg Count and the boxes rendered by OverlayImage.
 
-import { Microscope, Clock, Image as ImageIcon, Settings } from "lucide-react";
+import { Microscope, Clock, Image as ImageIcon, Settings, SlidersHorizontal } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
+import { Button } from "@/components/ui/button";
 import { AnimatedNumber } from "@/components/common/AnimatedNumber";
-import type { DetectionResult } from "@/types/api";
+import type { BBox, DetectionResult } from "@/types/api";
 import { cn } from "@/lib/utils";
 
 interface StatBoardProps {
   result: DetectionResult;
   /** The config snapshot recorded when processing started */
   config?: Record<string, unknown> | null;
+  /** Annotations currently visible (filtered by confidenceThreshold) */
+  visibleAnnotations: BBox[];
+  confidenceThreshold: number;
+  onConfidenceChange: (value: number) => void;
+  /** FS-009: editor is active */
+  editMode?: boolean;
+  /** FS-009: original model boxes (for computing added/removed/modified) */
+  modelBoxes?: BBox[];
+  /** FS-009: current session boxes (for computing added/removed/modified) */
+  sessionBoxes?: BBox[];
 }
+
+const PRESETS: number[] = [0, 0.5, 0.7, 0.9];
 
 function ConfidenceDot({ value }: { value: number }) {
   const color =
@@ -32,11 +48,39 @@ function StatRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   );
 }
 
-export function StatBoard({ result, config }: StatBoardProps) {
-  const avgConf = result.avg_confidence;
+export function StatBoard({
+  result,
+  config,
+  visibleAnnotations,
+  confidenceThreshold,
+  onConfidenceChange,
+  editMode = false,
+  modelBoxes = [],
+  sessionBoxes = [],
+}: StatBoardProps) {
+  const totalCount = result.annotations.length;
+  const visibleCount = visibleAnnotations.length;
+  const avgConfVisible = visibleCount > 0
+    ? visibleAnnotations.reduce((s, a) => s + a.confidence, 0) / visibleCount
+    : 0;
+
+  // FS-009: compute edited-box counts
+  const sessionSet = new Set(sessionBoxes.map((b) => `${b.bbox[0]},${b.bbox[1]},${b.bbox[2]},${b.bbox[3]}`));
+  const addedCount = sessionBoxes.filter((b) => b.origin === "user").length;
+  const removedCount = modelBoxes.filter(
+    (b) => b.origin !== "user" && !sessionSet.has(`${b.bbox[0]},${b.bbox[1]},${b.bbox[2]},${b.bbox[3]}`),
+  ).length;
+  const modifiedCount = modelBoxes.filter(
+    (b, i) => {
+      const s = sessionBoxes[i];
+      return s && s.origin !== "user" && (
+        s.bbox[0] !== b.bbox[0] || s.bbox[1] !== b.bbox[1] ||
+        s.bbox[2] !== b.bbox[2] || s.bbox[3] !== b.bbox[3]
+      );
+    },
+  ).length;
 
   // Build the ordered list of config params to display.
-  // These are the inference parameters that affect results.
   const CONFIG_KEYS: Array<[string, string]> = [
     ["confidence_threshold", "Confidence threshold"],
     ["tile_size", "Tile size"],
@@ -49,8 +93,8 @@ export function StatBoard({ result, config }: StatBoardProps) {
   ];
 
   return (
-    <div className="flex flex-col gap-4 overflow-y-auto p-4">
-      {/* Egg count — primary metric */}
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      {/* Egg count — reflects the current filter */}
       <Card className="border-primary/30 bg-primary/5">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -59,16 +103,109 @@ export function StatBoard({ result, config }: StatBoardProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-5xl font-bold">
-            <AnimatedNumber value={result.count} className="tabular-nums" />
+          <div className="flex items-baseline gap-2">
+            <div className="text-5xl font-bold">
+              <AnimatedNumber value={visibleCount} className="tabular-nums" />
+            </div>
+            {visibleCount !== totalCount && (
+              <span className="font-mono text-sm text-muted-foreground">
+                / {totalCount}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            {result.annotations.length} annotations
+            {confidenceThreshold > 0
+              ? `filtered at ≥${(confidenceThreshold * 100).toFixed(0)}% confidence`
+              : `${totalCount} total detections`}
           </p>
         </CardContent>
       </Card>
 
-      {/* Confidence */}
+      {/* FS-009: Edited boxes summary — only shown in edit mode */}
+      {editMode && (
+        <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <span className="text-blue-600 dark:text-blue-400 font-bold">+</span>
+              Edited Boxes
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4 text-sm">
+              {addedCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+                  <span className="font-mono font-medium text-amber-600 dark:text-amber-400">
+                    +{addedCount} added
+                  </span>
+                </span>
+              )}
+              {removedCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                  <span className="font-mono font-medium text-red-600 dark:text-red-400">
+                    -{removedCount} removed
+                  </span>
+                </span>
+              )}
+              {modifiedCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
+                  <span className="font-mono font-medium text-blue-600 dark:text-blue-400">
+                    {modifiedCount} moved/resized
+                  </span>
+                </span>
+              )}
+              {addedCount === 0 && removedCount === 0 && modifiedCount === 0 && (
+                <span className="text-muted-foreground">No changes yet</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Confidence Threshold — slider + presets in one card */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <SlidersHorizontal className="h-4 w-4" />
+            Confidence Threshold
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Minimum confidence</span>
+              <span className="font-mono text-sm font-semibold tabular-nums">
+                {(confidenceThreshold * 100).toFixed(0)}%
+              </span>
+            </div>
+            <Slider
+              value={[confidenceThreshold]}
+              onValueChange={(v) => onConfidenceChange(v[0] ?? 0)}
+              min={0}
+              max={1}
+              step={0.01}
+            />
+          </div>
+
+          <div className="grid grid-cols-4 gap-2">
+            {PRESETS.map((v) => (
+              <Button
+                key={v}
+                variant={Math.abs(confidenceThreshold - v) < 1e-6 ? "default" : "outline"}
+                size="sm"
+                onClick={() => onConfidenceChange(v)}
+                className="font-mono text-xs"
+              >
+                {v === 0 ? "All" : `≥${Math.round(v * 100)}%`}
+              </Button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Avg confidence of visible detections */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -76,15 +213,14 @@ export function StatBoard({ result, config }: StatBoardProps) {
           </CardTitle>
         </CardHeader>
         <CardContent className="flex items-baseline gap-2">
-          <ConfidenceDot value={avgConf} />
-          {/* Confidence bar */}
+          <ConfidenceDot value={avgConfVisible} />
           <div className="ml-auto h-1.5 w-24 overflow-hidden rounded-full bg-muted">
             <div
               className={cn(
                 "h-full rounded-full transition-all",
-                avgConf >= 0.7 ? "bg-green-500" : avgConf >= 0.5 ? "bg-yellow-500" : "bg-red-500",
+                avgConfVisible >= 0.7 ? "bg-green-500" : avgConfVisible >= 0.5 ? "bg-yellow-500" : "bg-red-500",
               )}
-              style={{ width: `${avgConf * 100}%` }}
+              style={{ width: `${avgConfVisible * 100}%` }}
             />
           </div>
         </CardContent>
@@ -130,8 +266,8 @@ export function StatBoard({ result, config }: StatBoardProps) {
         </CardContent>
       </Card>
 
-      {/* Confidence breakdown */}
-      {result.annotations.length > 0 && (
+      {/* Confidence breakdown — based on total annotations */}
+      {totalCount > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -150,7 +286,7 @@ export function StatBoard({ result, config }: StatBoardProps) {
                 <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-primary"
-                    style={{ width: `${result.annotations.length > 0 ? (count / result.annotations.length) * 100 : 0}%` }}
+                    style={{ width: `${totalCount > 0 ? (count / totalCount) * 100 : 0}%` }}
                   />
                 </div>
                 <span className="w-6 text-right font-mono text-xs">{count}</span>

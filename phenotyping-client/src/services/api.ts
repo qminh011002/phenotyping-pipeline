@@ -6,6 +6,7 @@ import { getBaseUrl } from "./http";
 import { http } from "./http";
 import type {
   AnalysisBatchDetail,
+  AnalysisImageDetail,
   AnalysisListResponse,
   AppSettingsResponse,
   BatchDetectionResult,
@@ -50,6 +51,16 @@ export async function inferBatchEgg(files: File[]): Promise<BatchDetectionResult
  */
 export function getAnalysesOverlayUrl(batchId: string, imageId: string): string {
   return `${getBaseUrl().replace(/\/$/, "")}/analyses/${batchId}/images/${imageId}/overlay`;
+}
+
+/**
+ * Return the absolute URL for a recorded raw (un-annotated) image from the
+ * analyses DB. Uses /analyses/{batch_id}/images/{image_id}/raw. Use this when
+ * rendering client-side bbox overlays so we don't stack them on top of the
+ * server-rendered annotated PNG.
+ */
+export function getAnalysesRawUrl(batchId: string, imageId: string): string {
+  return `${getBaseUrl().replace(/\/$/, "")}/analyses/${batchId}/images/${imageId}/raw`;
 }
 
 /**
@@ -171,4 +182,38 @@ export async function deleteAnalysis(batchId: string): Promise<void> {
 /** GET /dashboard/stats — return aggregate statistics for the home page */
 export async function getDashboardStats(): Promise<DashboardStats> {
   return http.get<DashboardStats>("dashboard/stats");
+}
+
+// ── Edited annotations ─────────────────────────────────────────────────────
+
+/**
+ * PUT /analyses/{batch_id}/images/{image_id}/annotations
+ * Save user-edited bounding boxes for a single image.
+ */
+export async function putEditedAnnotations(
+  batchId: string,
+  imageId: string,
+  editedAnnotations: Array<{
+    label: string;
+    bbox: [number, number, number, number];
+    confidence: number;
+    origin?: "model" | "user";
+    edited_at?: string;
+  }>,
+): Promise<AnalysisImageDetail> {
+  return http.put<AnalysisImageDetail>(
+    `analyses/${batchId}/images/${imageId}/annotations`,
+    { edited_annotations: editedAnnotations },
+  );
+}
+
+/**
+ * DELETE /analyses/{batch_id}/images/{image_id}/annotations
+ * Reset edited annotations to the model's original output.
+ */
+export async function resetEditedAnnotations(
+  batchId: string,
+  imageId: string,
+): Promise<void> {
+  await http.delete(`analyses/${batchId}/images/${imageId}/annotations`);
 }
