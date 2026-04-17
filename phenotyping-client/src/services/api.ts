@@ -9,11 +9,16 @@ import type {
   AnalysisImageDetail,
   AnalysisListResponse,
   AppSettingsResponse,
+  AssignmentsResponse,
+  AssignResultResponse,
   BatchDetectionResult,
+  CustomModelListResponse,
+  CustomModelResponse,
   DashboardStats,
   DetectionResult,
   EggConfig,
   LogEntry,
+  Organism,
   StorageSettingsResponse,
   StorageSettingsUpdate,
 } from "@/types/api";
@@ -127,8 +132,17 @@ export async function createBatch(data: {
   device: string;
   config_snapshot: Record<string, unknown>;
   total_image_count: number;
+  name?: string;
 }): Promise<AnalysisBatchDetail> {
   return http.post<AnalysisBatchDetail>("analyses", data);
+}
+
+/** PATCH /analyses/{batch_id} — rename a batch */
+export async function renameBatch(
+  batchId: string,
+  name: string,
+): Promise<AnalysisBatchDetail> {
+  return http.patch<AnalysisBatchDetail>(`analyses/${batchId}`, { name });
 }
 
 /** POST /analyses/{batch_id}/images — record a single image's inference result */
@@ -216,4 +230,42 @@ export async function resetEditedAnnotations(
   imageId: string,
 ): Promise<void> {
   await http.delete(`analyses/${batchId}/images/${imageId}/annotations`);
+}
+
+// ── Custom Models ─────────────────────────────────────────────────────────────
+
+/** POST /models/upload — upload a custom .pt model file */
+export async function uploadCustomModel(
+  organism: Organism,
+  file: File,
+): Promise<CustomModelResponse> {
+  return http.postFormData<CustomModelResponse>(`models/${organism}/upload`, "file", file);
+}
+
+/** GET /models/custom — list all uploaded custom models */
+export async function listCustomModels(
+  organism?: Organism,
+): Promise<CustomModelListResponse> {
+  const query = organism ? `?organism=${encodeURIComponent(organism)}` : "";
+  return http.get<CustomModelListResponse>(`models/custom${query}`);
+}
+
+/** GET /models/assignments — get current model assignments for all organisms */
+export async function getModelAssignments(): Promise<AssignmentsResponse> {
+  return http.get<AssignmentsResponse>("models/assignments");
+}
+
+/** PUT /models/{organism}/assign — assign a custom model or revert to default */
+export async function assignModel(
+  organism: Organism,
+  customModelId: string | null,
+): Promise<AssignResultResponse> {
+  return http.put<AssignResultResponse>(`models/${organism}/assign`, {
+    custom_model_id: customModelId,
+  });
+}
+
+/** DELETE /models/custom/{id} — delete an uploaded custom model */
+export async function deleteCustomModel(modelId: string): Promise<void> {
+  await http.delete(`models/custom/${modelId}`);
 }

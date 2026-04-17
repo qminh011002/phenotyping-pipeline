@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AnalysisBatchCreate(BaseModel):
@@ -28,6 +28,11 @@ class AnalysisBatchCreate(BaseModel):
         description="EggConfig snapshot at analysis time",
     )
     total_image_count: int = Field(ge=1, description="Number of images in this batch")
+    name: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Optional operator-supplied name; server generates a default when absent",
+    )
 
 
 class AnalysisImageResult(BaseModel):
@@ -82,10 +87,29 @@ class EditedAnnotationsUpdate(BaseModel):
     )
 
 
+class AnalysisBatchUpdate(BaseModel):
+    """Partial-update payload for PATCH /analyses/{batch_id}.
+
+    Only ``name`` is supported today; shaped as a partial-update object so that
+    additional fields slot in without breaking existing clients.
+    """
+
+    name: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_and_check(cls, v: str) -> str:
+        stripped = v.strip()
+        if not (1 <= len(stripped) <= 200):
+            raise ValueError("name must be 1–200 characters after trimming")
+        return stripped
+
+
 class AnalysisBatchSummary(BaseModel):
     """Summary of a batch returned in list and dashboard views."""
 
     id: UUID
+    name: str
     created_at: datetime
     completed_at: datetime | None = None
     status: str

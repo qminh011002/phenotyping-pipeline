@@ -31,8 +31,10 @@ import {
   loadBatchSummary,
   loadBatchDetail,
   loadProcessingConfig,
+  storeBatchDetail,
 } from "@/features/upload/lib/processingSession";
-import { getAnalysesOverlayUrl, getAnalysesRawUrl, getAnalysisDetail, putEditedAnnotations, resetEditedAnnotations } from "@/services/api";
+import { getAnalysesOverlayUrl, getAnalysesRawUrl, getAnalysisDetail, putEditedAnnotations, renameBatch, resetEditedAnnotations } from "@/services/api";
+import { InlineEditableText } from "@/components/common/InlineEditableText";
 import { cn } from "@/lib/utils";
 import { editorHistoryReducer, canUndo, canRedo } from "../lib/editorHistory";
 import { boxesEqual } from "../lib/bboxMath";
@@ -383,6 +385,22 @@ export function ResultViewer({ className }: ResultViewerProps) {
             <ArrowLeft className="h-4 w-4" />
           </Button>
 
+          {/* Batch name — inline editable; available the moment processing finishes. */}
+          {batchDetail && (
+            <h1 className="text-lg font-semibold">
+              <InlineEditableText
+                value={batchDetail.name}
+                onSave={async (next) => {
+                  const updated = await renameBatch(batchDetail.id, next);
+                  const nextDetail = { ...batchDetail, name: updated.name };
+                  setBatchDetail(nextDetail);
+                  storeBatchDetail(nextDetail);
+                }}
+                ariaLabel="Rename batch"
+              />
+            </h1>
+          )}
+
           {isBatch && (
             <>
               <ResultNavigation
@@ -404,7 +422,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
             </>
           )}
 
-          {!isBatch && (
+          {!isBatch && !batchDetail && (
             <h1 className="text-lg font-semibold">{currentResult.filename}</h1>
           )}
 

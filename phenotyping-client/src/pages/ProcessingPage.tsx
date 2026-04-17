@@ -464,6 +464,7 @@ export default function ProcessingPage() {
         const detail = await getAnalysisDetail(newDbBatchId);
         storeBatchDetail({
           id: detail.id,
+          name: detail.name,
           total_count: detail.total_count,
           total_elapsed_secs: detail.total_elapsed_secs,
           avg_confidence: detail.avg_confidence,

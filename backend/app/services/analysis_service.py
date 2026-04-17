@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,6 +22,7 @@ from app.schemas.analysis import (
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchSummary,
+    AnalysisBatchUpdate,
     AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisImageSummary,
@@ -37,6 +38,32 @@ logger = logging.getLogger(__name__)
 
 # Number of recent analyses to include in dashboard stats
 _RECENT_COUNT = 5
+
+# Marker prefix for auto-generated default names. Matching this prefix lets
+# add_image_result know a batch still has its auto-name and can be upgraded to
+# a file-stem-based name once the first (and only) image lands.
+_DEFAULT_NAME_PREFIX = "Batch of "
+
+
+def _default_batch_name_for_count(total_image_count: int, created_at: datetime) -> str:
+    """Timestamped default used at batch-create time for any N (including 1).
+
+    For N==1 this is only a placeholder; add_image_result replaces it with the
+    file stem once the first image record is persisted.
+    """
+    stamp = created_at.strftime("%Y-%m-%d %H:%M")
+    return f"{_DEFAULT_NAME_PREFIX}{total_image_count} — {stamp}"
+
+
+def default_batch_name(images: list[AnalysisImage], created_at: datetime) -> str:
+    """Pure default-name generator reusable from create, complete, and migration backfill.
+
+    - 1 image: filename stem of the sole image.
+    - Otherwise: "Batch of N — YYYY-MM-DD HH:mm" from ``created_at``.
+    """
+    if len(images) == 1 and images[0].original_filename:
+        return Path(images[0].original_filename).stem
+    return _default_batch_name_for_count(len(images), created_at)
 
 
 class AnalysisService:
@@ -59,13 +86,24 @@ class AnalysisService:
         A batch represents one "Process Images" action by the operator.
         The batch is created before any images are processed.
         """
+        now = datetime.now(timezone.utc)
+        if data.name is not None and data.name.strip():
+            name = data.name.strip()[:200]
+        else:
+            # Placeholder default. For N==1 this is overwritten by
+            # add_image_result once the file lands. For N>1 it's the final name
+            # unless the operator renames.
+            name = _default_batch_name_for_count(data.total_image_count, now)
+
         batch = AnalysisBatch(
+            name=name,
             status="processing",
             organism_type=data.organism_type,
             mode=data.mode,
             device=data.device,
             config_snapshot=data.config_snapshot,
             total_image_count=data.total_image_count,
+            created_at=now,
         )
         db.add(batch)
         await db.flush()
@@ -125,6 +163,21 @@ class AnalysisService:
         db.add(image)
         await db.flush()
         await db.refresh(image)
+
+        # For a 1-image batch that still carries the auto-generated placeholder
+        # name, upgrade the batch name to the file stem now that we know it.
+        batch_stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        batch_row = (await db.execute(batch_stmt)).scalar_one_or_none()
+        if (
+            batch_row is not None
+            and batch_row.total_image_count == 1
+            and batch_row.name
+            and batch_row.name.startswith(_DEFAULT_NAME_PREFIX)
+        ):
+            stem = Path(result.filename).stem or result.filename
+            batch_row.name = stem[:200]
+            await db.flush()
+
         return image
 
     async def complete_batch(
@@ -176,6 +229,26 @@ class AnalysisService:
         )
         return batch
 
+    async def rename_batch(
+        self,
+        batch_id: UUID,
+        data: AnalysisBatchUpdate,
+        db: AsyncSession,
+    ) -> AnalysisBatchDetail | None:
+        """Rename a batch. Returns the full detail, or None if the batch is missing."""
+        stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        result = await db.execute(stmt)
+        batch = result.scalar_one_or_none()
+        if batch is None:
+            return None
+        batch.name = data.name  # already stripped + validated by the schema
+        await db.flush()
+        logger.info(
+            "Analysis batch renamed",
+            extra={"context": {"batch_id": str(batch_id), "name": batch.name}},
+        )
+        return await self.get_batch_detail(batch_id=batch_id, db=db)
+
     async def fail_batch(
         self,
         batch_id: UUID,
@@ -217,7 +290,8 @@ class AnalysisService:
         Args:
             page: 1-indexed page number.
             page_size: Number of items per page.
-            search: Optional filename fragment (ILIKE on image filenames).
+            search: Optional substring. ILIKE match against batch ``name`` OR
+                any child image's ``original_filename``.
             organism: Optional organism type filter.
         """
         # Base count query
@@ -235,14 +309,18 @@ class AnalysisService:
             batch_stmt = batch_stmt.where(AnalysisBatch.organism_type == organism)
 
         if search:
-            # Filter batches whose images contain the search string
+            # Match the search string against the batch name OR any image's
+            # original_filename (case-insensitive substring). Use a correlated
+            # EXISTS on images so we don't need a join + DISTINCT dance.
             search_pattern = f"%{search}%"
-            count_stmt = count_stmt.join(
-                AnalysisImage, AnalysisImage.batch_id == AnalysisBatch.id
-            ).where(AnalysisImage.original_filename.ilike(search_pattern))
-            batch_stmt = batch_stmt.join(
-                AnalysisImage, AnalysisImage.batch_id == AnalysisBatch.id
-            ).where(AnalysisImage.original_filename.ilike(search_pattern))
+            search_filter = or_(
+                AnalysisBatch.name.ilike(search_pattern),
+                AnalysisBatch.images.any(
+                    AnalysisImage.original_filename.ilike(search_pattern)
+                ),
+            )
+            count_stmt = count_stmt.where(search_filter)
+            batch_stmt = batch_stmt.where(search_filter)
 
         # Execute count
         count_result = await db.execute(count_stmt)
@@ -296,6 +374,7 @@ class AnalysisService:
 
         return AnalysisBatchDetail(
             id=batch.id,
+            name=batch.name,
             created_at=batch.created_at,
             completed_at=batch.completed_at,
             status=batch.status,
@@ -513,6 +592,7 @@ class AnalysisService:
     def _to_summary(self, batch: AnalysisBatch) -> AnalysisBatchSummary:
         return AnalysisBatchSummary(
             id=batch.id,
+            name=batch.name,
             created_at=batch.created_at,
             completed_at=batch.completed_at,
             status=batch.status,

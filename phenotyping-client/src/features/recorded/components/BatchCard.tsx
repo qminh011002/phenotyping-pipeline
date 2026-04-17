@@ -162,6 +162,16 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
         </div>
       </div>
 
+      {/* Title — batch name (truncated, tooltip shows full). */}
+      <div className="min-w-0 -mt-1">
+        <h3
+          className="truncate text-sm font-semibold text-foreground"
+          title={batch.name}
+        >
+          {batch.name || "Untitled batch"}
+        </h3>
+      </div>
+
       {/* Stat row */}
       <div className="grid grid-cols-3 gap-3">
         <div className="flex flex-col gap-0.5">

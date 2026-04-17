@@ -163,6 +163,7 @@ register_exception_handlers(app)
 from app.routers import health, logs, config, inference
 from app.routers.analyses import router as analysis_router
 from app.routers.dashboard import router as dashboard_router
+from app.routers.models import router as models_router
 from app.routers.overlay import router as overlay_router
 from app.routers.settings import router as settings_router
 
@@ -172,5 +173,6 @@ app.include_router(config.router)
 app.include_router(inference.router)
 app.include_router(analysis_router)
 app.include_router(dashboard_router)
+app.include_router(models_router)
 app.include_router(overlay_router)
 app.include_router(settings_router)

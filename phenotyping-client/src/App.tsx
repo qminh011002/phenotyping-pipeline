@@ -17,7 +17,7 @@ import SettingsPage from "@/pages/SettingsPage";
 function RootLayout() {
   return (
     <TooltipProvider delayDuration={300}>
-      <Toaster position="bottom-right" richColors closeButton />
+      <Toaster />
       <ProcessingToast />
       <Outlet />
     </TooltipProvider>

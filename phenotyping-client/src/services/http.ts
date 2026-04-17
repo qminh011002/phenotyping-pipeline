@@ -3,7 +3,7 @@
 
 import { ApiError } from "./errors";
 
-type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 // ── Base URL singleton ─────────────────────────────────────────────────────────
 
@@ -90,6 +90,10 @@ export const http = {
 
   async put<T>(path: string, body?: unknown): Promise<T> {
     return _fetch<T>("PUT", path, body);
+  },
+
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    return _fetch<T>("PATCH", path, body);
   },
 
   async delete(path: string): Promise<void> {

@@ -61,7 +61,7 @@ export function SearchFilters({ filters, onFiltersChange, total }: SearchFilters
         <div className="relative min-w-52 flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
-            placeholder="Search by filename…"
+            placeholder="Search by name or filename…"
             value={filters.q}
             onChange={handleSearchChange}
             className="pl-9 pr-8 h-9"

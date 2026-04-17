@@ -5,6 +5,7 @@ import { ThemeSection } from "@/features/settings/components/ThemeSection";
 import { ConnectionSection } from "@/features/settings/components/ConnectionSection";
 import { DeviceSection } from "@/features/settings/components/DeviceSection";
 import { StorageSection } from "@/features/settings/components/StorageSection";
+import { ModelsSection } from "@/features/settings/components/ModelsSection";
 import { LogViewer } from "@/features/logs/components/LogViewer";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -25,6 +26,8 @@ export default function SettingsPage() {
           <DeviceSection />
           <Separator />
           <StorageSection />
+          <Separator />
+          <ModelsSection />
           <Separator />
           <Card>
             <CardHeader>

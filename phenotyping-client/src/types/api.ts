@@ -98,6 +98,7 @@ export interface AnalysisImageDetail extends AnalysisImageSummary {
 
 export interface AnalysisBatchSummary {
   id: string; // UUID
+  name: string;
   created_at: string; // ISO 8601
   completed_at: string | null;
   status: string;
@@ -132,6 +133,38 @@ export interface DashboardStats {
   avg_confidence: number | null;
   avg_processing_time: number | null;
   recent_analyses: AnalysisBatchSummary[];
+}
+
+// ── Custom Models ────────────────────────────────────────────────────────────
+
+export interface CustomModelResponse {
+  id: string;
+  organism: Organism;
+  original_filename: string;
+  file_size_bytes: number;
+  uploaded_at: string;
+  is_valid: boolean;
+}
+
+export interface CustomModelListResponse {
+  models: CustomModelResponse[];
+}
+
+export interface OrganismAssignment {
+  organism: Organism;
+  is_default: boolean;
+  model_filename: string;
+  custom_model: CustomModelResponse | null;
+}
+
+export interface AssignmentsResponse {
+  assignments: Record<Organism, OrganismAssignment>;
+}
+
+export interface AssignResultResponse {
+  organism: Organism;
+  custom_model_id: string | null;
+  model_filename: string;
 }
 
 // ── Log streaming ─────────────────────────────────────────────────────────────

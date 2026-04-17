@@ -47,6 +47,7 @@ export interface StoredImageDetail {
 
 export interface StoredBatchDetail {
   id: string;
+  name: string;
   total_count: number | null;
   total_elapsed_secs: number | null;
   avg_confidence: number | null;

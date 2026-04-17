@@ -19,6 +19,7 @@ class AnalysisBatch(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, default=uuid.uuid4
     )
+    name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(20), default="processing")
     organism_type: Mapped[str] = mapped_column(String(20), default="egg")
     mode: Mapped[str] = mapped_column(String(20), default="upload")

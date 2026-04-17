@@ -14,6 +14,7 @@ from app.config import AppSettings
 from app.database import Base
 from app.models import AnalysisBatch, AnalysisImage  # noqa: F401 — imported for Base.metadata
 from app.models.app_settings import AppSettingsRow  # noqa: F401
+from app.models.custom_model import CustomModel, ModelAssignment  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

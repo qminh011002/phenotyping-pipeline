@@ -23,7 +23,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ErrorState } from "@/components/common/ErrorState";
-import { getAnalysisDetail, getAnalysesOverlayUrl } from "@/services/api";
+import { InlineEditableText } from "@/components/common/InlineEditableText";
+import { getAnalysisDetail, getAnalysesOverlayUrl, renameBatch } from "@/services/api";
 import { cn } from "@/lib/utils";
 import { listContainerVariants, listItemVariants } from "@/lib/motion";
 import type { AnalysisBatchDetail, AnalysisImageSummary } from "@/types/api";
@@ -278,10 +279,20 @@ export function BatchDetail() {
         </Button>
 
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-base font-semibold leading-none">
-            {detail.organism_type} — {detail.mode}
+          <h1 className="text-base font-semibold leading-none">
+            <InlineEditableText
+              value={detail.name}
+              onSave={async (next) => {
+                const updated = await renameBatch(detail.id, next);
+                setDetail(updated);
+              }}
+              ariaLabel="Rename batch"
+              className="max-w-full"
+            />
           </h1>
           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="capitalize">{detail.organism_type} · {detail.mode}</span>
+            <span>·</span>
             <Calendar className="h-3 w-3" />
             {formatDate(detail.created_at)} · {formatTime(detail.created_at)}
           </div>

@@ -263,6 +263,59 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Sonner toast overrides
+   ═══════════════════════════════════════════════════════════════════════════ */
+.toaster {
+  --width: min(24rem, calc(100vw - 2rem));
+  --border-radius: calc(var(--radius) + 0.375rem);
+  font-family: var(--font-sans);
+}
+
+.toaster [data-sonner-toast][data-styled="true"] {
+  width: var(--width);
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-lg);
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-content] {
+  min-width: 0;
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-description] {
+  overflow-wrap: break-word;
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-button] {
+  height: 2rem;
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-close-button] {
+  top: 0.75rem;
+  right: 0.75rem;
+  left: auto;
+  transform: none;
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: calc(var(--radius) - 2px);
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--muted-foreground);
+  box-shadow: none;
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-close-button]:hover {
+  border-color: var(--border);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Dark mode shimmer — reads from dark theme tokens
    ═══════════════════════════════════════════════════════════════════════════ */
 .dark .animate-shimmer {

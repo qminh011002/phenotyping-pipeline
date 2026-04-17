@@ -2,10 +2,11 @@
 // Appears in top-right, persists when navigating, click navigates to the processing page.
 
 import { useNavigate } from "react-router-dom";
-import { Microscope, CheckCircle2, XCircle } from "lucide-react";
-import { toast } from "sonner";
+import { Microscope } from "lucide-react";
 import { useEffect } from "react";
 import { useProcessingStore } from "@/stores/processingStore";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
 // ── Global toast manager ────────────────────────────────────────────────────────
@@ -28,17 +29,24 @@ export function ProcessingToast() {
     const id = "processing-toast";
 
     toast(
-      <ProcessingToastContent totalImages={totalImages} />,
+      <ProcessingToastContent
+        totalImages={totalImages}
+        onViewDetails={() => navigate("/analyze/processing")}
+        onDismiss={() => {
+          useProcessingStore.getState().reset();
+          toast.dismiss(id);
+        }}
+      />,
       {
         id,
         position: "top-right",
         dismissible: false,
         duration: Infinity,
-        className: "w-80 p-0 overflow-hidden",
+        className: "overflow-hidden p-0",
       },
     );
     setToastId(id);
-  }, [isProcessing, totalImages, setToastId]);
+  }, [isProcessing, navigate, totalImages, setToastId]);
 
   // When all done, replace toast with completion message
   useEffect(() => {
@@ -48,15 +56,14 @@ export function ProcessingToast() {
     if (!allDone) return;
 
     setTimeout(() => {
-      toast("Analysis complete", {
+      const toastFn = hasErrors ? toast.warning : toast.success;
+
+      toastFn("Analysis complete", {
         id: "processing-toast",
         position: "top-right",
-        icon: hasErrors ? (
-          <XCircle className="h-5 w-5 text-yellow-500" />
-        ) : (
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
-        ),
-        description: `${doneCount} images${hasErrors ? ` · ${errorCount} failed` : " · all successful"}`,
+        description: hasErrors
+          ? `${doneCount} completed · ${errorCount} failed`
+          : `${doneCount} image${doneCount !== 1 ? "s" : ""} completed successfully`,
         action: {
           label: "View Results",
           onClick: () => {
@@ -65,7 +72,6 @@ export function ProcessingToast() {
           },
         },
         duration: 6000,
-        className: "w-80",
       });
     }, 300);
 
@@ -77,76 +83,102 @@ export function ProcessingToast() {
 
 // ── Toast inner content ─────────────────────────────────────────────────────────
 
-function ProcessingToastContent({ totalImages }: { totalImages: number }) {
+function ProcessingToastContent({
+  totalImages,
+  onViewDetails,
+  onDismiss,
+}: {
+  totalImages: number;
+  onViewDetails: () => void;
+  onDismiss: () => void;
+}) {
   const { images } = useProcessingStore();
 
   const doneCount = images.filter((img) => img.status === "done").length;
   const errorCount = images.filter((img) => img.status === "error").length;
   const processingCount = images.filter((img) => img.status === "processing").length;
   const hasErrors = errorCount > 0;
-  const progress = totalImages > 0 ? (doneCount / totalImages) * 100 : 0;
+  const totalProcessed = doneCount + errorCount;
+  const progress = totalImages > 0 ? (totalProcessed / totalImages) * 100 : 0;
 
   return (
-    <div className="flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Microscope className={cn(
-            "h-4 w-4",
-            processingCount > 0 ? "text-primary animate-pulse" : "text-muted-foreground",
-          )} />
-          <span className="text-sm font-medium">
-            {processingCount > 0
-              ? "Analyzing images…"
-              : doneCount > 0
-              ? "Analysis complete"
-              : "Starting…"}
-          </span>
+    <div className="flex w-full flex-col bg-card">
+      <div className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-lg border shadow-xs",
+              processingCount > 0 && "border-primary/20 bg-primary/10 text-primary",
+              processingCount === 0 && !hasErrors && "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+              processingCount === 0 && hasErrors && "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+            )}
+          >
+            <Microscope
+              className={cn(
+                "h-4 w-4",
+                processingCount > 0 && "animate-pulse",
+              )}
+            />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-5">
+              {processingCount > 0
+                ? "Analyzing images…"
+                : doneCount > 0
+                ? "Analysis complete"
+                : "Starting…"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {totalProcessed}/{totalImages} processed
+            </p>
+          </div>
         </div>
-        <span className="text-xs text-muted-foreground">
-          {doneCount}/{totalImages}
+        <span className="rounded-full border border-border/70 bg-muted/60 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+          {processingCount > 0
+            ? `${processingCount} active`
+            : hasErrors
+            ? `${errorCount} failed`
+            : "Finalized"}
         </span>
       </div>
 
-      {/* Progress bar */}
       <div className="px-4 pt-3">
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-muted/80">
           <div
             className={cn(
               "h-full rounded-full transition-all duration-300",
-              hasErrors ? "bg-yellow-500" : "bg-primary",
+              hasErrors ? "bg-amber-500" : "bg-primary",
             )}
             style={{ width: `${progress}%` }}
           />
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="flex items-center gap-3 px-4 py-2 text-xs text-muted-foreground">
-        <span>{doneCount} done</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-xs">
+        <span className="text-muted-foreground">{doneCount} complete</span>
         {processingCount > 0 && <span className="text-primary">{processingCount} processing</span>}
-        {errorCount > 0 && <span className="text-yellow-600 dark:text-yellow-400">{errorCount} failed</span>}
+        {errorCount > 0 && <span className="text-amber-600 dark:text-amber-400">{errorCount} failed</span>}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 border-t px-4 py-2">
-        <button
+      <div className="flex items-center gap-2 border-t border-border/70 px-4 py-3">
+        <Button
           type="button"
-          onClick={() => {/* noop — toast is already showing on this page */}}
-          className="flex-1 rounded-sm bg-muted/60 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+          onClick={onViewDetails}
+          variant="outline"
+          size="sm"
+          className="h-8 flex-1"
         >
           View Details
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          onClick={() => {
-            useProcessingStore.getState().reset();
-            toast.dismiss("processing-toast");
-          }}
-          className="rounded-sm px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          onClick={onDismiss}
+          variant="ghost"
+          size="sm"
+          className="h-8 px-3 text-muted-foreground hover:text-foreground"
         >
           Dismiss
-        </button>
+        </Button>
       </div>
     </div>
   );

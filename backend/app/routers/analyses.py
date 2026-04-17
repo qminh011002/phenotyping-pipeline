@@ -19,6 +19,7 @@ from app.deps import get_analysis_service, get_settings
 from app.schemas.analysis import (
     AnalysisBatchCreate,
     AnalysisBatchDetail,
+    AnalysisBatchUpdate,
     AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisListResponse,
@@ -77,13 +78,20 @@ async def list_analyses(
     page_size: int = Query(
         default=_DEFAULT_PAGE_SIZE, ge=1, le=100, description="Items per page"
     ),
-    q: str | None = Query(default=None, description="Search by original filename"),
+    q: str | None = Query(
+        default=None,
+        description=(
+            "Substring match against batch name OR any image's "
+            "original filename (case-insensitive)."
+        ),
+    ),
     organism: str | None = Query(default=None, description="Filter by organism type"),
 ) -> AnalysisListResponse:
     """Return a paginated list of analysis batches.
 
     Results are sorted by creation date descending (newest first).
-    Optionally filter by organism type or search by filename fragment.
+    Optionally filter by organism type; ``q`` performs a case-insensitive
+    substring match on the batch ``name`` OR any image's ``original_filename``.
     """
     return await analysis_svc.list_batches(
         page=page,
@@ -116,6 +124,38 @@ async def get_analysis(
             detail=f"Analysis batch {batch_id} not found.",
         )
     return detail
+
+
+@router.patch(
+    "/{batch_id}",
+    response_model=AnalysisBatchDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Rename a batch (partial update)",
+    responses={
+        200: {"description": "Batch updated"},
+        404: {"description": "Batch not found"},
+        422: {"description": "Validation error"},
+    },
+)
+async def patch_analysis(
+    batch_id: UUID,
+    data: AnalysisBatchUpdate,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisBatchDetail:
+    """Rename a batch. Only ``name`` is supported today.
+
+    Shaped as a partial-update object so additional fields slot in without
+    breaking existing clients.
+    """
+    updated = await analysis_svc.rename_batch(batch_id=batch_id, data=data, db=db)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+    await db.commit()
+    return updated
 
 
 @router.delete(

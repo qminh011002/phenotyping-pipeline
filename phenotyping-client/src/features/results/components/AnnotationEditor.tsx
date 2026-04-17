@@ -192,7 +192,7 @@ export const AnnotationEditor = memo(function AnnotationEditor({
       const dx = x - drag.startX;
       const dy = y - drag.startY;
 
-      if (!drag.moved && Math.hypot(dx, dy) > CLICK_VS_DRAG_PX) {
+      if (!drag.moved && Math.hypot(dx, dy) * scale > CLICK_VS_DRAG_PX) {
         drag.moved = true;
       }
 
@@ -244,7 +244,7 @@ export const AnnotationEditor = memo(function AnnotationEditor({
         return;
       }
     },
-    [height, toImage, width],
+    [height, scale, toImage, width],
   );
 
   // ── Per-element drag starters ───────────────────────────────────────────
