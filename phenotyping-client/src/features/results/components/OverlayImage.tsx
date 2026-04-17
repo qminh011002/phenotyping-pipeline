@@ -1,67 +1,108 @@
-// OverlayImage — raw image viewer with zoom/pan and client-side bbox overlay.
-// Draws annotations as SVG rectangles on top of the raw image. On hover of a
-// box, dims the rest of the image (via SVG mask) so the hovered region pops.
+// OverlayImage — Konva-backed image viewer + annotation editor.
+// A single Konva Stage owns the image, bbox rendering, zoom/pan, and (when
+// the `editor` prop is provided) interactive editing: move / resize / draw /
+// delete. Using one Stage instead of two SVGs means hit testing is unified
+// and panning/zooming is handled by Konva's native transform (compositor-
+// accelerated canvas, no per-pixel React renders).
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CloudUpload, Minus, Plus } from "lucide-react";
+import Konva from "konva";
+import type { KonvaEventObject } from "konva/lib/Node";
+import {
+  Circle,
+  Group,
+  Image as KonvaImage,
+  Layer,
+  Line,
+  Rect,
+  Stage,
+  Transformer,
+} from "react-konva";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { BBox } from "@/types/api";
+import {
+  clampBox,
+  enforceMinSize,
+  MIN_BOX_SIZE,
+  normalizeBox,
+} from "../lib/bboxMath";
+
+// ── Props ──────────────────────────────────────────────────────────────────
+
+export interface OverlayImageEditor {
+  /** drag = select/move/resize; draw = rubber-band new box (pan disabled). */
+  mode: "drag" | "draw";
+  /** Index into `annotations` of the selected box; null = none. */
+  selectedIndex: number | null;
+  /** Confidence threshold — model-origin boxes below this are hidden. */
+  confidenceThreshold: number;
+  onSelect: (index: number | null) => void;
+  /** Commit a finished gesture (once, on pointerup). */
+  onCommit: (boxes: BBox[]) => void;
+}
 
 interface OverlayImageProps {
-  /** Absolute URL to the raw image */
   src: string;
-  /** Alt text (usually the filename) */
   alt?: string;
-  /** Bounding boxes to draw on top of the raw image */
   annotations?: BBox[];
   className?: string;
   saveInProgress?: boolean;
   /**
-   * When true, disable panning so the editor can do drag gestures.
-   * The parent ResultViewer controls this while in edit/draw mode.
-   */
-  panDisabled?: boolean;
-  /**
-   * When true, render the two-level dim overlay (default). When false, the
-   * raw image is shown without any dim. Non-edit mode flips this off while the
-   * user holds Ctrl so they can inspect the raw pixels.
+   * When true, the two-level dim overlay is rendered. Hidden during active
+   * drag/resize/draw and in draw mode so the user sees the raw pixels.
    */
   dimEnabled?: boolean;
   /**
-   * Fired when the user clicks the background (pointerdown → pointerup with
-   * no drag). Used by the editor to deselect boxes on empty-area clicks.
+   * Fired when the user clicks the empty background (pointerdown → up with
+   * no drag). Used by the parent to deselect on empty-area clicks.
    */
   onBackgroundClick?: () => void;
-  /**
-   * Render-prop for the editor layer. Receives the current zoom scale so the
-   * editor can render scale-aware handles. Mounted inside the transformed div
-   * so geometry stays pixel-aligned with the image.
-   */
-  editorSlot?: (ctx: { scale: number }) => React.ReactNode;
-  /**
-   * Called when the natural image dimensions are determined (after image loads).
-   * The editor can use this to configure its own SVG viewBox to match the image.
-   */
   onDimensions?: (width: number, height: number) => void;
+  /**
+   * When provided, the component is in edit mode: boxes are interactive,
+   * selection + resize handles + draw + delete are enabled.
+   */
+  editor?: OverlayImageEditor;
 }
 
-interface Transform {
-  scale: number;
-  translateX: number;
-  translateY: number;
-}
+// ── Tunables ───────────────────────────────────────────────────────────────
 
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 20;
 const ZOOM_FACTOR = 1.15;
+// Smaller = more wheel ticks per doubling. Roboflow-like finesse.
 const WHEEL_ZOOM_SENSITIVITY = 0.0006;
-const BOX_STROKE = "#00ff00";
-const BOX_STROKE_WIDTH = 2;
+
+const STROKE_MODEL = "#22c55e";
+const STROKE_USER = "#f59e0b";
+const STROKE_SELECTED = "#3b82f6";
+const FILL_SELECTED = "rgba(59,130,246,0.10)";
+
 const DIM_OPACITY_BASE = 0.5;
-const DIM_OPACITY_HOVER = 0.8;
+const DIM_OPACITY_HOVER = 0.3; // additional dim on top of base
+
+const HANDLE_PX = 10;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function loadImageEl(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+function isVisible(b: BBox, threshold: number): boolean {
+  return b.origin === "user" || b.confidence >= threshold;
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export function OverlayImage({
   src,
@@ -69,217 +110,201 @@ export function OverlayImage({
   annotations = [],
   className,
   saveInProgress = false,
-  panDisabled = false,
   dimEnabled = true,
   onBackgroundClick,
-  editorSlot,
   onDimensions,
+  editor,
 }: OverlayImageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const transformedDivRef = useRef<HTMLDivElement>(null);
-  // Source of truth for current transform during interactions.
-  // React state `transform` mirrors this, but via rAF to avoid per-event renders.
-  const transformRef = useRef<Transform>({
-    scale: 1,
-    translateX: 0,
-    translateY: 0,
-  });
-  const rafSyncRef = useRef<number | null>(null);
-  const [transform, setTransform] = useState<Transform>({
-    scale: 1,
-    translateX: 0,
-    translateY: 0,
-  });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-  const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(
-    null,
-  );
-  const [imageError, setImageError] = useState(false);
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const maskId = useId();
+  const stageRef = useRef<Konva.Stage>(null);
+  const transformerRef = useRef<Konva.Transformer>(null);
+  const selectedRectRef = useRef<Konva.Rect>(null);
+  const deleteHandleRef = useRef<Konva.Group>(null);
 
-  // Write transform directly to the DOM — bypasses React reconciliation.
-  const applyTransformDOM = useCallback(() => {
-    const el = transformedDivRef.current;
+  const [imageEl, setImageEl] = useState<HTMLImageElement | null>(null);
+  const [imageError, setImageError] = useState(false);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  const [scale, setScale] = useState(1);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  // Transient preview boxes during a body drag or rubber-band draw.
+  const [rubberBand, setRubberBand] = useState<
+    [number, number, number, number] | null
+  >(null);
+  // True while a drag / resize / rubber-band is in flight — hides the dim layer.
+  const [interacting, setInteracting] = useState(false);
+  // Cursor in image coords — drives the draw-mode crosshair.
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+
+  const editing = editor !== undefined;
+  const mode = editor?.mode ?? "drag";
+  const selectedIndex = editor?.selectedIndex ?? null;
+  const confidenceThreshold = editor?.confidenceThreshold ?? 0;
+
+  const renderBoxes = annotations;
+
+  // ── Load image ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    setImageEl(null);
+    setImageError(false);
+    setHoverIdx(null);
+    if (!src) return;
+    loadImageEl(src)
+      .then((img) => {
+        if (cancelled) return;
+        setImageEl(img);
+        onDimensions?.(img.naturalWidth, img.naturalHeight);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setImageError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, onDimensions]);
+
+  // ── Track container size ────────────────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
     if (!el) return;
-    const t = transformRef.current;
-    el.style.transform = `translate(${t.translateX}px, ${t.translateY}px) scale(${t.scale})`;
+    const measure = () => {
+      setStageSize({ width: el.clientWidth, height: el.clientHeight });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
-  // Coalesce React state syncs to one per frame so the scale readout +
-  // editor's scale prop stay live without re-rendering on every event.
-  const scheduleStateSync = useCallback(() => {
-    if (rafSyncRef.current !== null) return;
-    rafSyncRef.current = requestAnimationFrame(() => {
-      rafSyncRef.current = null;
-      setTransform({ ...transformRef.current });
+  // ── Fit-to-screen whenever image or container size changes ──────────────
+  const fitToScreen = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage || !imageEl || stageSize.width === 0 || stageSize.height === 0)
+      return;
+    const iw = imageEl.naturalWidth;
+    const ih = imageEl.naturalHeight;
+    const fit = Math.min(stageSize.width / iw, stageSize.height / ih, 1);
+    stage.scale({ x: fit, y: fit });
+    // Center image in stage.
+    stage.position({
+      x: (stageSize.width - iw * fit) / 2,
+      y: (stageSize.height - ih * fit) / 2,
+    });
+    stage.batchDraw();
+    setScale(fit);
+  }, [imageEl, stageSize.height, stageSize.width]);
+
+  useEffect(() => {
+    fitToScreen();
+  }, [fitToScreen]);
+
+  // ── Attach Transformer to the selected rect ─────────────────────────────
+  useEffect(() => {
+    const tr = transformerRef.current;
+    const rect = selectedRectRef.current;
+    if (!tr) return;
+    if (editing && mode === "drag" && rect && selectedIndex !== null) {
+      tr.nodes([rect]);
+      tr.getLayer()?.batchDraw();
+    } else {
+      tr.nodes([]);
+      tr.getLayer()?.batchDraw();
+    }
+  }, [editing, mode, selectedIndex, renderBoxes]);
+
+  // ── Zoom (wheel) — rAF-coalesced so fast scrolls don't queue frames ─────
+  const wheelAccumRef = useRef<{
+    deltaY: number;
+    pointer: { x: number; y: number } | null;
+  }>({ deltaY: 0, pointer: null });
+  const wheelRafRef = useRef<number | null>(null);
+
+  const handleWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
+    // Accumulate deltaY; commit once per animation frame.
+    wheelAccumRef.current.deltaY += e.evt.deltaY;
+    wheelAccumRef.current.pointer = { x: pointer.x, y: pointer.y };
+
+    if (wheelRafRef.current !== null) return;
+    wheelRafRef.current = requestAnimationFrame(() => {
+      wheelRafRef.current = null;
+      const { deltaY, pointer: p } = wheelAccumRef.current;
+      wheelAccumRef.current.deltaY = 0;
+      wheelAccumRef.current.pointer = null;
+      if (!p) return;
+
+      const oldScale = stage.scaleX();
+      // Clamp the accumulated delta so a single frame can't over-zoom.
+      const delta = Math.max(-240, Math.min(240, deltaY));
+      const factor = Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY);
+      const newScale = Math.min(
+        MAX_SCALE,
+        Math.max(MIN_SCALE, oldScale * factor),
+      );
+      if (newScale === oldScale) return;
+
+      const mousePointTo = {
+        x: (p.x - stage.x()) / oldScale,
+        y: (p.y - stage.y()) / oldScale,
+      };
+      stage.scale({ x: newScale, y: newScale });
+      stage.position({
+        x: p.x - mousePointTo.x * newScale,
+        y: p.y - mousePointTo.y * newScale,
+      });
+      stage.batchDraw();
+      setScale(newScale);
     });
   }, []);
-
-  const commitTransform = useCallback(
-    (t: Transform) => {
-      transformRef.current = t;
-      setTransform(t);
-      applyTransformDOM();
-    },
-    [applyTransformDOM],
-  );
 
   useEffect(() => {
     return () => {
-      if (rafSyncRef.current !== null) cancelAnimationFrame(rafSyncRef.current);
+      if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current);
     };
   }, []);
 
-  const computeFitScale = useCallback((w: number, h: number): number => {
-    const el = containerRef.current;
-    if (!el) return 1;
-
-    const cw = el.clientWidth;
-    const ch = el.clientHeight;
-    if (cw <= 0 || ch <= 0) return 1;
-
-    return Math.min(cw / w, ch / h, 1);
+  // ── Zoom buttons ────────────────────────────────────────────────────────
+  const zoomByFactor = useCallback((factor: number) => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const oldScale = stage.scaleX();
+    const newScale = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, oldScale * factor),
+    );
+    if (newScale === oldScale) return;
+    // Zoom around stage center.
+    const cx = stage.width() / 2;
+    const cy = stage.height() / 2;
+    const mousePointTo = {
+      x: (cx - stage.x()) / oldScale,
+      y: (cy - stage.y()) / oldScale,
+    };
+    stage.scale({ x: newScale, y: newScale });
+    stage.position({
+      x: cx - mousePointTo.x * newScale,
+      y: cy - mousePointTo.y * newScale,
+    });
+    stage.batchDraw();
+    setScale(newScale);
   }, []);
 
-  const fitToScreen = useCallback(() => {
-    if (!naturalDims) return;
+  const handleZoomIn = useCallback(() => zoomByFactor(ZOOM_FACTOR), [zoomByFactor]);
+  const handleZoomOut = useCallback(() => zoomByFactor(1 / ZOOM_FACTOR), [zoomByFactor]);
 
-    commitTransform({
-      scale: computeFitScale(naturalDims.w, naturalDims.h),
-      translateX: 0,
-      translateY: 0,
-    });
-  }, [commitTransform, computeFitScale, naturalDims]);
-
-  useEffect(() => {
-    setNaturalDims(null);
-    setImageError(false);
-    setHoveredIdx(null);
-    commitTransform({ scale: 1, translateX: 0, translateY: 0 });
-  }, [commitTransform, src]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !naturalDims) return;
-
-    const observer = new ResizeObserver(() => {
-      commitTransform({
-        scale: computeFitScale(naturalDims.w, naturalDims.h),
-        translateX: 0,
-        translateY: 0,
-      });
-    });
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [commitTransform, computeFitScale, naturalDims]);
-
-  // Imperative zoom: mutate ref + DOM directly, rAF-sync React state.
-  const zoom = useCallback(
-    (delta: number, pivotX: number, pivotY: number) => {
-      const prev = transformRef.current;
-      const nextScale = Math.min(
-        MAX_SCALE,
-        Math.max(MIN_SCALE, prev.scale * delta),
-      );
-      if (nextScale === prev.scale) return;
-      const ratio = nextScale / prev.scale;
-      transformRef.current = {
-        scale: nextScale,
-        translateX: pivotX - ratio * (pivotX - prev.translateX),
-        translateY: pivotY - ratio * (pivotY - prev.translateY),
-      };
-      applyTransformDOM();
-      scheduleStateSync();
-    },
-    [applyTransformDOM, scheduleStateSync],
-  );
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const handler = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const pivotX = e.clientX - rect.left - rect.width / 2;
-      const pivotY = e.clientY - rect.top - rect.height / 2;
-      const delta = Math.max(-120, Math.min(120, e.deltaY));
-      zoom(Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY), pivotX, pivotY);
-    };
-
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
-  }, [zoom]);
-
-  const downPosRef = useRef<{ x: number; y: number } | null>(null);
-  const movedRef = useRef(false);
-  const isDraggingRef = useRef(false);
-
-  function handlePointerDown(e: React.PointerEvent) {
-    if (e.button !== 0 || panDisabled) return;
-
-    downPosRef.current = { x: e.clientX, y: e.clientY };
-    movedRef.current = false;
-    isDraggingRef.current = true;
-    setIsDragging(true);
-    const t = transformRef.current;
-    dragStartRef.current = {
-      x: e.clientX - t.translateX,
-      y: e.clientY - t.translateY,
-    };
-  }
-
-  function handlePointerMove(e: React.PointerEvent) {
-    if (!isDraggingRef.current) return;
-
-    if (downPosRef.current && !movedRef.current) {
-      const dx = e.clientX - downPosRef.current.x;
-      const dy = e.clientY - downPosRef.current.y;
-      if (Math.hypot(dx, dy) > 3) movedRef.current = true;
-    }
-
-    const prev = transformRef.current;
-    transformRef.current = {
-      ...prev,
-      translateX: e.clientX - dragStartRef.current.x,
-      translateY: e.clientY - dragStartRef.current.y,
-    };
-    applyTransformDOM();
-    // No state sync during pan — translate doesn't affect any child props.
-    // State gets committed once on pointerup.
-  }
-
-  function handlePointerUp() {
-    if (isDraggingRef.current && !movedRef.current) onBackgroundClick?.();
-    if (isDraggingRef.current && movedRef.current) {
-      // Commit final translate to React state so scale-dependent consumers
-      // (unlikely to care about translate, but keep state consistent).
-      setTransform({ ...transformRef.current });
-    }
-    isDraggingRef.current = false;
-    setIsDragging(false);
-    downPosRef.current = null;
-    movedRef.current = false;
-  }
-
-  function handleZoomIn() {
-    zoom(ZOOM_FACTOR, 0, 0);
-  }
-
-  function handleZoomOut() {
-    zoom(1 / ZOOM_FACTOR, 0, 0);
-  }
-
+  // ── Keyboard shortcuts for zoom/fit ─────────────────────────────────────
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const inputFocused =
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement;
       if (inputFocused) return;
-
       if (e.key === "=" || e.key === "+") {
         e.preventDefault();
         handleZoomIn();
@@ -291,56 +316,296 @@ export function OverlayImage({
         fitToScreen();
       }
     }
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [fitToScreen]);
+  }, [fitToScreen, handleZoomIn, handleZoomOut]);
 
+  // ── Pointer → image-space helper ────────────────────────────────────────
+  const getImagePointer = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return null;
+    const inv = stage.getAbsoluteTransform().copy().invert();
+    return inv.point(pointer);
+  }, []);
+
+  // ── Background click (deselect) ─────────────────────────────────────────
+  // Konva gives us this reliably: a click on the Stage (target === stage)
+  // means nothing else was clicked.
+  const backgroundDownPos = useRef<{ x: number; y: number } | null>(null);
+  const backgroundMoved = useRef(false);
+
+  const handleStageMouseDown = useCallback(
+    (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
+      const stage = stageRef.current;
+      if (!stage) return;
+      // Only track as background press if the target is the stage itself
+      // (not a shape).
+      if (e.target === stage) {
+        const p = stage.getPointerPosition();
+        backgroundDownPos.current = p ? { x: p.x, y: p.y } : null;
+        backgroundMoved.current = false;
+      } else {
+        backgroundDownPos.current = null;
+      }
+    },
+    [],
+  );
+
+  const handleStageMouseMove = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    // Track cursor for the draw-mode crosshair on every move, not only while
+    // pressing. This is what makes the crosshair follow the pointer from the
+    // moment the user enters draw mode.
+    if (mode === "draw") {
+      const pt = getImagePointer();
+      if (pt) setCursor(pt);
+    }
+    if (backgroundDownPos.current) {
+      const p = stage.getPointerPosition();
+      if (!p) return;
+      const dx = p.x - backgroundDownPos.current.x;
+      const dy = p.y - backgroundDownPos.current.y;
+      if (Math.hypot(dx, dy) > 3) backgroundMoved.current = true;
+    }
+  }, [getImagePointer, mode]);
+
+  // Reset cursor when leaving draw mode or the stage.
   useEffect(() => {
-    if (!src) return;
+    if (mode !== "draw") setCursor(null);
+  }, [mode]);
 
-    const img = new Image();
-    img.onload = () => {
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
+  const handleStageMouseUp = useCallback(() => {
+    if (backgroundDownPos.current && !backgroundMoved.current) {
+      onBackgroundClick?.();
+    }
+    backgroundDownPos.current = null;
+    backgroundMoved.current = false;
+  }, [onBackgroundClick]);
 
-      setNaturalDims({ w, h });
-      onDimensions?.(w, h);
+  // ── Draw mode: rubber-band ──────────────────────────────────────────────
+  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
 
-      commitTransform({
-        scale: computeFitScale(w, h),
-        translateX: 0,
-        translateY: 0,
-      });
+  const handleStageMouseDownDraw = useCallback(
+    (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
+      if (!editing || mode !== "draw") return;
+      const stage = stageRef.current;
+      if (!stage) return;
+      const evtButton = "button" in e.evt ? e.evt.button : 0;
+      if (evtButton !== 0) return;
+      const pt = getImagePointer();
+      if (!pt) return;
+      drawStartRef.current = pt;
+      setRubberBand([pt.x, pt.y, pt.x, pt.y]);
+      setInteracting(true);
+    },
+    [editing, mode, getImagePointer],
+  );
+
+  const handleStageMouseMoveDraw = useCallback(() => {
+    if (!editing || mode !== "draw" || !drawStartRef.current) return;
+    const pt = getImagePointer();
+    if (!pt) return;
+    const { x: sx, y: sy } = drawStartRef.current;
+    setRubberBand([sx, sy, pt.x, pt.y]);
+  }, [editing, mode, getImagePointer]);
+
+  const handleStageMouseUpDraw = useCallback(() => {
+    if (!editing || mode !== "draw" || !drawStartRef.current || !editor) return;
+    const pt = getImagePointer();
+    if (!pt || !imageEl) {
+      drawStartRef.current = null;
+      setRubberBand(null);
+      setInteracting(false);
+      return;
+    }
+    const { x: sx, y: sy } = drawStartRef.current;
+    drawStartRef.current = null;
+    setRubberBand(null);
+    setInteracting(false);
+    const [nx1, ny1, nx2, ny2] = normalizeBox(sx, sy, pt.x, pt.y);
+    const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
+    if (!enforced) return;
+    const clamped = clampBox(enforced, imageEl.naturalWidth, imageEl.naturalHeight);
+    const newBox: BBox = {
+      label: "neonate_egg",
+      bbox: clamped,
+      confidence: 1.0,
+      origin: "user",
+      edited_at: new Date().toISOString(),
     };
-    img.onerror = () => setImageError(true);
-    img.src = src;
-  }, [commitTransform, computeFitScale, onDimensions, src]);
+    const next = [...annotations, newBox];
+    editor.onCommit(next);
+    editor.onSelect(next.length - 1);
+  }, [editing, mode, editor, getImagePointer, imageEl, annotations]);
 
-  const hovered = hoveredIdx !== null ? annotations[hoveredIdx] : null;
+  // ── Box drag (move) ─────────────────────────────────────────────────────
+  const handleBoxDragStart = useCallback(
+    (index: number) => {
+      if (!editing || mode !== "drag" || !editor) return;
+      editor.onSelect(index);
+      setInteracting(true);
+    },
+    [editing, mode, editor],
+  );
 
-  const transformStyle = naturalDims
-    ? `translate(${transform.translateX}px, ${transform.translateY}px) scale(${transform.scale})`
-    : undefined;
+  const handleBoxDragMove = useCallback(
+    (index: number, e: KonvaEventObject<DragEvent>) => {
+      if (!editing || !imageEl) return;
+      // Clamp to image bounds. Konva moves the rect imperatively each frame,
+      // so we DON'T call setState here — that would trigger React renders on
+      // every pointermove. The bbox is read back from the node on dragEnd.
+      const node = e.target;
+      const [x1, y1, x2, y2] = annotations[index].bbox;
+      const w = x2 - x1;
+      const h = y2 - y1;
+      const nx = Math.max(0, Math.min(imageEl.naturalWidth - w, node.x()));
+      const ny = Math.max(0, Math.min(imageEl.naturalHeight - h, node.y()));
+      if (nx !== node.x()) node.x(nx);
+      if (ny !== node.y()) node.y(ny);
+      // Keep the delete icon pinned to the box top-left as it moves.
+      deleteHandleRef.current?.position({ x: nx, y: ny });
+    },
+    [editing, imageEl, annotations],
+  );
+
+  const handleBoxDragEnd = useCallback(
+    (index: number, e: KonvaEventObject<DragEvent>) => {
+      if (!editing || !editor || !imageEl) {
+        setInteracting(false);
+        return;
+      }
+      const node = e.target;
+      const [x1, y1, x2, y2] = annotations[index].bbox;
+      const w = x2 - x1;
+      const h = y2 - y1;
+      const nx = Math.max(
+        0,
+        Math.min(imageEl.naturalWidth - w, node.x()),
+      );
+      const ny = Math.max(
+        0,
+        Math.min(imageEl.naturalHeight - h, node.y()),
+      );
+      const next = annotations.slice();
+      next[index] = {
+        ...next[index],
+        bbox: [nx, ny, nx + w, ny + h],
+        origin: "user",
+        edited_at: new Date().toISOString(),
+      };
+      setInteracting(false);
+      editor.onCommit(next);
+    },
+    [editing, editor, imageEl, annotations],
+  );
+
+  // ── Transformer resize (selected box) ───────────────────────────────────
+  const handleTransformStart = useCallback(() => {
+    setInteracting(true);
+  }, []);
+
+  // Fires continuously during resize — keep the delete icon pinned to the
+  // rect's (possibly-moving) top-left corner.
+  const handleTransform = useCallback(() => {
+    const rect = selectedRectRef.current;
+    const handle = deleteHandleRef.current;
+    if (!rect || !handle) return;
+    // During transform the rect's scale is !=1; compute the true top-left.
+    const sx = rect.scaleX();
+    const sy = rect.scaleY();
+    const w = rect.width() * sx;
+    const h = rect.height() * sy;
+    // When scale goes negative (flipped), offset origin accordingly.
+    const x = rect.x() + (w < 0 ? w : 0);
+    const y = rect.y() + (h < 0 ? h : 0);
+    handle.position({ x, y });
+  }, []);
+
+  const handleTransformEnd = useCallback(() => {
+    if (!editing || !editor || selectedIndex === null || !imageEl) {
+      setInteracting(false);
+      return;
+    }
+    const rect = selectedRectRef.current;
+    if (!rect) {
+      setInteracting(false);
+      return;
+    }
+    // Read the transformed geometry and bake scale back into width/height.
+    const scaleX = rect.scaleX();
+    const scaleY = rect.scaleY();
+    const newW = Math.max(MIN_BOX_SIZE, rect.width() * scaleX);
+    const newH = Math.max(MIN_BOX_SIZE, rect.height() * scaleY);
+    let nx1 = rect.x();
+    let ny1 = rect.y();
+    let nx2 = nx1 + newW;
+    let ny2 = ny1 + newH;
+    [nx1, ny1, nx2, ny2] = clampBox(
+      [nx1, ny1, nx2, ny2],
+      imageEl.naturalWidth,
+      imageEl.naturalHeight,
+    );
+    rect.scaleX(1);
+    rect.scaleY(1);
+    rect.width(nx2 - nx1);
+    rect.height(ny2 - ny1);
+    rect.x(nx1);
+    rect.y(ny1);
+
+    const next = annotations.slice();
+    next[selectedIndex] = {
+      ...next[selectedIndex],
+      bbox: [nx1, ny1, nx2, ny2],
+      origin: "user",
+      edited_at: new Date().toISOString(),
+    };
+    setInteracting(false);
+    editor.onCommit(next);
+  }, [editing, editor, selectedIndex, imageEl, annotations]);
+
+  // ── Delete selected (handled via button inside selected box) ────────────
+  const handleDeleteSelected = useCallback(() => {
+    if (!editing || !editor || selectedIndex === null) return;
+    const next = annotations.filter((_, i) => i !== selectedIndex);
+    editor.onCommit(next);
+    editor.onSelect(null);
+  }, [editing, editor, selectedIndex, annotations]);
+
+  // ── Derived geometry ────────────────────────────────────────────────────
+  const imageSize = imageEl
+    ? { width: imageEl.naturalWidth, height: imageEl.naturalHeight }
+    : null;
+
+  // Visible boxes after confidence filter.
+  const visibleBoxesWithIdx = useMemo(() => {
+    return renderBoxes
+      .map((b, i) => ({ box: b, index: i }))
+      .filter(({ box }) => isVisible(box, confidenceThreshold));
+  }, [renderBoxes, confidenceThreshold]);
+
+  // Dim is hidden during interaction and in draw mode.
+  const showDim = dimEnabled && !interacting && mode !== "draw";
+
+  const hovered = hoverIdx !== null ? renderBoxes[hoverIdx] : null;
+
+  const stageDraggable = editing ? mode === "drag" : true;
+
+  const cursorStyle = mode === "draw" ? "crosshair" : stageDraggable ? "grab" : "default";
+
+  const invScale = 1 / Math.max(scale, 0.001);
+  const handleSize = HANDLE_PX * invScale;
 
   return (
     <div className={cn("h-full", className)}>
       <div
         ref={containerRef}
-        className={cn(
-          "relative flex h-full items-center justify-center overflow-hidden bg-muted/20 select-none",
-          isDragging
-            ? "cursor-grabbing"
-            : panDisabled
-              ? "cursor-default"
-              : "cursor-grab",
-        )}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
-        onPointerCancel={handlePointerUp}
+        className="relative h-full overflow-hidden bg-muted/20 select-none"
+        style={{ cursor: cursorStyle }}
       >
+        {/* Zoom controls */}
         <div className="pointer-events-none absolute bottom-4 left-4 z-20">
           <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-cyan-400/40 bg-slate-950/88 px-2 py-1.5 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
             <Button
@@ -352,11 +617,9 @@ export function OverlayImage({
             >
               <Minus className="h-4 w-4" />
             </Button>
-
             <div className="min-w-16 px-0.5 text-center font-mono text-[1.05rem] font-semibold tabular-nums tracking-[-0.03em] text-slate-100">
-              {Math.round(transform.scale * 100)}%
+              {Math.round(scale * 100)}%
             </div>
-
             <Button
               variant="ghost"
               size="icon-sm"
@@ -366,7 +629,6 @@ export function OverlayImage({
             >
               <Plus className="h-4 w-4" />
             </Button>
-
             <Button
               variant="ghost"
               size="sm"
@@ -376,7 +638,6 @@ export function OverlayImage({
             >
               RESET
             </Button>
-
             {saveInProgress && (
               <div className="ml-1 flex items-center gap-1 rounded-[10px] border border-cyan-400/25 bg-cyan-500/8 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-cyan-100">
                 <CloudUpload className="h-3.5 w-3.5 animate-pulse" />
@@ -386,14 +647,10 @@ export function OverlayImage({
           </div>
         </div>
 
+        {/* Placeholders */}
         {!src && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-            <svg
-              className="h-10 w-10"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
+            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -407,21 +664,14 @@ export function OverlayImage({
             </p>
           </div>
         )}
-
-        {src && !naturalDims && !imageError && (
+        {src && !imageEl && !imageError && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Skeleton className="h-full w-full" />
           </div>
         )}
-
         {imageError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-            <svg
-              className="h-10 w-10"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
+            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -434,141 +684,307 @@ export function OverlayImage({
           </div>
         )}
 
-        {naturalDims && (
-          <div
-            ref={transformedDivRef}
-            className="relative shrink-0"
-            style={{
-              width: naturalDims.w,
-              height: naturalDims.h,
-              transform: transformStyle,
-              transformOrigin: "center center",
-              willChange: "transform",
+        {/* Konva Stage */}
+        {imageEl && imageSize && stageSize.width > 0 && stageSize.height > 0 && (
+          <Stage
+            ref={stageRef}
+            width={stageSize.width}
+            height={stageSize.height}
+            draggable={stageDraggable}
+            onWheel={handleWheel}
+            onMouseDown={(e) => {
+              handleStageMouseDown(e);
+              handleStageMouseDownDraw(e);
+            }}
+            onMouseMove={() => {
+              handleStageMouseMove();
+              handleStageMouseMoveDraw();
+            }}
+            onMouseUp={() => {
+              handleStageMouseUp();
+              handleStageMouseUpDraw();
+            }}
+            onTouchStart={(e) => {
+              handleStageMouseDown(e);
+              handleStageMouseDownDraw(e);
+            }}
+            onTouchMove={() => {
+              handleStageMouseMove();
+              handleStageMouseMoveDraw();
+            }}
+            onTouchEnd={() => {
+              handleStageMouseUp();
+              handleStageMouseUpDraw();
             }}
           >
-            <img
-              src={src}
-              alt={alt}
-              width={naturalDims.w}
-              height={naturalDims.h}
-              className="block max-w-none select-none"
-              draggable={false}
-            />
+            {/* Image layer */}
+            <Layer listening={false}>
+              <KonvaImage
+                image={imageEl}
+                width={imageSize.width}
+                height={imageSize.height}
+              />
+            </Layer>
 
-            {!editorSlot && (
-              <svg
-                width={naturalDims.w}
-                height={naturalDims.h}
-                viewBox={`0 0 ${naturalDims.w} ${naturalDims.h}`}
-                preserveAspectRatio="none"
-                className="absolute inset-0 pointer-events-none"
-              >
-                <defs>
-                  <mask id={`${maskId}-base`}>
-                    <rect
-                      x={0}
-                      y={0}
-                      width={naturalDims.w}
-                      height={naturalDims.h}
-                      fill="white"
-                    />
-                    {annotations.map((a, i) => (
-                      <rect
-                        key={`mbase-${i}`}
-                        x={a.bbox[0]}
-                        y={a.bbox[1]}
-                        width={a.bbox[2] - a.bbox[0]}
-                        height={a.bbox[3] - a.bbox[1]}
+            {/* Dim layer — one rect covering the image with holes punched out
+                over every visible box via destination-out. */}
+            {showDim && (
+              <Layer listening={false}>
+                <Group>
+                  <Rect
+                    x={0}
+                    y={0}
+                    width={imageSize.width}
+                    height={imageSize.height}
+                    fill="black"
+                    opacity={DIM_OPACITY_BASE}
+                  />
+                  {visibleBoxesWithIdx.map(({ box, index }) => {
+                    const [x1, y1, x2, y2] = box.bbox;
+                    return (
+                      <Rect
+                        key={`dim-${index}`}
+                        x={x1}
+                        y={y1}
+                        width={Math.max(0, x2 - x1)}
+                        height={Math.max(0, y2 - y1)}
                         fill="black"
+                        globalCompositeOperation="destination-out"
                       />
-                    ))}
-                  </mask>
-                  <mask id={`${maskId}-hover`}>
-                    <rect
+                    );
+                  })}
+                </Group>
+                {hovered && (
+                  <Group>
+                    <Rect
                       x={0}
                       y={0}
-                      width={naturalDims.w}
-                      height={naturalDims.h}
-                      fill="white"
-                    />
-                    {hovered && (
-                      <rect
-                        x={hovered.bbox[0]}
-                        y={hovered.bbox[1]}
-                        width={hovered.bbox[2] - hovered.bbox[0]}
-                        height={hovered.bbox[3] - hovered.bbox[1]}
-                        fill="black"
-                      />
-                    )}
-                  </mask>
-                </defs>
-
-                {dimEnabled && (
-                  <>
-                    <rect
-                      x={0}
-                      y={0}
-                      width={naturalDims.w}
-                      height={naturalDims.h}
+                      width={imageSize.width}
+                      height={imageSize.height}
                       fill="black"
-                      opacity={DIM_OPACITY_BASE}
-                      mask={`url(#${maskId}-base)`}
-                      pointerEvents="none"
+                      opacity={DIM_OPACITY_HOVER}
                     />
-
-                    {hovered && (
-                      <rect
-                        x={0}
-                        y={0}
-                        width={naturalDims.w}
-                        height={naturalDims.h}
-                        fill="black"
-                        opacity={DIM_OPACITY_HOVER - DIM_OPACITY_BASE}
-                        mask={`url(#${maskId}-hover)`}
-                        pointerEvents="none"
-                      />
-                    )}
-                  </>
+                    <Rect
+                      x={hovered.bbox[0]}
+                      y={hovered.bbox[1]}
+                      width={Math.max(0, hovered.bbox[2] - hovered.bbox[0])}
+                      height={Math.max(0, hovered.bbox[3] - hovered.bbox[1])}
+                      fill="black"
+                      globalCompositeOperation="destination-out"
+                    />
+                  </Group>
                 )}
-
-                {annotations.map((a, i) => {
-                  const [x1, y1, x2, y2] = a.bbox;
-                  const w = Math.max(0, x2 - x1);
-                  const h = Math.max(0, y2 - y1);
-                  const isHovered = hoveredIdx === i;
-                  const stroke = a.origin === "user" ? "#f59e0b" : BOX_STROKE;
-
-                  return (
-                    <rect
-                      key={`${i}-${x1}-${y1}`}
-                      x={x1}
-                      y={y1}
-                      width={w}
-                      height={h}
-                      fill="transparent"
-                      stroke={stroke}
-                      strokeWidth={
-                        (isHovered ? BOX_STROKE_WIDTH * 2 : BOX_STROKE_WIDTH) /
-                        Math.max(transform.scale, 0.001)
-                      }
-                      vectorEffect="non-scaling-stroke"
-                      style={{ pointerEvents: "all", cursor: "pointer" }}
-                      onMouseEnter={() => setHoveredIdx(i)}
-                      onMouseLeave={() =>
-                        setHoveredIdx((prev) => (prev === i ? null : prev))
-                      }
-                    >
-                      <title>{`${a.label} · ${(a.confidence * 100).toFixed(1)}%`}</title>
-                    </rect>
-                  );
-                })}
-              </svg>
+              </Layer>
             )}
 
-            {editorSlot?.({ scale: transform.scale })}
-          </div>
+            {/* Draw-mode crosshair */}
+            {editing && mode === "draw" && cursor && (
+              <Layer listening={false}>
+                <Line
+                  points={[0, cursor.y, imageSize.width, cursor.y]}
+                  stroke="white"
+                  strokeWidth={1}
+                  strokeScaleEnabled={false}
+                  dash={[6, 4]}
+                  opacity={0.8}
+                />
+                <Line
+                  points={[cursor.x, 0, cursor.x, imageSize.height]}
+                  stroke="white"
+                  strokeWidth={1}
+                  strokeScaleEnabled={false}
+                  dash={[6, 4]}
+                  opacity={0.8}
+                />
+              </Layer>
+            )}
+
+            {/* Boxes layer — interactive when editing, display-only otherwise */}
+            <Layer>
+              {visibleBoxesWithIdx.map(({ box, index }) => {
+                const [x1, y1, x2, y2] = box.bbox;
+                const w = Math.max(0, x2 - x1);
+                const h = Math.max(0, y2 - y1);
+                const isSelected = editing && selectedIndex === index;
+                const stroke = isSelected
+                  ? STROKE_SELECTED
+                  : box.origin === "user"
+                    ? STROKE_USER
+                    : STROKE_MODEL;
+                const isHover = hoverIdx === index;
+                const commonProps = {
+                  x: x1,
+                  y: y1,
+                  width: w,
+                  height: h,
+                  fill: isSelected ? FILL_SELECTED : "transparent",
+                  stroke,
+                  strokeWidth: isHover || isSelected ? 2 : 1,
+                  strokeScaleEnabled: false,
+                  // Konva perf flags — skip extra drawing passes we don't need.
+                  perfectDrawEnabled: false,
+                  shadowForStrokeEnabled: false,
+                };
+                if (editing && mode === "drag") {
+                  return (
+                    <Rect
+                      key={`box-${index}`}
+                      ref={isSelected ? selectedRectRef : undefined}
+                      {...commonProps}
+                      draggable
+                      onMouseEnter={() => setHoverIdx(index)}
+                      onMouseLeave={() =>
+                        setHoverIdx((p) => (p === index ? null : p))
+                      }
+                      onClick={() => editor?.onSelect(index)}
+                      onTap={() => editor?.onSelect(index)}
+                      onDragStart={() => handleBoxDragStart(index)}
+                      onDragMove={(e) => handleBoxDragMove(index, e)}
+                      onDragEnd={(e) => handleBoxDragEnd(index, e)}
+                    />
+                  );
+                }
+                // View / draw mode: non-interactive hover detect (only in view).
+                return (
+                  <Rect
+                    key={`box-${index}`}
+                    {...commonProps}
+                    listening={!editing}
+                    onMouseEnter={() => !editing && setHoverIdx(index)}
+                    onMouseLeave={() =>
+                      !editing && setHoverIdx((p) => (p === index ? null : p))
+                    }
+                  />
+                );
+              })}
+
+              {/* Transformer — resize handles for the selected box */}
+              {editing && mode === "drag" && (
+                <Transformer
+                  ref={transformerRef}
+                  rotateEnabled={false}
+                  keepRatio={false}
+                  borderStroke={STROKE_SELECTED}
+                  anchorStroke={STROKE_SELECTED}
+                  anchorFill="white"
+                  anchorSize={HANDLE_PX}
+                  ignoreStroke
+                  flipEnabled={false}
+                  boundBoxFunc={(_oldBox, newBox) => {
+                    if (
+                      Math.abs(newBox.width) < MIN_BOX_SIZE ||
+                      Math.abs(newBox.height) < MIN_BOX_SIZE
+                    )
+                      return _oldBox;
+                    return newBox;
+                  }}
+                  onTransformStart={handleTransformStart}
+                  onTransform={handleTransform}
+                  onTransformEnd={handleTransformEnd}
+                />
+              )}
+
+              {/* Delete handle for selected box */}
+              {editing &&
+                mode === "drag" &&
+                selectedIndex !== null &&
+                renderBoxes[selectedIndex] && (
+                  <DeleteHandle
+                    groupRef={deleteHandleRef}
+                    x={renderBoxes[selectedIndex].bbox[0]}
+                    y={renderBoxes[selectedIndex].bbox[1]}
+                    size={handleSize * 1.6}
+                    onClick={handleDeleteSelected}
+                  />
+                )}
+
+              {/* Rubber-band while drawing */}
+              {editing && mode === "draw" && rubberBand && (() => {
+                const [rx1, ry1, rx2, ry2] = normalizeBox(
+                  rubberBand[0],
+                  rubberBand[1],
+                  rubberBand[2],
+                  rubberBand[3],
+                );
+                return (
+                  <Rect
+                    x={rx1}
+                    y={ry1}
+                    width={Math.max(0, rx2 - rx1)}
+                    height={Math.max(0, ry2 - ry1)}
+                    fill={FILL_SELECTED}
+                    stroke={STROKE_SELECTED}
+                    strokeWidth={1.5}
+                    strokeScaleEnabled={false}
+                    dash={[4, 3]}
+                    listening={false}
+                  />
+                );
+              })()}
+            </Layer>
+          </Stage>
         )}
       </div>
     </div>
+  );
+}
+
+// ── Delete handle (small red X on NW corner of selected box) ──────────────
+// The Group is positioned at the box's top-left (x, y) and children are laid
+// out at negative offsets so the icon floats just outside the box. Because
+// the group carries the position, callers can move the icon imperatively by
+// setting `group.position({x, y})` — used to track the rect during Konva drag.
+
+interface DeleteHandleProps {
+  x: number;
+  y: number;
+  size: number;
+  onClick: () => void;
+  groupRef?: React.Ref<Konva.Group>;
+}
+
+function DeleteHandle({ x, y, size, onClick, groupRef }: DeleteHandleProps) {
+  const r = size / 2;
+  // Children are positioned relative to the group origin (= box top-left).
+  const cx = -r * 0.6;
+  const cy = -r * 0.6;
+  return (
+    <Group
+      ref={groupRef}
+      x={x}
+      y={y}
+      onClick={(e) => {
+        e.cancelBubble = true;
+        onClick();
+      }}
+      onTap={(e) => {
+        e.cancelBubble = true;
+        onClick();
+      }}
+    >
+      <Circle
+        x={cx}
+        y={cy}
+        radius={r}
+        fill="#ef4444"
+        stroke="white"
+        strokeWidth={Math.max(1, r * 0.18)}
+        strokeScaleEnabled={false}
+      />
+      <Line
+        points={[cx - r * 0.4, cy - r * 0.4, cx + r * 0.4, cy + r * 0.4]}
+        stroke="white"
+        strokeWidth={Math.max(1, r * 0.22)}
+        strokeScaleEnabled={false}
+        lineCap="round"
+      />
+      <Line
+        points={[cx + r * 0.4, cy - r * 0.4, cx - r * 0.4, cy + r * 0.4]}
+        stroke="white"
+        strokeWidth={Math.max(1, r * 0.22)}
+        strokeScaleEnabled={false}
+        lineCap="round"
+      />
+    </Group>
   );
 }

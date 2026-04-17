@@ -1,6 +1,5 @@
 import type { BBox, DetectionResult } from "@/types/api";
 
-import { AnnotationEditor } from "./AnnotationEditor";
 import { OverlayImage } from "./OverlayImage";
 import { ResultViewerEditToolbar } from "./ResultViewerEditToolbar";
 import { StatBoard } from "./StatBoard";
@@ -13,8 +12,6 @@ interface ResultViewerContentProps {
   ctrlHeld: boolean;
   editMode: boolean;
   editorTool: "drag" | "draw";
-  imgW: number;
-  imgH: number;
   modelBoxes: BBox[];
   processingConfig: Record<string, unknown> | null;
   redoAvailable: boolean;
@@ -45,8 +42,6 @@ export function ResultViewerContent({
   ctrlHeld,
   editMode,
   editorTool,
-  imgW,
-  imgH,
   modelBoxes,
   processingConfig,
   redoAvailable,
@@ -72,30 +67,27 @@ export function ResultViewerContent({
     <div className="flex flex-1 overflow-hidden">
       <div className="relative flex-1 overflow-hidden border-r">
         <OverlayImage
+          key={
+            editMode && currentImageRecordId
+              ? `edit-${currentImageRecordId}-${currentIndex}`
+              : `view-${currentIndex}`
+          }
           src={rawSrc}
           alt={currentResult.filename}
-          annotations={viewBoxes}
+          annotations={editMode && currentImageRecordId ? sessionBoxes : viewBoxes}
           saveInProgress={savingEdits}
-          panDisabled={editMode && editorTool === "draw"}
-          dimEnabled={!editMode && !ctrlHeld}
+          dimEnabled={!ctrlHeld}
           onBackgroundClick={onBackgroundClick}
           onDimensions={onDimensions}
-          editorSlot={
+          editor={
             editMode && currentImageRecordId
-              ? ({ scale }) => (
-                  <AnnotationEditor
-                    key={`${currentImageRecordId}-${currentIndex}`}
-                    annotations={sessionBoxes}
-                    width={imgW}
-                    height={imgH}
-                    selectedIndex={selectedIdx}
-                    confidenceThreshold={confidenceThreshold}
-                    scale={scale}
-                    onSelect={onSelect}
-                    onCommit={onCommit}
-                    mode={editorTool}
-                  />
-                )
+              ? {
+                  mode: editorTool,
+                  selectedIndex: selectedIdx,
+                  confidenceThreshold,
+                  onSelect,
+                  onCommit,
+                }
               : undefined
           }
         />

@@ -60,8 +60,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [batchSummary] = useState(() => loadBatchSummary());
   const [loading, setLoading] = useState(true);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0);
-  const [imgW, setImgW] = useState(0);
-  const [imgH, setImgH] = useState(0);
 
   // ── Editor state (FS-009) ─────────────────────────────────────────────────
   const editMode = true;
@@ -415,9 +413,8 @@ export function ResultViewer({ className }: ResultViewerProps) {
       .catch(() => toast.error("Failed to download overlay image"));
   }, [currentResult, overlayDownloadSrc]);
 
-  const handleImageDimensions = useCallback((width: number, height: number) => {
-    setImgW(width);
-    setImgH(height);
+  const handleImageDimensions = useCallback(() => {
+    // Image dimensions are tracked internally by OverlayImage (Konva).
   }, []);
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -473,8 +470,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
         ctrlHeld={ctrlHeld}
         editMode={editMode}
         editorTool={editorTool}
-        imgW={imgW}
-        imgH={imgH}
         modelBoxes={modelBoxes}
         processingConfig={processingConfig}
         redoAvailable={redoAvailable}
