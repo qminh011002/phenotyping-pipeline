@@ -19,6 +19,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useTheme } from "@/hooks/useTheme";
+import { ProcessingIndicator } from "./ProcessingIndicator";
 
 const NAV_ITEMS = [
   { to: "/", icon: Home, label: "Home" },
@@ -103,6 +104,11 @@ export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) 
           </NavLink>
         ))}
       </nav>
+
+      {/* Global processing indicator */}
+      <div className="px-2 pb-2">
+        <ProcessingIndicator collapsed={collapsed} />
+      </div>
 
       <Separator />
 

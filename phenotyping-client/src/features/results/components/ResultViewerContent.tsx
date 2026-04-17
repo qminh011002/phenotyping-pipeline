@@ -1,0 +1,131 @@
+import type { BBox, DetectionResult } from "@/types/api";
+
+import { AnnotationEditor } from "./AnnotationEditor";
+import { OverlayImage } from "./OverlayImage";
+import { ResultViewerEditToolbar } from "./ResultViewerEditToolbar";
+import { StatBoard } from "./StatBoard";
+
+interface ResultViewerContentProps {
+  currentImageRecordId: string | null;
+  currentIndex: number;
+  currentResult: DetectionResult;
+  confidenceThreshold: number;
+  ctrlHeld: boolean;
+  editMode: boolean;
+  editorTool: "drag" | "draw";
+  imgW: number;
+  imgH: number;
+  modelBoxes: BBox[];
+  processingConfig: Record<string, unknown> | null;
+  redoAvailable: boolean;
+  savingEdits: boolean;
+  selectedIdx: number | null;
+  sessionBoxes: BBox[];
+  rawSrc: string;
+  undoAvailable: boolean;
+  viewBoxes: BBox[];
+  visibleAnnotations: BBox[];
+  onBackgroundClick: (() => void) | undefined;
+  onDimensions: (width: number, height: number) => void;
+  onSelect: (index: number | null) => void;
+  onCommit: (boxes: BBox[]) => void;
+  onConfidenceChange: (value: number) => void;
+  onOpenResetDialog: () => void;
+  onRedo: () => void;
+  onSelectDragTool: () => void;
+  onToggleDrawTool: () => void;
+  onUndo: () => void;
+}
+
+export function ResultViewerContent({
+  currentImageRecordId,
+  currentIndex,
+  currentResult,
+  confidenceThreshold,
+  ctrlHeld,
+  editMode,
+  editorTool,
+  imgW,
+  imgH,
+  modelBoxes,
+  processingConfig,
+  redoAvailable,
+  savingEdits,
+  selectedIdx,
+  sessionBoxes,
+  rawSrc,
+  undoAvailable,
+  viewBoxes,
+  visibleAnnotations,
+  onBackgroundClick,
+  onDimensions,
+  onSelect,
+  onCommit,
+  onConfidenceChange,
+  onOpenResetDialog,
+  onRedo,
+  onSelectDragTool,
+  onToggleDrawTool,
+  onUndo,
+}: ResultViewerContentProps) {
+  return (
+    <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden border-r">
+        <OverlayImage
+          src={rawSrc}
+          alt={currentResult.filename}
+          annotations={viewBoxes}
+          saveInProgress={savingEdits}
+          panDisabled={editMode && editorTool === "draw"}
+          dimEnabled={!editMode && !ctrlHeld}
+          onBackgroundClick={onBackgroundClick}
+          onDimensions={onDimensions}
+          editorSlot={
+            editMode && currentImageRecordId
+              ? ({ scale }) => (
+                  <AnnotationEditor
+                    key={`${currentImageRecordId}-${currentIndex}`}
+                    annotations={sessionBoxes}
+                    width={imgW}
+                    height={imgH}
+                    selectedIndex={selectedIdx}
+                    confidenceThreshold={confidenceThreshold}
+                    scale={scale}
+                    onSelect={onSelect}
+                    onCommit={onCommit}
+                    mode={editorTool}
+                  />
+                )
+              : undefined
+          }
+        />
+
+        {editMode && currentImageRecordId && (
+          <ResultViewerEditToolbar
+            editorTool={editorTool}
+            redoAvailable={redoAvailable}
+            undoAvailable={undoAvailable}
+            onOpenResetDialog={onOpenResetDialog}
+            onRedo={onRedo}
+            onSelectDragTool={onSelectDragTool}
+            onToggleDrawTool={onToggleDrawTool}
+            onUndo={onUndo}
+          />
+        )}
+      </div>
+
+      <aside className="w-80 shrink-0 overflow-hidden bg-card">
+        <StatBoard
+          result={currentResult}
+          config={processingConfig}
+          visibleAnnotations={visibleAnnotations}
+          confidenceThreshold={confidenceThreshold}
+          onConfidenceChange={onConfidenceChange}
+          editMode={editMode}
+          modelBoxes={modelBoxes}
+          sessionBoxes={sessionBoxes}
+        />
+      </aside>
+    </div>
+  );
+}

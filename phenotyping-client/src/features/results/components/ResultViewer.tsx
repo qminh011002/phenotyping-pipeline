@@ -12,32 +12,38 @@
 // - D toggles draw mode; Escape cancels/deselects.
 // - Save edits persists to DB; Reset-to-model clears with confirmation.
 
-import { useState, useEffect, useCallback, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download, ArrowLeft, Save, Pencil, PencilOff, RotateCcw, Undo2, Redo2, Plus, Eye, Hand } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Download } from "lucide-react";
+
 import { EmptyState } from "@/components/common/EmptyState";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { OverlayImage } from "./OverlayImage";
-import { AnnotationEditor } from "./AnnotationEditor";
-import { StatBoard } from "./StatBoard";
-import { ResultNavigation } from "./ResultNavigation";
+
 import type { BBox, DetectionResult } from "@/types/api";
 import {
-  loadProcessingResults,
-  loadProcessingFiles,
   loadBatchSummary,
   loadBatchDetail,
+  loadProcessingFiles,
   loadProcessingConfig,
+  loadProcessingResults,
   storeBatchDetail,
 } from "@/features/upload/lib/processingSession";
-import { getAnalysesOverlayUrl, getAnalysesRawUrl, getAnalysisDetail, putEditedAnnotations, renameBatch, resetEditedAnnotations } from "@/services/api";
-import { InlineEditableText } from "@/components/common/InlineEditableText";
+import {
+  getAnalysesOverlayUrl,
+  getAnalysesRawUrl,
+  getAnalysisDetail,
+  putEditedAnnotations,
+  renameBatch,
+  resetEditedAnnotations,
+} from "@/services/api";
 import { cn } from "@/lib/utils";
-import { editorHistoryReducer, canUndo, canRedo } from "../lib/editorHistory";
+
 import { boxesEqual } from "../lib/bboxMath";
+import { canRedo, canUndo, editorHistoryReducer } from "../lib/editorHistory";
+
+import { ResultViewerContent } from "./ResultViewerContent";
+import { ResultViewerDialogs } from "./ResultViewerDialogs";
+import { ResultViewerHeader } from "./ResultViewerHeader";
 
 interface ResultViewerProps {
   className?: string;
@@ -58,7 +64,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [imgH, setImgH] = useState(0);
 
   // ── Editor state (FS-009) ─────────────────────────────────────────────────
-  const [editMode, setEditMode] = useState(false);
+  const editMode = true;
   /**
    * Active tool within edit mode.
    * - "drag": the unified Drag tool — click a box to select it, drag its body
@@ -80,6 +86,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [pendingNavIdx, setPendingNavIdx] = useState<number | null>(null);
   /** Ctrl/Cmd held — in non-edit mode this temporarily hides the dim overlay. */
   const [ctrlHeld, setCtrlHeld] = useState(false);
+  const previousImageIdRef = useRef<string | null>(null);
 
   // Load results, raw file URLs, and batch detail
   useEffect(() => {
@@ -133,10 +140,13 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
   // ── Sync session boxes when image changes ───────────────────────────────
   useEffect(() => {
+    const imageId = currentImageRecord?.id ?? null;
+    if (previousImageIdRef.current === imageId) return;
+    previousImageIdRef.current = imageId;
     setSelectedIdx(null);
     setEditorTool("drag");
     dispatchHistory({ type: "reset", boxes: baselineBoxes });
-  }, [currentIndex, baselineBoxes]);
+  }, [baselineBoxes, currentImageRecord?.id]);
 
   // ── isDirty ─────────────────────────────────────────────────────────────
   const isDirty = useMemo(
@@ -159,11 +169,17 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
   const confirmDirtyNav = useCallback(() => {
     setDirtyNavDialogOpen(false);
-    if (pendingNavIdx !== null) {
-      setCurrentIndex(pendingNavIdx);
+    if (pendingNavIdx === null) return;
+
+    if (pendingNavIdx === -1) {
       setPendingNavIdx(null);
+      navigate("/");
+      return;
     }
-  }, [pendingNavIdx]);
+
+    setCurrentIndex(pendingNavIdx);
+    setPendingNavIdx(null);
+  }, [navigate, pendingNavIdx]);
 
   const cancelDirtyNav = useCallback(() => {
     setDirtyNavDialogOpen(false);
@@ -173,21 +189,26 @@ export function ResultViewer({ className }: ResultViewerProps) {
   // ── Save edits ──────────────────────────────────────────────────────────
   const handleSaveEdits = useCallback(async () => {
     if (!batchDetail || !currentImageRecord || !isDirty) return;
+    const batchId = batchDetail.id;
+    const imageId = currentImageRecord.id;
+    const boxesToSave = sessionBoxes;
     setSavingEdits(true);
     try {
-      await putEditedAnnotations(batchDetail.id, currentImageRecord.id, sessionBoxes);
-      // Refresh batch detail from server
-      const updated = await getAnalysisDetail(batchDetail.id);
+      await putEditedAnnotations(batchId, imageId, boxesToSave);
+      const updated = await getAnalysisDetail(batchId);
       setBatchDetail(updated);
-      // Reset history to the new saved baseline — no undo past this point.
-      dispatchHistory({ type: "reset", boxes: sessionBoxes });
-      toast.success("Edits saved");
+      storeBatchDetail(updated);
     } catch {
-      toast.error("Failed to save edits");
+      toast.error("Failed to auto-save edits");
     } finally {
       setSavingEdits(false);
     }
   }, [batchDetail, currentImageRecord, isDirty, sessionBoxes]);
+
+  useEffect(() => {
+    if (!editMode || savingEdits || !isDirty) return;
+    void handleSaveEdits();
+  }, [editMode, handleSaveEdits, isDirty, savingEdits]);
 
   // ── Reset to model ──────────────────────────────────────────────────────
   const handleResetToModel = useCallback(async () => {
@@ -197,6 +218,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
       await resetEditedAnnotations(batchDetail.id, currentImageRecord.id);
       const updated = await getAnalysisDetail(batchDetail.id);
       setBatchDetail(updated);
+      storeBatchDetail(updated);
       dispatchHistory({ type: "reset", boxes: modelBoxes });
       setSelectedIdx(null);
       toast.success("Reset to model output");
@@ -293,17 +315,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [editMode, selectedIdx, sessionBoxes, editorTool, isDirty, savingEdits, handleSaveEdits]);
 
-  // ── Enter/exit edit mode ────────────────────────────────────────────────
-  const handleToggleEdit = useCallback(() => {
-    if (editMode && isDirty) {
-      toast.warning("Save or discard your edits before exiting edit mode");
-      return;
-    }
-    setEditMode((v) => !v);
-    setEditorTool("drag");
-    setSelectedIdx(null);
-  }, [editMode, isDirty]);
-
   // ── Overlay download URL ─────────────────────────────────────────────────
   const overlayDownloadSrc = useMemo(() => {
     if (!currentResult || !batchDetail) return "";
@@ -334,6 +345,81 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const undoAvailable = canUndo(history);
   const redoAvailable = canRedo(history);
 
+  const handleBack = useCallback(() => {
+    if (isDirty) {
+      setPendingNavIdx(-1);
+      setDirtyNavDialogOpen(true);
+      return;
+    }
+
+    navigate("/");
+  }, [isDirty, navigate]);
+
+  const handleRenameBatch = useCallback(
+    async (next: string) => {
+      if (!batchDetail) return;
+
+      const updated = await renameBatch(batchDetail.id, next);
+      const nextDetail = { ...batchDetail, name: updated.name };
+      setBatchDetail(nextDetail);
+      storeBatchDetail(nextDetail);
+    },
+    [batchDetail],
+  );
+
+  const handleSelectDragTool = useCallback(() => {
+    setEditorTool("drag");
+  }, []);
+
+  const handleToggleDrawTool = useCallback(() => {
+    setEditorTool((tool) => (tool === "draw" ? "drag" : "draw"));
+    setSelectedIdx(null);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    dispatchHistory({ type: "undo" });
+    setSelectedIdx(null);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    dispatchHistory({ type: "redo" });
+    setSelectedIdx(null);
+  }, []);
+
+  const handleSaveToRecords = useCallback(() => {
+    const detail = loadBatchDetail();
+    if (detail) {
+      navigate(`/recorded?batch=${detail.id}`);
+      return;
+    }
+
+    navigate("/recorded");
+  }, [navigate]);
+
+  const handleDownload = useCallback(() => {
+    if (!currentResult || !overlayDownloadSrc) return;
+
+    fetch(overlayDownloadSrc)
+      .then((response) => response.blob())
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${currentResult.filename.replace(/\.[^.]+$/, "")}_overlay.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast.success("Download started");
+      })
+      .catch(() => toast.error("Failed to download overlay image"));
+  }, [currentResult, overlayDownloadSrc]);
+
+  const handleImageDimensions = useCallback((width: number, height: number) => {
+    setImgW(width);
+    setImgH(height);
+  }, []);
+
   // ── Render ──────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -361,346 +447,70 @@ export function ResultViewer({ className }: ResultViewerProps) {
     );
   }
 
-  const isBatch = results.length > 1;
-
   return (
     <div className={cn("flex h-full flex-col", className)}>
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between border-b px-6 py-3">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              if (isDirty) {
-                setPendingNavIdx(-1); // -1 signals "back"
-                setDirtyNavDialogOpen(true);
-              } else {
-                navigate("/");
-              }
-            }}
-            title="Back to home"
-            className="h-8 w-8"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
+      <ResultViewerHeader
+        batchDetail={batchDetail}
+        batchSummary={batchSummary}
+        currentIndex={currentIndex}
+        currentResult={currentResult}
+        results={results}
+        canEdit={Boolean(batchDetail && currentImageRecord)}
+        editMode={editMode}
+        isDirty={isDirty}
+        onBack={handleBack}
+        onNavigate={handleNavigate}
+        onRename={handleRenameBatch}
+        onSaveToRecords={handleSaveToRecords}
+        onDownload={handleDownload}
+      />
 
-          {/* Batch name — inline editable; available the moment processing finishes. */}
-          {batchDetail && (
-            <h1 className="text-lg font-semibold">
-              <InlineEditableText
-                value={batchDetail.name}
-                onSave={async (next) => {
-                  const updated = await renameBatch(batchDetail.id, next);
-                  const nextDetail = { ...batchDetail, name: updated.name };
-                  setBatchDetail(nextDetail);
-                  storeBatchDetail(nextDetail);
-                }}
-                ariaLabel="Rename batch"
-              />
-            </h1>
-          )}
+      <ResultViewerContent
+        currentImageRecordId={currentImageRecord?.id ?? null}
+        currentIndex={currentIndex}
+        currentResult={currentResult}
+        confidenceThreshold={confidenceThreshold}
+        ctrlHeld={ctrlHeld}
+        editMode={editMode}
+        editorTool={editorTool}
+        imgW={imgW}
+        imgH={imgH}
+        modelBoxes={modelBoxes}
+        processingConfig={processingConfig}
+        redoAvailable={redoAvailable}
+        savingEdits={savingEdits}
+        selectedIdx={selectedIdx}
+        sessionBoxes={sessionBoxes}
+        rawSrc={rawSrc}
+        undoAvailable={undoAvailable}
+        viewBoxes={viewBoxes}
+        visibleAnnotations={visibleAnnotations}
+        onBackgroundClick={
+          editMode && editorTool === "drag"
+            ? () => setSelectedIdx(null)
+            : undefined
+        }
+        onDimensions={handleImageDimensions}
+        onSelect={setSelectedIdx}
+        onCommit={handleEditorCommit}
+        onConfidenceChange={setConfidenceThreshold}
+        onOpenResetDialog={() => setResetDialogOpen(true)}
+        onRedo={handleRedo}
+        onSelectDragTool={handleSelectDragTool}
+        onToggleDrawTool={handleToggleDrawTool}
+        onUndo={handleUndo}
+      />
 
-          {isBatch && (
-            <>
-              <ResultNavigation
-                results={results}
-                currentIndex={currentIndex}
-                onNavigate={handleNavigate}
-              />
-              {batchSummary && (
-                <span className="ml-4 text-sm text-muted-foreground">
-                  <span className="font-mono font-semibold text-foreground">
-                    {batchSummary.total_count}
-                  </span>{" "}
-                  eggs ·{" "}
-                  <span className="font-mono">
-                    {batchSummary.total_elapsed_seconds.toFixed(1)}s
-                  </span>
-                </span>
-              )}
-            </>
-          )}
-
-          {!isBatch && !batchDetail && (
-            <h1 className="text-lg font-semibold">{currentResult.filename}</h1>
-          )}
-
-          {/* Mode badge — single source of truth for what the user is doing */}
-          {batchDetail && currentImageRecord && (
-            editMode ? (
-              <Badge
-                variant="default"
-                className="ml-2 gap-1 bg-blue-600 hover:bg-blue-600/90"
-              >
-                <Pencil className="h-3 w-3" />
-                {editorTool === "draw" ? "Drawing" : "Editing"}
-                {isDirty && <span className="ml-0.5">•</span>}
-              </Badge>
-            ) : (
-              <Badge variant="secondary" className="ml-2 gap-1">
-                <Eye className="h-3 w-3" />
-                View
-              </Badge>
-            )
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* ── Editor toolbar (visible when batchDetail exists) ── */}
-          {batchDetail && currentImageRecord && (
-            <>
-              {!editMode ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleToggleEdit}
-                  className="gap-2"
-                >
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                </Button>
-              ) : (
-                <div className="flex items-center gap-1 rounded-md border bg-card px-2 py-1">
-                  {/* Drag tool — select, move, resize boxes; drag empty area
-                      to pan; click empty area to deselect. */}
-                  <Button
-                    variant={editorTool === "drag" ? "default" : "ghost"}
-                    size="icon"
-                    title="Drag tool — select, move & resize boxes; drag background to pan"
-                    className="h-7 w-7"
-                    onClick={() => setEditorTool("drag")}
-                  >
-                    <Hand className="h-4 w-4" />
-                  </Button>
-
-                  {/* Draw mode toggle */}
-                  <Button
-                    variant={editorTool === "draw" ? "default" : "ghost"}
-                    size="icon"
-                    title={editorTool === "draw" ? "Cancel draw (D)" : "Draw new box (D)"}
-                    className="h-7 w-7"
-                    onClick={() => {
-                      setEditorTool((t) => (t === "draw" ? "drag" : "draw"));
-                      setSelectedIdx(null);
-                    }}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-
-                  <div className="mx-1 h-5 w-px bg-border" />
-
-                  {/* Undo */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Undo (Ctrl+Z)"
-                    className="h-7 w-7"
-                    disabled={!undoAvailable}
-                    onClick={() => { dispatchHistory({ type: "undo" }); setSelectedIdx(null); }}
-                  >
-                    <Undo2 className="h-4 w-4" />
-                  </Button>
-
-                  {/* Redo */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Redo (Ctrl+Shift+Z)"
-                    className="h-7 w-7"
-                    disabled={!redoAvailable}
-                    onClick={() => { dispatchHistory({ type: "redo" }); setSelectedIdx(null); }}
-                  >
-                    <Redo2 className="h-4 w-4" />
-                  </Button>
-
-                  <div className="mx-1 h-5 w-px bg-border" />
-
-                  {/* Reset to model */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Reset to model output"
-                    className="h-7 w-7"
-                    onClick={() => setResetDialogOpen(true)}
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                  </Button>
-
-                  <div className="mx-1 h-5 w-px bg-border" />
-
-                  {/* Exit edit mode */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Exit edit mode"
-                    className="h-7 w-7"
-                    onClick={handleToggleEdit}
-                  >
-                    <PencilOff className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-
-              {/* Save edits button */}
-              {editMode && (
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={handleSaveEdits}
-                  disabled={!isDirty || savingEdits}
-                  className="gap-2"
-                >
-                  <Save className="h-4 w-4" />
-                  {savingEdits ? "Saving…" : "Save edits"}
-                  {isDirty && <span className="text-xs opacity-80">•</span>}
-                </Button>
-              )}
-            </>
-          )}
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const detail = loadBatchDetail();
-              if (detail) navigate(`/recorded?batch=${detail.id}`);
-              else navigate("/recorded");
-            }}
-            className="gap-2"
-          >
-            <Save className="h-4 w-4" />
-            Save to Records
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (!currentResult || !overlayDownloadSrc) return;
-              fetch(overlayDownloadSrc)
-                .then((r) => r.blob())
-                .then((blob) => {
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${currentResult.filename.replace(/\.[^.]+$/, "")}_overlay.png`;
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                  URL.revokeObjectURL(url);
-                  toast.success("Download started");
-                })
-                .catch(() => toast.error("Failed to download overlay image"));
-            }}
-            className="gap-2"
-          >
-            <Download className="h-4 w-4" />
-            Download
-          </Button>
-        </div>
-      </header>
-
-      {/* ── Content ───────────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Image viewer — ~70% */}
-        <div className="flex-1 overflow-hidden border-r">
-          <OverlayImage
-            src={rawSrc}
-            alt={currentResult.filename}
-            annotations={viewBoxes}
-            panDisabled={editMode && editorTool === "draw"}
-            dimEnabled={!editMode && !ctrlHeld}
-            onBackgroundClick={
-              editMode && editorTool === "drag"
-                ? () => setSelectedIdx(null)
-                : undefined
-            }
-            onDimensions={(w, h) => { setImgW(w); setImgH(h); }}
-            editorSlot={
-              editMode && currentImageRecord
-                ? ({ scale }) => (
-                    <AnnotationEditor
-                      key={`${currentImageRecord.id}-${currentIndex}`}
-                      annotations={sessionBoxes}
-                      width={imgW}
-                      height={imgH}
-                      selectedIndex={selectedIdx}
-                      confidenceThreshold={confidenceThreshold}
-                      scale={scale}
-                      onSelect={setSelectedIdx}
-                      onCommit={handleEditorCommit}
-                      mode={editorTool}
-                    />
-                  )
-                : undefined
-            }
-          />
-        </div>
-
-        {/* Side panel — ~30% */}
-        <aside className="w-80 shrink-0 overflow-hidden bg-card">
-          <StatBoard
-            result={currentResult}
-            config={processingConfig}
-            visibleAnnotations={visibleAnnotations}
-            confidenceThreshold={confidenceThreshold}
-            onConfidenceChange={setConfidenceThreshold}
-            editMode={editMode}
-            modelBoxes={modelBoxes}
-            sessionBoxes={sessionBoxes}
-          />
-        </aside>
-      </div>
-
-      {/* ── Dialogs ────────────────────────────────────────────────────── */}
-
-      {/* Dirty navigation guard */}
-      <AlertDialog open={dirtyNavDialogOpen} onOpenChange={setDirtyNavDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved edits?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have unsaved annotation edits. Navigating away will discard them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={cancelDirtyNav}>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                confirmDirtyNav();
-                if (pendingNavIdx === -1) {
-                  navigate("/");
-                }
-              }}
-            >
-              Discard edits
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Reset to model confirmation */}
-      <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reset to model output?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will discard all annotation edits and restore the original model detections.
-              This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setResetDialogOpen(false)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleResetToModel}
-            >
-              Reset to model
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ResultViewerDialogs
+        dirtyNavDialogOpen={dirtyNavDialogOpen}
+        resetDialogOpen={resetDialogOpen}
+        onDirtyNavOpenChange={setDirtyNavDialogOpen}
+        onResetDialogOpenChange={setResetDialogOpen}
+        onKeepEditing={cancelDirtyNav}
+        onDiscardEdits={confirmDirtyNav}
+        onCancelReset={() => setResetDialogOpen(false)}
+        onConfirmReset={handleResetToModel}
+      />
     </div>
   );
 }

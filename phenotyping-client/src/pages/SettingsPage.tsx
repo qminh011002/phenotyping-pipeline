@@ -7,7 +7,6 @@ import { DeviceSection } from "@/features/settings/components/DeviceSection";
 import { StorageSection } from "@/features/settings/components/StorageSection";
 import { ModelsSection } from "@/features/settings/components/ModelsSection";
 import { LogViewer } from "@/features/logs/components/LogViewer";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 
 export default function SettingsPage() {
@@ -18,7 +17,7 @@ export default function SettingsPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-2xl space-y-6">
+        <div className="w-full max-w-5xl space-y-6">
           <ThemeSection />
           <Separator />
           <ConnectionSection />
@@ -29,19 +28,17 @@ export default function SettingsPage() {
           <Separator />
           <ModelsSection />
           <Separator />
-          <Card>
-            <CardHeader>
-              <CardTitle>Log Viewer</CardTitle>
-              <CardDescription>
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold">Log Viewer</h2>
+              <p className="text-sm text-muted-foreground">
                 Live stream of backend logs. Auto-scrolls to the latest entry when enabled.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="h-96 border rounded-md overflow-hidden">
-                <LogViewer />
-              </div>
-            </CardContent>
-          </Card>
+              </p>
+            </div>
+            <div className="h-96 overflow-hidden rounded-md border">
+              <LogViewer />
+            </div>
+          </section>
         </div>
       </div>
     </div>

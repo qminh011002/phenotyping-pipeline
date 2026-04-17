@@ -4,7 +4,6 @@ import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ProcessingToast } from "@/components/processing/ProcessingToast";
 import HomePage from "@/pages/HomePage";
 import AnalyzePage from "@/pages/AnalyzePage";
 import UploadPage from "@/pages/UploadPage";
@@ -18,7 +17,6 @@ function RootLayout() {
   return (
     <TooltipProvider delayDuration={300}>
       <Toaster />
-      <ProcessingToast />
       <Outlet />
     </TooltipProvider>
   );

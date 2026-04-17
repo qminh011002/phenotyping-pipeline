@@ -36,6 +36,11 @@ class AnalysisBatch(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    processed_image_count: Mapped[int] = mapped_column(default=0)
+    failed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     images: Mapped[list["AnalysisImage"]] = relationship(
         "AnalysisImage",

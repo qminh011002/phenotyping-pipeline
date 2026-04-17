@@ -95,6 +95,9 @@ export const AnnotationEditor = memo(function AnnotationEditor({
 }: AnnotationEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  // rAF-coalesce pointermove: repeated events in the same frame collapse to one.
+  const rafRef = useRef<number | null>(null);
+  const pendingMoveRef = useRef<{ clientX: number; clientY: number } | null>(null);
   /** Transient preview boxes during a drag; null = use props.annotations. */
   const [liveBoxes, setLiveBoxes] = useState<BBox[] | null>(null);
   const [rubberBand, setRubberBand] = useState<
@@ -116,6 +119,13 @@ export const AnnotationEditor = memo(function AnnotationEditor({
     dragRef.current = null;
   }, [annotations]);
 
+  // Cancel pending rAF on unmount.
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
   const toImage = useCallback(
     (e: { clientX: number; clientY: number }): { x: number; y: number } => {
       const svg = svgRef.current;
@@ -130,62 +140,14 @@ export const AnnotationEditor = memo(function AnnotationEditor({
     [confidenceThreshold],
   );
 
-  // ── Common pointer-up: applies to whatever drag is in flight ────────────
+  // Core move logic — runs inside rAF, takes raw clientX/Y.
+  const processMove = useCallback(
+    (clientX: number, clientY: number) => {
+      const pt = toImage({ clientX, clientY });
+      // Only update cursor state in draw mode (it drives the crosshair).
+      // Outside draw, this was a wasted render on every pointermove.
+      if (mode === "draw") setCursor(pt);
 
-  const finishDrag = useCallback(
-    (e: React.PointerEvent<SVGElement>) => {
-      const drag = dragRef.current;
-      if (!drag) return;
-      try {
-        if (drag.capturer.hasPointerCapture(drag.pointerId)) {
-          drag.capturer.releasePointerCapture(drag.pointerId);
-        }
-      } catch {
-        // capturer may have been unmounted — fine.
-      }
-      dragRef.current = null;
-      setRubberBand(null);
-      setDragging(false);
-
-      // Draw: commit only if the rubber-band reached min size
-      if (drag.kind === "draw") {
-        const { x, y } = toImage(e);
-        const [nx1, ny1, nx2, ny2] = normalizeBox(drag.startX, drag.startY, x, y);
-        const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
-        if (!enforced) return;
-        const clamped = clampBox(enforced, width, height);
-        const newBox: BBox = {
-          label: "neonate_egg",
-          bbox: clamped,
-          confidence: 1.0,
-          origin: "user",
-          edited_at: new Date().toISOString(),
-        };
-        const next = [...annotations, newBox];
-        onCommit(next);
-        onSelect(next.length - 1);
-        return;
-      }
-
-      // Resize: commit any change, even sub-pixel. Body: require actual drag
-      // so a click that selects doesn't push a no-op history entry.
-      if (drag.kind === "resize" && liveBoxes) {
-        onCommit(liveBoxes);
-      } else if (drag.kind === "body" && drag.moved && liveBoxes) {
-        onCommit(liveBoxes);
-      }
-      setLiveBoxes(null);
-    },
-    [annotations, height, liveBoxes, onCommit, onSelect, toImage, width],
-  );
-
-  // ── Common pointer-move: dispatches based on current drag kind ──────────
-
-  const onMoveDuringDrag = useCallback(
-    (e: React.PointerEvent<SVGElement>) => {
-      // Track cursor for the draw crosshair even when no drag is in flight.
-      const pt = toImage(e);
-      setCursor(pt);
       const drag = dragRef.current;
       if (!drag) return;
       const { x, y } = pt;
@@ -244,7 +206,89 @@ export const AnnotationEditor = memo(function AnnotationEditor({
         return;
       }
     },
-    [height, scale, toImage, width],
+    [height, mode, scale, toImage, width],
+  );
+
+  // Flush any pending rAF-coalesced move synchronously.
+  const flushPendingMove = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    const pending = pendingMoveRef.current;
+    if (pending) {
+      pendingMoveRef.current = null;
+      processMove(pending.clientX, pending.clientY);
+    }
+  }, [processMove]);
+
+  // ── Common pointer-up: applies to whatever drag is in flight ────────────
+
+  const finishDrag = useCallback(
+    (e: React.PointerEvent<SVGElement>) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      // Make sure the latest move position is applied before we read liveBoxes.
+      flushPendingMove();
+      try {
+        if (drag.capturer.hasPointerCapture(drag.pointerId)) {
+          drag.capturer.releasePointerCapture(drag.pointerId);
+        }
+      } catch {
+        // capturer may have been unmounted — fine.
+      }
+      dragRef.current = null;
+      setRubberBand(null);
+      setDragging(false);
+
+      // Draw: commit only if the rubber-band reached min size
+      if (drag.kind === "draw") {
+        const { x, y } = toImage(e);
+        const [nx1, ny1, nx2, ny2] = normalizeBox(drag.startX, drag.startY, x, y);
+        const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
+        if (!enforced) return;
+        const clamped = clampBox(enforced, width, height);
+        const newBox: BBox = {
+          label: "neonate_egg",
+          bbox: clamped,
+          confidence: 1.0,
+          origin: "user",
+          edited_at: new Date().toISOString(),
+        };
+        const next = [...annotations, newBox];
+        onCommit(next);
+        onSelect(next.length - 1);
+        return;
+      }
+
+      // Resize: commit any change, even sub-pixel. Body: require actual drag
+      // so a click that selects doesn't push a no-op history entry.
+      if (drag.kind === "resize" && liveBoxes) {
+        onCommit(liveBoxes);
+      } else if (drag.kind === "body" && drag.moved && liveBoxes) {
+        onCommit(liveBoxes);
+      }
+      setLiveBoxes(null);
+    },
+    [annotations, flushPendingMove, height, liveBoxes, onCommit, onSelect, toImage, width],
+  );
+
+  // ── Common pointer-move: rAF-coalesced dispatch ─────────────────────────
+
+  const onMoveDuringDrag = useCallback(
+    (e: React.PointerEvent<SVGElement>) => {
+      // Extract coords now — React synthetic events can be recycled after return.
+      pendingMoveRef.current = { clientX: e.clientX, clientY: e.clientY };
+      if (rafRef.current !== null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        const pending = pendingMoveRef.current;
+        if (!pending) return;
+        pendingMoveRef.current = null;
+        processMove(pending.clientX, pending.clientY);
+      });
+    },
+    [processMove],
   );
 
   // ── Per-element drag starters ───────────────────────────────────────────

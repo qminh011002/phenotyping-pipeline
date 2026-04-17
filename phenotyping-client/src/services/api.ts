@@ -5,6 +5,7 @@
 import { getBaseUrl } from "./http";
 import { http } from "./http";
 import type {
+  ActiveBatchResponse,
   AnalysisBatchDetail,
   AnalysisImageDetail,
   AnalysisListResponse,
@@ -17,6 +18,7 @@ import type {
   DashboardStats,
   DetectionResult,
   EggConfig,
+  FailBatchResponse,
   LogEntry,
   Organism,
   StorageSettingsResponse,
@@ -163,6 +165,16 @@ export async function addImageResult(
 /** POST /analyses/{batch_id}/complete — mark batch as completed */
 export async function completeBatch(batchId: string): Promise<AnalysisBatchDetail> {
   return http.post<AnalysisBatchDetail>(`analyses/${batchId}/complete`);
+}
+
+/** GET /analyses/active — get the currently-processing batch */
+export async function getActiveBatch(): Promise<ActiveBatchResponse> {
+  return http.get<ActiveBatchResponse>("analyses/active");
+}
+
+/** POST /analyses/{batch_id}/fail — mark a batch as failed */
+export async function failBatch(batchId: string, reason: string): Promise<FailBatchResponse> {
+  return http.post<FailBatchResponse>(`analyses/${batchId}/fail`, { reason });
 }
 
 /** GET /analyses — list batches with pagination and optional filters */

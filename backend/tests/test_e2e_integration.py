@@ -87,6 +87,10 @@ def _make_mock_analysis_batch(id=None, status="processing", organism_type="egg")
     mock.notes = None
     mock.config_snapshot = {}
     mock.created_at = datetime.now(timezone.utc)
+    mock.name = "Test Batch"
+    mock.processed_image_count = 0
+    mock.failed_at = None
+    mock.failure_reason = None
     # Prevent SQLAlchemy async relationship access from returning a coroutine.
     # Setting images=[] stops lazy-load attempts on the MagicMock.
     mock.images = []
@@ -99,6 +103,7 @@ def _make_analysis_batch_detail(batch):
 
     return AnalysisBatchDetail(
         id=batch.id,
+        name=batch.name,
         created_at=batch.created_at,
         completed_at=batch.completed_at,
         status=batch.status,
@@ -490,6 +495,7 @@ class TestSingleImageAnalysisJourney:
         # Configure the mock analysis service
         batch_id = uuid.uuid4()
         mock_batch = _make_mock_analysis_batch(id=batch_id, status="processing")
+        _mock_analysis_svc.has_active_batch = AsyncMock(return_value=None)
         _mock_analysis_svc.create_batch = AsyncMock(return_value=mock_batch)
         _mock_analysis_svc.get_batch_detail = AsyncMock(
             return_value=_make_analysis_batch_detail(mock_batch)
@@ -703,6 +709,7 @@ class TestRecordedPageJourney:
         mock_batch = _make_mock_analysis_batch(organism_type="egg")
         summary = AnalysisBatchSummary(
             id=mock_batch.id,
+            name=mock_batch.name,
             created_at=mock_batch.created_at,
             completed_at=mock_batch.completed_at,
             status=mock_batch.status,
@@ -713,8 +720,6 @@ class TestRecordedPageJourney:
             total_count=mock_batch.total_count,
             avg_confidence=mock_batch.avg_confidence,
             total_elapsed_secs=mock_batch.total_elapsed_secs,
-            config_snapshot=mock_batch.config_snapshot,
-            notes=mock_batch.notes,
         )
         _mock_analysis_svc.list_batches = AsyncMock(
             return_value=AnalysisListResponse(items=[summary], total=1, page=1, page_size=20)
@@ -818,6 +823,7 @@ class TestDashboardJourney:
         mock_batch = _make_mock_analysis_batch(organism_type="egg")
         summary = AnalysisBatchSummary(
             id=mock_batch.id,
+            name=mock_batch.name,
             created_at=mock_batch.created_at,
             completed_at=mock_batch.completed_at,
             status=mock_batch.status,
@@ -828,8 +834,6 @@ class TestDashboardJourney:
             total_count=100,
             avg_confidence=0.87,
             total_elapsed_secs=2.5,
-            config_snapshot={},
-            notes=None,
         )
         analysis_svc = get_analysis_service()
         analysis_svc.get_dashboard_stats = AsyncMock(

@@ -4,7 +4,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,19 +97,19 @@ export function StorageSection() {
   }, [originalPath]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <section className="space-y-4">
+      <div className="space-y-1">
+        <h2 className="flex items-center gap-2 text-base font-semibold">
           <HardDrive className="h-4 w-4" />
           Image Storage
-        </CardTitle>
-        <CardDescription>
+        </h2>
+        <p className="text-sm text-muted-foreground">
           Choose where processed overlay images are saved on your computer.
           Only the file path is stored in the database — images are never converted
           to base64 or stored as blobs.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </p>
+      </div>
+      <div className="space-y-4">
         {loading ? (
           <Skeleton className="h-10 w-full" />
         ) : (
@@ -171,7 +170,7 @@ export function StorageSection() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

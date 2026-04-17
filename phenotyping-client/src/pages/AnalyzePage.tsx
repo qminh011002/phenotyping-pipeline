@@ -10,6 +10,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload, Camera, Microscope, Sprout, Bug, Worm } from "lucide-react";
+import { useProcessingStore } from "@/stores/processingStore";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -90,6 +91,15 @@ export default function AnalyzePage() {
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedMode, setSelectedMode] = useState<Mode | null>(null);
   const [selectedOrganism, setSelectedOrganism] = useState<Organism | null>(null);
+
+  const isProcessing = useProcessingStore((s) => s.isProcessing);
+
+  // Redirect to processing page if a batch is currently running
+  useEffect(() => {
+    if (isProcessing) {
+      navigate("/analyze/processing", { replace: true });
+    }
+  }, [isProcessing, navigate]);
 
   // Reset when modal reopens (navigating back)
   useEffect(() => {

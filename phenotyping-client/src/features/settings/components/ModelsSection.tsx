@@ -11,13 +11,6 @@ import {
 import { toast } from "@/components/ui/sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   assignModel,
@@ -382,18 +375,18 @@ export function ModelsSection() {
   );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <section className="space-y-4">
+      <div className="space-y-1">
+        <h2 className="flex items-center gap-2 text-base font-semibold">
           <Cpu className="h-4 w-4" />
           Detection Models
-        </CardTitle>
-        <CardDescription>
+        </h2>
+        <p className="text-sm text-muted-foreground">
           Manage YOLO detection models (`.pt`) for all 4 configured modes. Each mode keeps
           its own model library and one active model selection.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </p>
+      </div>
+      <div className="space-y-4">
         {loading ? (
           <div className="space-y-4">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -419,7 +412,7 @@ export function ModelsSection() {
             />
           ))
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

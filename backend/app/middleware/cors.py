@@ -18,14 +18,10 @@ def get_cors_middleware() -> tuple[type[CORSMiddleware], dict]:
             "allow_origins": [
                 "tauri://localhost",
                 "http://localhost:1420",
+                "http://127.0.0.1:1420",
             ],
             "allow_credentials": False,
-            "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             "allow_headers": ["*"],
-            "allow_origins": [
-                "tauri://localhost",
-                "http://localhost:1420",
-            ],
-            "allow_credentials": False,
         },
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,12 +17,14 @@ from sqlalchemy.ext.asyncio import (
 )
 from app.db.base import Base
 
+BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
 
 class DatabaseSettings(BaseSettings):
     """Database connection settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BACKEND_ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="",
         extra="ignore",

@@ -2,7 +2,6 @@
 // Calls GET /health to verify connectivity and shows key health fields.
 
 import { useState, useCallback, useEffect } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,14 +77,14 @@ export function ConnectionSection() {
   const isConnected = status === "connected";
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Backend Connection</CardTitle>
-        <CardDescription>
+    <section className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold">Backend Connection</h2>
+        <p className="text-sm text-muted-foreground">
           Configure the backend server address and verify connectivity.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+        </p>
+      </div>
+      <div className="space-y-5">
         {/* URL editor row */}
         <div className="space-y-2">
           <Label htmlFor="backend-url">Backend URL</Label>
@@ -189,7 +188,7 @@ export function ConnectionSection() {
             )}
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

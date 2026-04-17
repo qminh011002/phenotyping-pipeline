@@ -2,7 +2,6 @@
 // Uses the useTheme() hook from the theme provider.
 
 import { useTheme } from "@/hooks/useTheme";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Moon, Sun } from "lucide-react";
@@ -12,12 +11,12 @@ export function ThemeSection() {
   const isDark = theme === "dark";
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Appearance</CardTitle>
-        <CardDescription>Customize how the app looks on your device.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex items-center justify-between">
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-base font-semibold">Appearance</h2>
+        <p className="text-sm text-muted-foreground">Customize how the app looks on your device.</p>
+      </div>
+      <div className="flex items-center justify-between rounded-md border px-4 py-3">
         <div className="flex items-center gap-3">
           {isDark ? (
             <Moon className="h-5 w-5 text-muted-foreground" />
@@ -38,7 +37,7 @@ export function ThemeSection() {
           checked={isDark}
           onCheckedChange={toggleTheme}
         />
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

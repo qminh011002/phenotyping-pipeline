@@ -109,6 +109,9 @@ export interface AnalysisBatchSummary {
   total_count: number | null;
   avg_confidence: number | null;
   total_elapsed_secs: number | null;
+  processed_image_count: number;
+  failed_at: string | null;
+  failure_reason: string | null;
 }
 
 export interface AnalysisBatchDetail extends AnalysisBatchSummary {
@@ -172,3 +175,21 @@ export interface AssignResultResponse {
 export type LogStreamMessage =
   | { type: "log"; data: LogEntry }
   | { type: "heartbeat"; data: null };
+
+// ── Active batch / fail batch ─────────────────────────────────────────────────
+
+export interface ActiveBatchResponse {
+  active: boolean;
+  batch: AnalysisBatchDetail | null;
+}
+
+export interface FailBatchRequest {
+  reason: string;
+}
+
+export interface FailBatchResponse {
+  id: string;
+  status: string;
+  failed_at: string | null;
+  failure_reason: string | null;
+}

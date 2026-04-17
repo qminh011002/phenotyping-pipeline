@@ -2,7 +2,6 @@
 // Reads the current device from GET /config and saves via PUT /config.
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -68,14 +67,14 @@ export function DeviceSection() {
   const isCpu = config?.device === "cpu";
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Inference Device</CardTitle>
-        <CardDescription>
+    <section className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold">Inference Device</h2>
+        <p className="text-sm text-muted-foreground">
           Choose whether to run the egg-detection model on CPU or an NVIDIA GPU (CUDA).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
+        </p>
+      </div>
+      <div className="space-y-5">
         {error !== null ? (
           <ErrorState
             message={error}
@@ -151,7 +150,7 @@ export function DeviceSection() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

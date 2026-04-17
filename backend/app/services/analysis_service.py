@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.schemas.analysis import (
+    ActiveBatchResponse,
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchSummary,
@@ -164,18 +165,18 @@ class AnalysisService:
         await db.flush()
         await db.refresh(image)
 
-        # For a 1-image batch that still carries the auto-generated placeholder
-        # name, upgrade the batch name to the file stem now that we know it.
+        # Increment processed_image_count and optionally upgrade auto-name
         batch_stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
         batch_row = (await db.execute(batch_stmt)).scalar_one_or_none()
-        if (
-            batch_row is not None
-            and batch_row.total_image_count == 1
-            and batch_row.name
-            and batch_row.name.startswith(_DEFAULT_NAME_PREFIX)
-        ):
-            stem = Path(result.filename).stem or result.filename
-            batch_row.name = stem[:200]
+        if batch_row is not None:
+            batch_row.processed_image_count = batch_row.processed_image_count + 1
+            if (
+                batch_row.total_image_count == 1
+                and batch_row.name
+                and batch_row.name.startswith(_DEFAULT_NAME_PREFIX)
+            ):
+                stem = Path(result.filename).stem or result.filename
+                batch_row.name = stem[:200]
             await db.flush()
 
         return image
@@ -254,14 +255,20 @@ class AnalysisService:
         batch_id: UUID,
         error: str,
         db: AsyncSession,
-    ) -> AnalysisBatch:
-        """Mark a batch as failed with an error message."""
+    ) -> AnalysisBatch | None:
+        """Mark a batch as failed. Returns None if batch not found or not in processing state."""
         stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
         result = await db.execute(stmt)
-        batch = result.scalar_one()
+        batch = result.scalar_one_or_none()
+        if batch is None:
+            return None
+        if batch.status != "processing":
+            return None
+        now = datetime.now(timezone.utc)
         batch.status = "failed"
-        batch.completed_at = datetime.now(timezone.utc)
-        batch.notes = f"Batch failed: {error}"
+        batch.failed_at = now
+        batch.failure_reason = error
+        batch.completed_at = now
         await db.flush()
         await db.refresh(batch)
         logger.warning(
@@ -274,6 +281,57 @@ class AnalysisService:
             },
         )
         return batch
+
+    # ── Active batch ────────────────────────────────────────────────────────────
+
+    async def get_active_batch(self, db: AsyncSession) -> ActiveBatchResponse:
+        """Return the currently-processing batch, if any.
+
+        Zombie cleanup: if the active batch is older than 24 hours, auto-mark
+        it as failed so it doesn't block new batches forever.
+        """
+        from datetime import timedelta
+
+        stmt = (
+            select(AnalysisBatch)
+            .options(selectinload(AnalysisBatch.images))
+            .where(AnalysisBatch.status == "processing")
+            .order_by(AnalysisBatch.created_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        batch = result.scalar_one_or_none()
+
+        if batch is None:
+            return ActiveBatchResponse(active=False, batch=None)
+
+        now = datetime.now(timezone.utc)
+        if now - batch.created_at > timedelta(hours=24):
+            batch.status = "failed"
+            batch.failed_at = now
+            batch.failure_reason = "Timed out — no progress for 24 hours"
+            batch.completed_at = now
+            await db.flush()
+            await db.refresh(batch)
+            logger.warning(
+                "Zombie batch auto-failed",
+                extra={"context": {"batch_id": str(batch.id)}},
+            )
+            return ActiveBatchResponse(active=False, batch=None)
+
+        detail = await self.get_batch_detail(batch_id=batch.id, db=db)
+        return ActiveBatchResponse(active=True, batch=detail)
+
+    async def has_active_batch(self, db: AsyncSession) -> AnalysisBatch | None:
+        """Return the active processing batch row (without images), or None."""
+        stmt = (
+            select(AnalysisBatch)
+            .where(AnalysisBatch.status == "processing")
+            .order_by(AnalysisBatch.created_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
 
     # ── Query ──────────────────────────────────────────────────────────────────
 
@@ -385,6 +443,9 @@ class AnalysisService:
             total_count=batch.total_count,
             avg_confidence=batch.avg_confidence,
             total_elapsed_secs=batch.total_elapsed_secs,
+            processed_image_count=batch.processed_image_count,
+            failed_at=batch.failed_at,
+            failure_reason=batch.failure_reason,
             config_snapshot=batch.config_snapshot or {},
             notes=batch.notes,
             images=image_summaries,
@@ -603,4 +664,7 @@ class AnalysisService:
             total_count=batch.total_count,
             avg_confidence=batch.avg_confidence,
             total_elapsed_secs=batch.total_elapsed_secs,
+            processed_image_count=batch.processed_image_count,
+            failed_at=batch.failed_at,
+            failure_reason=batch.failure_reason,
         )

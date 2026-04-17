@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from app.database import AsyncSession, get_session
 from app.deps import get_analysis_service, get_settings
 from app.schemas.analysis import (
+    ActiveBatchResponse,
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchUpdate,
@@ -24,6 +25,7 @@ from app.schemas.analysis import (
     AnalysisImageResult,
     AnalysisListResponse,
     EditedAnnotationsUpdate,
+    FailBatchRequest,
 )
 from app.services.analysis_service import AnalysisService
 
@@ -43,6 +45,7 @@ _DEFAULT_PAGE_SIZE = 20
     summary="Create a new analysis batch",
     responses={
         201: {"description": "Batch created"},
+        409: {"description": "A batch is already processing"},
         422: {"description": "Validation error"},
     },
 )
@@ -53,17 +56,83 @@ async def create_analysis(
 ) -> AnalysisBatchDetail:
     """Create a new analysis batch with status 'processing'.
 
-    Call this when the operator clicks "Process Images" to register the batch
-    before inference begins. After processing each image,
-    call POST /analyses/{id}/images to record results.
-    When all images are done, call POST /analyses/{id}/complete.
+    Returns 409 if another batch is already in 'processing' state.
     """
+    active = await analysis_svc.has_active_batch(db=db)
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A batch is already processing",
+            headers={"X-Active-Batch-Id": str(active.id)},
+        )
     batch = await analysis_svc.create_batch(data=data, db=db)
     await db.commit()
-    # Re-fetch full detail for the response
     detail = await analysis_svc.get_batch_detail(batch_id=batch.id, db=db)
     assert detail is not None
     return detail
+
+
+@router.get(
+    "/active",
+    response_model=ActiveBatchResponse,
+    summary="Get the currently-processing batch, if any",
+    responses={200: {"description": "Active batch status"}},
+)
+async def get_active_batch(
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> ActiveBatchResponse:
+    """Return the active processing batch with progress details.
+
+    Automatically marks zombie batches (>24h old) as failed.
+    """
+    resp = await analysis_svc.get_active_batch(db=db)
+    await db.commit()
+    return resp
+
+
+@router.post(
+    "/{batch_id}/fail",
+    status_code=status.HTTP_200_OK,
+    summary="Mark a processing batch as failed",
+    responses={
+        200: {"description": "Batch marked as failed"},
+        404: {"description": "Batch not found"},
+        409: {"description": "Batch is not in processing state"},
+    },
+)
+async def fail_analysis(
+    batch_id: UUID,
+    data: FailBatchRequest,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> dict:
+    """Mark a batch as failed with a reason string."""
+    from app.models.analysis import AnalysisBatch
+    from sqlalchemy import select
+
+    stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+    result = await db.execute(stmt)
+    batch = result.scalar_one_or_none()
+    if batch is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found",
+        )
+    if batch.status != "processing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Batch is not in processing state",
+        )
+    failed = await analysis_svc.fail_batch(batch_id=batch_id, error=data.reason, db=db)
+    await db.commit()
+    assert failed is not None
+    return {
+        "id": str(failed.id),
+        "status": failed.status,
+        "failed_at": failed.failed_at.isoformat() if failed.failed_at else None,
+        "failure_reason": failed.failure_reason,
+    }
 
 
 @router.get(

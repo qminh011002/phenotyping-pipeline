@@ -16,12 +16,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.schemas.config import ConfigUpdateRequest, EggConfig
 
+BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
 
 class AppSettings(BaseSettings):
     """Application-wide settings loaded from environment variables and .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BACKEND_ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="",
         extra="ignore",

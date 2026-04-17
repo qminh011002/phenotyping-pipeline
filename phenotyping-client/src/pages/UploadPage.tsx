@@ -12,8 +12,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Upload, X, Plus, Settings, FileImage, Microscope, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { storeProcessingFiles, generateBatchId } from "@/features/upload/lib/processingSession";
 import { useProcessingStore } from "@/stores/processingStore";
+import { startProcessingFromSession, isManagerRunning } from "@/services/processingManager";
 import { ConfigPanel } from "@/features/upload/components/ConfigPanel";
 import { cn } from "@/lib/utils";
 
@@ -290,14 +292,22 @@ export default function UploadPage() {
 
   function handleProcess() {
     if (files.length === 0) return;
+    const store = useProcessingStore.getState();
+    if (store.isProcessing || isManagerRunning()) {
+      toast.error("A batch is already processing", {
+        description: "Wait for the current batch to finish or cancel it first.",
+        action: { label: "View", onClick: () => navigate("/analyze/processing") },
+      });
+      return;
+    }
     const batchId = generateBatchId();
     storeProcessingFiles(
       files.map((f) => ({ id: f.id, file: f.file })),
       organism,
       batchId,
     );
-    // Kick off the Zustand store so the toast appears immediately
-    useProcessingStore.getState().startProcessing(files.length);
+    // Kick the manager off; navigate immediately so the user is never blocked.
+    void startProcessingFromSession();
     navigate("/analyze/processing");
   }
 

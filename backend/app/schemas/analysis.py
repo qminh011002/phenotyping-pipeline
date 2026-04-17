@@ -120,6 +120,9 @@ class AnalysisBatchSummary(BaseModel):
     total_count: int | None = None
     avg_confidence: float | None = None
     total_elapsed_secs: float | None = None
+    processed_image_count: int = 0
+    failed_at: datetime | None = None
+    failure_reason: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -152,3 +155,16 @@ class DashboardStats(BaseModel):
     avg_confidence: float | None = None
     avg_processing_time: float | None = None
     recent_analyses: list[AnalysisBatchSummary] = Field(default_factory=list)
+
+
+class ActiveBatchResponse(BaseModel):
+    """Response for GET /analyses/active."""
+
+    active: bool
+    batch: AnalysisBatchDetail | None = None
+
+
+class FailBatchRequest(BaseModel):
+    """Request body for POST /analyses/{id}/fail."""
+
+    reason: str = Field(..., min_length=1, max_length=1000)
