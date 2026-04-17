@@ -607,7 +607,7 @@ export function OverlayImage({
       >
         {/* Zoom controls */}
         <div className="pointer-events-none absolute bottom-4 left-4 z-20">
-          <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-cyan-400/40 bg-slate-950/88 px-2 py-1.5 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
+          <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-cyan-400/40 bg-card/70 px-2 py-1.5 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
             <Button
               variant="ghost"
               size="icon-sm"

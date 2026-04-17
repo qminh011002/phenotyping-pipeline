@@ -121,48 +121,7 @@ export function StatBoard({
         </CardContent>
       </Card>
 
-      {/* FS-009: Edited boxes summary — only shown in edit mode */}
-      {editMode && (
-        <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <span className="text-blue-600 dark:text-blue-400 font-bold">+</span>
-              Edited Boxes
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-4 text-sm">
-              {addedCount > 0 && (
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-                  <span className="font-mono font-medium text-amber-600 dark:text-amber-400">
-                    +{addedCount} added
-                  </span>
-                </span>
-              )}
-              {removedCount > 0 && (
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
-                  <span className="font-mono font-medium text-red-600 dark:text-red-400">
-                    -{removedCount} removed
-                  </span>
-                </span>
-              )}
-              {modifiedCount > 0 && (
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full bg-blue-400" />
-                  <span className="font-mono font-medium text-blue-600 dark:text-blue-400">
-                    {modifiedCount} moved/resized
-                  </span>
-                </span>
-              )}
-              {addedCount === 0 && removedCount === 0 && modifiedCount === 0 && (
-                <span className="text-muted-foreground">No changes yet</span>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+    
 
       {/* Confidence Threshold — slider + presets in one card */}
       <Card>

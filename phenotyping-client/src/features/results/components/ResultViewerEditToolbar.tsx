@@ -1,9 +1,9 @@
 import {
   Hand,
-  Plus,
   Redo2,
   RotateCcw,
   Undo2,
+  VectorSquare,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,7 @@ export function ResultViewerEditToolbar({
   return (
     <div className="pointer-events-none absolute right-4 top-1/2 z-20 -translate-y-1/2">
       <div className="pointer-events-auto flex flex-col items-center gap-2.5">
-        <div className="flex flex-col items-center gap-1 rounded-2xl border border-white/12 bg-slate-950/88 p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.34)] backdrop-blur-md">
+        <div className="flex flex-col items-center gap-1 rounded-2xl border border-white/12 bg-card/70 p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.34)] backdrop-blur-md">
           <Button
             variant={editorTool === "drag" ? "default" : "ghost"}
             size="icon-sm"
@@ -60,7 +60,7 @@ export function ResultViewerEditToolbar({
             }
             onClick={onToggleDrawTool}
           >
-            <Plus className="h-4 w-4" />
+            <VectorSquare className="h-4 w-4" strokeWidth={2} />
           </Button>
 
           <div className="my-1 h-px w-7 bg-white/10" />
