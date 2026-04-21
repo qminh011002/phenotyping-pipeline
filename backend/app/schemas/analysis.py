@@ -33,6 +33,30 @@ class AnalysisBatchCreate(BaseModel):
         max_length=200,
         description="Optional operator-supplied name; server generates a default when absent",
     )
+    classes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Class names defined on the Analyze page, frozen for the batch. "
+            "First entry is the default label for user-drawn boxes."
+        ),
+    )
+
+    @field_validator("classes")
+    @classmethod
+    def _normalize_classes(cls, v: list[str]) -> list[str]:
+        # Strip + drop empties + de-dup case-insensitively while preserving order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in v:
+            name = raw.strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+        return out
 
 
 class AnalysisImageResult(BaseModel):
@@ -123,6 +147,7 @@ class AnalysisBatchSummary(BaseModel):
     processed_image_count: int = 0
     failed_at: datetime | None = None
     failure_reason: str | None = None
+    classes: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

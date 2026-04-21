@@ -19,13 +19,15 @@ import {
   getActiveBatch,
   getAnalysisDetail,
   getConfig,
-  inferSingleEgg,
+  inferSingle,
 } from "./api";
+import type { Organism } from "@/types/api";
 import {
   clearProcessingSession,
   loadDbBatchId,
   loadOrganism,
   loadProcessingFiles,
+  loadProjectClasses,
   storeBatchDetail,
   storeBatchSummary,
   storeDbBatchId,
@@ -42,6 +44,7 @@ interface RuntimeState {
   cancelled: boolean;
   // Tracks any in-flight resume probe so concurrent callers share one promise.
   resumeProbe: Promise<boolean> | null;
+  organism: Organism;
 }
 
 const runtime: RuntimeState = {
@@ -49,6 +52,7 @@ const runtime: RuntimeState = {
   dbBatchId: null,
   cancelled: false,
   resumeProbe: null,
+  organism: "egg",
 };
 
 export function isManagerRunning(): boolean {
@@ -122,6 +126,7 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
           total_elapsed_secs: detail.total_elapsed_secs,
           avg_confidence: detail.avg_confidence,
           images: detail.images,
+          classes: detail.classes,
         });
         storeDbBatchId(batch.id);
       } catch {
@@ -145,6 +150,7 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
         })),
       );
       runtime.dbBatchId = batch.id;
+      runtime.organism = (batch.organism_type ?? loadOrganism()) as Organism;
       void runProcessLoop(stored, batch.processed_image_count, batch.id);
       return true;
     }
@@ -199,6 +205,7 @@ export async function finalizeInterruptedBatch(): Promise<void> {
       total_elapsed_secs: detail.total_elapsed_secs,
       avg_confidence: detail.avg_confidence,
       images: detail.images,
+      classes: detail.classes,
     });
   } catch {
     /* non-fatal */
@@ -212,7 +219,8 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
   runtime.running = true;
   runtime.cancelled = false;
   const store = useProcessingStore.getState();
-  const organism = loadOrganism();
+  const organism = loadOrganism() as Organism;
+  runtime.organism = organism;
 
   let configSnapshot: Record<string, unknown> = {};
   try {
@@ -231,6 +239,7 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
       device: (configSnapshot.device as string) ?? "cpu",
       config_snapshot: configSnapshot,
       total_image_count: stored.length,
+      classes: loadProjectClasses(),
     });
     dbBatchId = detail.id;
     storeDbBatchId(dbBatchId);
@@ -281,7 +290,7 @@ async function runProcessLoop(
       const fileObj = new File([blob], file.name, { type: file.type });
 
       if (runtime.cancelled) break;
-      const result = await inferSingleEgg(fileObj, dbBatchId);
+      const result = await inferSingle(runtime.organism, fileObj, dbBatchId);
       if (runtime.cancelled) break;
 
       await addImageResult(dbBatchId, {
@@ -338,6 +347,7 @@ async function runProcessLoop(
       total_elapsed_secs: detail.total_elapsed_secs,
       avg_confidence: detail.avg_confidence,
       images: detail.images,
+      classes: detail.classes,
     });
   } catch {
     /* non-fatal */

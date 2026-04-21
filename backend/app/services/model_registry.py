@@ -39,6 +39,8 @@ class ModelRegistry:
 
     def __init__(self) -> None:
         self._model: YOLO | None = None
+        self._neonate_model: YOLO | None = None
+        self._neonate_device: str = "cpu"
         self._device: str = "cpu"
         self._cuda_available: bool = False
         self._loaded: bool = False
@@ -144,8 +146,77 @@ class ModelRegistry:
         # Warm-up inference (trigger JIT / lazy loading)
         await self._warmup()
 
+        # Load neonate model (best-effort — non-fatal if missing/invalid)
+        await self._load_neonate(pipeline_config)
+
         self._loaded = True
         self._start_time = time.time()
+
+    async def _load_neonate(self, pipeline_config: PipelineConfigManager) -> None:
+        """Load the neonate detection model alongside the egg model.
+
+        Uses the same CUDA-available fallback rule as egg. Failure is logged
+        but does not abort startup — the neonate endpoints will return 503
+        until the model is available.
+        """
+        try:
+            neonate_cfg = pipeline_config.get_neonate_config()
+            neonate_path = pipeline_config.get_model_path(organism="neonate")
+        except Exception as e:
+            logger.warning(
+                "Neonate config missing or invalid; neonate inference disabled: %s",
+                e,
+            )
+            return
+
+        requested = neonate_cfg.device
+        if requested.startswith("cuda") and not self._cuda_available:
+            self._neonate_device = "cpu"
+            logger.warning(
+                "CUDA device '%s' requested for neonate but no GPU found. Falling back to CPU.",
+                requested,
+            )
+        else:
+            self._neonate_device = requested
+
+        logger.info(
+            "Loading neonate YOLO model from %s",
+            neonate_path,
+            extra={"context": {"model_path": str(neonate_path), "device": self._neonate_device}},
+        )
+        try:
+            self._neonate_model = YOLO(str(neonate_path))
+        except Exception as e:
+            logger.error(
+                "Failed to load neonate YOLO model from %s: %s",
+                neonate_path,
+                e,
+                exc_info=True,
+            )
+            self._neonate_model = None
+            return
+
+        if self._neonate_model.task != "detect":
+            logger.error(
+                "Neonate model at %s is a '%s' model, expected 'detect'. Disabling.",
+                neonate_path,
+                self._neonate_model.task,
+            )
+            self._neonate_model = None
+            return
+
+        try:
+            self._neonate_model.to(self._neonate_device)
+        except Exception as e:
+            logger.error(
+                "Failed to move neonate model to device %s: %s",
+                self._neonate_device,
+                e,
+                exc_info=True,
+            )
+            self._neonate_model = None
+            return
+        logger.info("Neonate YOLO model loaded successfully")
 
     async def _warmup(self) -> None:
         """Run a dummy inference on a tiny black image to warm up the model.
@@ -181,8 +252,12 @@ class ModelRegistry:
             del self._model
             self._model = None
             self._loaded = False
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        if self._neonate_model is not None:
+            logger.info("Releasing neonate YOLO model resources")
+            del self._neonate_model
+            self._neonate_model = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         logger.info("ModelRegistry shutdown complete")
 
     # ── Public properties ─────────────────────────────────────────────────────
@@ -209,6 +284,26 @@ class ModelRegistry:
     def device(self) -> str:
         """The device the model is running on (e.g. 'cpu', 'cuda:0')."""
         return self._device
+
+    @property
+    def neonate_model(self) -> YOLO:
+        """Return the loaded neonate YOLO model instance."""
+        if self._neonate_model is None:
+            raise ModelNotLoadedError(
+                "Neonate model not loaded. Check the 'neonate' section of config.yaml "
+                "and that the weights file exists."
+            )
+        return self._neonate_model
+
+    @property
+    def neonate_model_loaded(self) -> bool:
+        """True if the neonate model has been successfully loaded."""
+        return self._neonate_model is not None
+
+    @property
+    def neonate_device(self) -> str:
+        """The device the neonate model is running on."""
+        return self._neonate_device
 
     @property
     def cuda_available(self) -> bool:

@@ -26,6 +26,7 @@ import {
   loadProcessingFiles,
   loadProcessingConfig,
   loadProcessingResults,
+  loadProjectClasses,
   storeBatchDetail,
 } from "@/features/upload/lib/processingSession";
 import {
@@ -72,6 +73,17 @@ export function ResultViewer({ className }: ResultViewerProps) {
    */
   const [editorTool, setEditorTool] = useState<"drag" | "draw">("drag");
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [labelsVisible, setLabelsVisible] = useState(true);
+  // Classes are defined on AnalyzePage and persisted both to the batch row
+  // (authoritative) and sessionStorage (used during the live processing
+  // round-trip before batchDetail is loaded). Prefer the batch row when
+  // present so opening a saved batch from /recorded shows its own classes.
+  const [sessionClasses] = useState<string[]>(() => loadProjectClasses());
+  const projectClasses =
+    batchDetail?.classes && batchDetail.classes.length > 0
+      ? batchDetail.classes
+      : sessionClasses;
+  const defaultClass = projectClasses[0];
   const [history, dispatchHistory] = useReducer(editorHistoryReducer, {
     past: [],
     present: [],
@@ -292,6 +304,12 @@ export function ResultViewer({ className }: ResultViewerProps) {
         return;
       }
 
+      if (e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        setLabelsVisible((v) => !v);
+        return;
+      }
+
       if (e.key === "Escape") {
         e.preventDefault();
         if (editorTool !== "drag") {
@@ -384,6 +402,10 @@ export function ResultViewer({ className }: ResultViewerProps) {
     setSelectedIdx(null);
   }, []);
 
+  const handleToggleLabels = useCallback(() => {
+    setLabelsVisible((v) => !v);
+  }, []);
+
   const handleSaveToRecords = useCallback(() => {
     const detail = loadBatchDetail();
     if (detail) {
@@ -468,8 +490,10 @@ export function ResultViewer({ className }: ResultViewerProps) {
         currentResult={currentResult}
         confidenceThreshold={confidenceThreshold}
         ctrlHeld={ctrlHeld}
+        defaultClass={defaultClass}
         editMode={editMode}
         editorTool={editorTool}
+        labelsVisible={labelsVisible}
         modelBoxes={modelBoxes}
         processingConfig={processingConfig}
         redoAvailable={redoAvailable}
@@ -493,6 +517,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         onRedo={handleRedo}
         onSelectDragTool={handleSelectDragTool}
         onToggleDrawTool={handleToggleDrawTool}
+        onToggleLabels={handleToggleLabels}
         onUndo={handleUndo}
       />
 

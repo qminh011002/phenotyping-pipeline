@@ -10,8 +10,10 @@ interface ResultViewerContentProps {
   currentResult: DetectionResult;
   confidenceThreshold: number;
   ctrlHeld: boolean;
+  defaultClass: string | undefined;
   editMode: boolean;
   editorTool: "drag" | "draw";
+  labelsVisible: boolean;
   modelBoxes: BBox[];
   processingConfig: Record<string, unknown> | null;
   redoAvailable: boolean;
@@ -31,6 +33,7 @@ interface ResultViewerContentProps {
   onRedo: () => void;
   onSelectDragTool: () => void;
   onToggleDrawTool: () => void;
+  onToggleLabels: () => void;
   onUndo: () => void;
 }
 
@@ -40,8 +43,10 @@ export function ResultViewerContent({
   currentResult,
   confidenceThreshold,
   ctrlHeld,
+  defaultClass,
   editMode,
   editorTool,
+  labelsVisible,
   modelBoxes,
   processingConfig,
   redoAvailable,
@@ -61,6 +66,7 @@ export function ResultViewerContent({
   onRedo,
   onSelectDragTool,
   onToggleDrawTool,
+  onToggleLabels,
   onUndo,
 }: ResultViewerContentProps) {
   return (
@@ -77,6 +83,7 @@ export function ResultViewerContent({
           annotations={editMode && currentImageRecordId ? sessionBoxes : viewBoxes}
           saveInProgress={savingEdits}
           dimEnabled={!ctrlHeld}
+          labelsVisible={labelsVisible}
           onBackgroundClick={onBackgroundClick}
           onDimensions={onDimensions}
           editor={
@@ -85,6 +92,7 @@ export function ResultViewerContent({
                   mode: editorTool,
                   selectedIndex: selectedIdx,
                   confidenceThreshold,
+                  defaultClass,
                   onSelect,
                   onCommit,
                 }
@@ -95,12 +103,14 @@ export function ResultViewerContent({
         {editMode && currentImageRecordId && (
           <ResultViewerEditToolbar
             editorTool={editorTool}
+            labelsVisible={labelsVisible}
             redoAvailable={redoAvailable}
             undoAvailable={undoAvailable}
             onOpenResetDialog={onOpenResetDialog}
             onRedo={onRedo}
             onSelectDragTool={onSelectDragTool}
             onToggleDrawTool={onToggleDrawTool}
+            onToggleLabels={onToggleLabels}
             onUndo={onUndo}
           />
         )}

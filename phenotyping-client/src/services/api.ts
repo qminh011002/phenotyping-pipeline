@@ -49,6 +49,26 @@ export async function inferBatchEgg(files: File[]): Promise<BatchDetectionResult
   return http.postFormDataMulti<BatchDetectionResult>("inference/egg/batch", "files", files);
 }
 
+/** POST /inference/neonate — run neonate detection on a single image */
+export async function inferSingleNeonate(file: File, batchId?: string): Promise<DetectionResult> {
+  return http.postFormData<DetectionResult>("inference/neonate", "file", file, batchId ? { batch_id: batchId } : undefined);
+}
+
+/** POST /inference/neonate/batch — run neonate detection on multiple images */
+export async function inferBatchNeonate(files: File[]): Promise<BatchDetectionResult> {
+  return http.postFormDataMulti<BatchDetectionResult>("inference/neonate/batch", "files", files);
+}
+
+/** Run single-image inference against the endpoint for the given organism. */
+export async function inferSingle(
+  organism: Organism,
+  file: File,
+  batchId?: string,
+): Promise<DetectionResult> {
+  if (organism === "neonate") return inferSingleNeonate(file, batchId);
+  return inferSingleEgg(file, batchId);
+}
+
 // ── Overlay URLs ───────────────────────────────────────────────────────────────
 
 /**
@@ -135,6 +155,7 @@ export async function createBatch(data: {
   config_snapshot: Record<string, unknown>;
   total_image_count: number;
   name?: string;
+  classes?: string[];
 }): Promise<AnalysisBatchDetail> {
   return http.post<AnalysisBatchDetail>("analyses", data);
 }

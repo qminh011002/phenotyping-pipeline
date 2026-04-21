@@ -11,6 +11,7 @@ const KEY_DB_BATCH_ID = "phenotyping_processing_db_batch_id";
 const KEY_BATCH_SUMMARY = "phenotyping_processing_batch_summary";
 const KEY_BATCH_DETAIL = "phenotyping_processing_batch_detail";
 const KEY_CONFIG = "phenotyping_processing_config";
+const KEY_CLASSES = "phenotyping_processing_classes";
 
 export interface StoredFile {
   id: string;
@@ -52,6 +53,8 @@ export interface StoredBatchDetail {
   total_elapsed_secs: number | null;
   avg_confidence: number | null;
   images: StoredImageDetail[];
+  /** Class names persisted on the batch row; optional for back-compat. */
+  classes?: string[];
 }
 
 // ── Store files before navigating to processing page ─────────────────────────
@@ -77,6 +80,8 @@ export function storeProcessingFiles(
   sessionStorage.removeItem(KEY_DB_BATCH_ID);
   sessionStorage.removeItem(KEY_BATCH_SUMMARY);
   sessionStorage.removeItem(KEY_BATCH_DETAIL);
+  // KEY_CLASSES is intentionally NOT cleared here — AnalyzePage writes it
+  // before navigating into the upload flow.
 }
 
 // ── Retrieve stored files ────────────────────────────────────────────────────
@@ -188,6 +193,26 @@ export function clearProcessingSession(): void {
   sessionStorage.removeItem(KEY_BATCH_SUMMARY);
   sessionStorage.removeItem(KEY_BATCH_DETAIL);
   sessionStorage.removeItem(KEY_CONFIG);
+  sessionStorage.removeItem(KEY_CLASSES);
+}
+
+// ── Project class names (frozen for the batch) ──────────────────────────────
+
+export function storeProjectClasses(classes: string[]): void {
+  sessionStorage.setItem(KEY_CLASSES, JSON.stringify(classes));
+}
+
+export function loadProjectClasses(): string[] {
+  try {
+    const raw = sessionStorage.getItem(KEY_CLASSES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((s): s is string => typeof s === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Generate a batch ID ─────────────────────────────────────────────────────

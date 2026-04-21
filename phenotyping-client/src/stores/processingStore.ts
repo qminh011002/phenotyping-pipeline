@@ -32,6 +32,14 @@ interface ProcessingStore {
   images: ProcessingImage[];
   toastId: string | null;
 
+  // Project metadata captured on the Analyze page
+  projectName: string | null;
+  /**
+   * Class names defined on the Analyze page, frozen for the batch. The first
+   * entry is the default used when the user draws a new box in the editor.
+   */
+  classes: string[];
+
   // FS-012: persistent processing state
   activeBatchId: string | null;
   processedCount: number;
@@ -67,6 +75,9 @@ interface ProcessingStore {
   setTotalElapsed: (seconds: number) => void;
   setError: (msg: string | null) => void;
   setInterruptedBatch: (info: InterruptedBatchInfo | null) => void;
+
+  setProjectName: (name: string | null) => void;
+  setClasses: (classes: string[]) => void;
 }
 
 export const useProcessingStore = create<ProcessingStore>((set) => ({
@@ -83,6 +94,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
   totalElapsedSeconds: 0,
   error: null,
   interruptedBatch: null,
+  projectName: null,
+  classes: [],
 
   startProcessing: (totalImages) =>
     set({
@@ -122,6 +135,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       totalElapsedSeconds: 0,
       error: null,
       interruptedBatch: null,
+      projectName: null,
+      classes: [],
     }),
 
   setToastId: (toastId) => set({ toastId }),
@@ -153,4 +168,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
 
   setInterruptedBatch: (info) =>
     set({ interruptedBatch: info, isProcessing: false }),
+
+  setProjectName: (projectName) => set({ projectName }),
+
+  setClasses: (classes) => set({ classes }),
 }));

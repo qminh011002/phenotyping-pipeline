@@ -1,4 +1,6 @@
 import {
+  Eye,
+  EyeOff,
   Hand,
   Redo2,
   RotateCcw,
@@ -10,23 +12,27 @@ import { Button } from "@/components/ui/button";
 
 interface ResultViewerEditToolbarProps {
   editorTool: "drag" | "draw";
+  labelsVisible: boolean;
   redoAvailable: boolean;
   undoAvailable: boolean;
   onOpenResetDialog: () => void;
   onRedo: () => void;
   onSelectDragTool: () => void;
   onToggleDrawTool: () => void;
+  onToggleLabels: () => void;
   onUndo: () => void;
 }
 
 export function ResultViewerEditToolbar({
   editorTool,
+  labelsVisible,
   redoAvailable,
   undoAvailable,
   onOpenResetDialog,
   onRedo,
   onSelectDragTool,
   onToggleDrawTool,
+  onToggleLabels,
   onUndo,
 }: ResultViewerEditToolbarProps) {
   return (
@@ -61,6 +67,24 @@ export function ResultViewerEditToolbar({
             onClick={onToggleDrawTool}
           >
             <VectorSquare className="h-4 w-4" strokeWidth={2} />
+          </Button>
+
+          <div className="my-1 h-px w-7 bg-white/10" />
+
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title={
+              labelsVisible ? "Hide class labels (L)" : "Show class labels (L)"
+            }
+            className="h-9 w-9 rounded-xl text-slate-200 hover:bg-white/8 hover:text-white"
+            onClick={onToggleLabels}
+          >
+            {labelsVisible ? (
+              <Eye className="h-4 w-4" />
+            ) : (
+              <EyeOff className="h-4 w-4" />
+            )}
           </Button>
 
           <div className="my-1 h-px w-7 bg-white/10" />

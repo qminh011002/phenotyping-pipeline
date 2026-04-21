@@ -14,7 +14,7 @@ import yaml
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.schemas.config import ConfigUpdateRequest, EggConfig
+from app.schemas.config import ConfigUpdateRequest, EggConfig, NeonateConfig
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
@@ -112,6 +112,19 @@ class PipelineConfigManager:
         except ValidationError as e:
             msg = (
                 f"egg section in {self._config_path} failed validation: {e}. "
+                "Check that all required fields are present and valid."
+            )
+            raise RuntimeError(msg) from e
+
+    def get_neonate_config(self) -> NeonateConfig:
+        """Return the validated neonate section as a NeonateConfig model."""
+        raw = self._get_raw()
+        section = raw.get("neonate", {})
+        try:
+            return NeonateConfig.model_validate(section)
+        except ValidationError as e:
+            msg = (
+                f"neonate section in {self._config_path} failed validation: {e}. "
                 "Check that all required fields are present and valid."
             )
             raise RuntimeError(msg) from e

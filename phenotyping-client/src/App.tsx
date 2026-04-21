@@ -30,7 +30,6 @@ const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <HomePage /> },
-          { path: "analyze", element: <AnalyzePage /> },
           { path: "analyze/upload", element: <UploadPage /> },
           { path: "analyze/processing", element: <ProcessingPage /> },
           { path: "analyze/results", element: <ResultPage /> },
@@ -38,6 +37,7 @@ const router = createBrowserRouter([
           { path: "settings", element: <SettingsPage /> },
         ],
       },
+      { path: "analyze", element: <AnalyzePage /> },
     ],
   },
 ]);

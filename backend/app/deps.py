@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 # Import at runtime (not inside TYPE_CHECKING) so that TypeAliasType below can
 # resolve EggInferenceService at module-load time.
 from app.services.inference.egg import EggInferenceService  # noqa: E402
+from app.services.inference.neonate import NeonateInferenceService  # noqa: E402
 from app.services.analysis_service import AnalysisService  # noqa: E402
 from app.services.app_settings_service import AppSettingsService  # noqa: E402
 
@@ -23,6 +24,7 @@ _model_registry: "ModelRegistry | None" = None
 _log_buffer: "LogBuffer | None" = None
 _executor: ThreadPoolExecutor | None = None
 _inference_service: EggInferenceService | None = None
+_neonate_inference_service: NeonateInferenceService | None = None
 
 
 def _set_model_registry(registry: ModelRegistry) -> None:
@@ -47,6 +49,22 @@ def _set_inference_service(svc: EggInferenceService) -> None:
     """Called by main.py lifespan to register the inference service."""
     global _inference_service
     _inference_service = svc
+
+
+def _set_neonate_inference_service(svc: NeonateInferenceService) -> None:
+    """Called by main.py lifespan to register the neonate inference service."""
+    global _neonate_inference_service
+    _neonate_inference_service = svc
+
+
+def get_neonate_inference_service() -> NeonateInferenceService:
+    """Return the NeonateInferenceService singleton initialized at startup."""
+    if _neonate_inference_service is None:
+        raise RuntimeError(
+            "NeonateInferenceService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _neonate_inference_service
 
 
 @lru_cache
@@ -135,6 +153,11 @@ from fastapi import Depends as _Depends
 AnnotatedEggInferenceService = _Annotated[
     EggInferenceService,
     _Depends(get_inference_service),
+]
+
+AnnotatedNeonateInferenceService = _Annotated[
+    NeonateInferenceService,
+    _Depends(get_neonate_inference_service),
 ]
 
 

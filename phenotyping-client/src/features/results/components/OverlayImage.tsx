@@ -13,10 +13,13 @@ import {
   Circle,
   Group,
   Image as KonvaImage,
+  Label as KonvaLabel,
   Layer,
   Line,
   Rect,
   Stage,
+  Tag,
+  Text,
   Transformer,
 } from "react-konva";
 
@@ -40,6 +43,8 @@ export interface OverlayImageEditor {
   selectedIndex: number | null;
   /** Confidence threshold — model-origin boxes below this are hidden. */
   confidenceThreshold: number;
+  /** Default class label assigned to user-drawn boxes. */
+  defaultClass?: string;
   onSelect: (index: number | null) => void;
   /** Commit a finished gesture (once, on pointerup). */
   onCommit: (boxes: BBox[]) => void;
@@ -56,6 +61,13 @@ interface OverlayImageProps {
    * drag/resize/draw and in draw mode so the user sees the raw pixels.
    */
   dimEnabled?: boolean;
+  /**
+   * When true (default), each box renders its class-name label above the
+   * top-left corner. The label font size is computed from the current zoom
+   * so screen size stays close to constant (softly inverse — see
+   * LABEL_SCREEN_PX / LABEL_SCALE_EXPONENT below).
+   */
+  labelsVisible?: boolean;
   /**
    * Fired when the user clicks the empty background (pointerdown → up with
    * no drag). Used by the parent to deselect on empty-area clicks.
@@ -87,6 +99,18 @@ const DIM_OPACITY_HOVER = 0.3; // additional dim on top of base
 
 const HANDLE_PX = 10;
 
+// ── Label tunables ─────────────────────────────────────────────────────────
+// Labels live in image coordinates but should look ~constant on screen.
+// `screen_px = fontSize_image * scale`, so to make the *screen* size shrink
+// when the user zooms in (and grow when they zoom out) we set
+//   fontSize_image = LABEL_SCREEN_PX / scale^LABEL_SCALE_EXPONENT
+// with the exponent slightly above 1 — "softly inverse": at 200% zoom labels
+// are a touch smaller than baseline, at 50% zoom a touch larger.
+const LABEL_SCREEN_PX = 12;
+const LABEL_SCALE_EXPONENT = 1.15;
+const LABEL_BG = "#f59e0b"; // yellow (matches user-edited box stroke)
+const LABEL_FG = "#0f172a"; // slate-900 — high contrast on yellow
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function loadImageEl(src: string): Promise<HTMLImageElement> {
@@ -111,6 +135,7 @@ export function OverlayImage({
   className,
   saveInProgress = false,
   dimEnabled = true,
+  labelsVisible = true,
   onBackgroundClick,
   onDimensions,
   editor,
@@ -430,7 +455,7 @@ export function OverlayImage({
     if (!enforced) return;
     const clamped = clampBox(enforced, imageEl.naturalWidth, imageEl.naturalHeight);
     const newBox: BBox = {
-      label: "neonate_egg",
+      label: editor.defaultClass ?? "object",
       bbox: clamped,
       confidence: 1.0,
       origin: "user",
@@ -597,6 +622,15 @@ export function OverlayImage({
 
   const invScale = 1 / Math.max(scale, 0.001);
   const handleSize = HANDLE_PX * invScale;
+
+  // Label sizing — see LABEL_SCALE_EXPONENT comment above. Clamp the font
+  // size so very-zoomed-out views don't produce a label that swallows the
+  // image, and very-zoomed-in views still render at least one usable pixel.
+  const labelFontSize = Math.min(
+    400,
+    Math.max(0.5, LABEL_SCREEN_PX / Math.pow(Math.max(scale, 0.001), LABEL_SCALE_EXPONENT)),
+  );
+  const labelPadding = labelFontSize * 0.3;
 
   return (
     <div className={cn("h-full", className)}>
@@ -897,6 +931,51 @@ export function OverlayImage({
                     onClick={handleDeleteSelected}
                   />
                 )}
+
+              {/* Class-name labels (above each visible box). Rendered last so
+                  they sit on top of strokes; non-listening so they never
+                  interfere with selection / drag hit testing. */}
+              {labelsVisible &&
+                visibleBoxesWithIdx.map(({ box, index }) => {
+                  const [x1, y1, x2, y2] = box.bbox;
+                  // Approximate label height in image-space so we can flip the
+                  // label *inside* the box top edge when there isn't enough
+                  // room above. Konva's Tag auto-sizes around the Text, so
+                  // this estimate only drives placement, not layout.
+                  const approxLabelH = labelFontSize * 1.2 + labelPadding * 2;
+                  const flipInside = y1 - approxLabelH < 0;
+                  const labelY = flipInside ? y1 : y1 - approxLabelH;
+                  // Clamp x so the label doesn't run off the right edge of
+                  // the image at very high zoom-out factors.
+                  const labelX = Math.max(
+                    0,
+                    Math.min(x1, imageSize.width - 1),
+                  );
+                  // Suppress unused width var; left here for future right-edge
+                  // clamping if labels grow text-measurement aware.
+                  void x2;
+                  void y2;
+                  return (
+                    <KonvaLabel
+                      key={`label-${index}`}
+                      x={labelX}
+                      y={labelY}
+                      listening={false}
+                    >
+                      <Tag
+                        fill={LABEL_BG}
+                        cornerRadius={Math.max(1, labelPadding * 0.4)}
+                      />
+                      <Text
+                        text={box.label || "object"}
+                        fontSize={labelFontSize}
+                        fontStyle="bold"
+                        fill={LABEL_FG}
+                        padding={labelPadding}
+                      />
+                    </KonvaLabel>
+                  );
+                })}
 
               {/* Rubber-band while drawing */}
               {editing && mode === "draw" && rubberBand && (() => {

@@ -25,6 +25,9 @@ class AnalysisBatch(Base):
     mode: Mapped[str] = mapped_column(String(20), default="upload")
     device: Mapped[str] = mapped_column(String(20), default="cpu")
     config_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Class names defined on the Analyze page; frozen for the batch and shown
+    # above each detected box on the result viewer.
+    classes: Mapped[list[str]] = mapped_column(JSONB, default=list)
     total_image_count: Mapped[int] = mapped_column(default=0)
     total_count: Mapped[int | None] = mapped_column(nullable=True)
     avg_confidence: Mapped[float | None] = mapped_column(nullable=True)

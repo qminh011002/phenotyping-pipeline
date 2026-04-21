@@ -103,6 +103,7 @@ class AnalysisService:
             mode=data.mode,
             device=data.device,
             config_snapshot=data.config_snapshot,
+            classes=list(data.classes),
             total_image_count=data.total_image_count,
             created_at=now,
         )

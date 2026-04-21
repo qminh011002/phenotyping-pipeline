@@ -86,6 +86,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     _set_inference_service(inference_svc)
 
+    # Create NeonateInferenceService (uses the same executor/log buffer)
+    from app.services.inference.neonate import NeonateInferenceService
+    from app.deps import _set_neonate_inference_service
+
+    neonate_svc = NeonateInferenceService(
+        model_registry=registry,
+        pipeline_config=pipeline_config,
+        log_buffer=log_buffer,
+        executor=executor,
+    )
+    _set_neonate_inference_service(neonate_svc)
+
     # Initialize database (INF-003)
     from app.config import AppSettings
     from app.database import get_db

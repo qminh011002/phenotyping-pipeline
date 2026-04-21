@@ -112,6 +112,8 @@ export interface AnalysisBatchSummary {
   processed_image_count: number;
   failed_at: string | null;
   failure_reason: string | null;
+  /** Class names defined on the Analyze page; frozen for the batch. */
+  classes: string[];
 }
 
 export interface AnalysisBatchDetail extends AnalysisBatchSummary {

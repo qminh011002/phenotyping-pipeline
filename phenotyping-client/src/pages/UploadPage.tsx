@@ -1,25 +1,26 @@
-// Upload page — drop zone, thumbnail grid, file management, and Process.
-//
-// Flow (from ui-ux-design.mdc):
-//   • Drop zone: dashed border, changes color on drag hover
-//   • After files added: drop zone shrinks, grid of thumbnails appears
-//   • Each thumbnail: 120×120, shows image, filename below, ✕ button on hover
-//   • [+] card at end of grid to add more files
-//   • Footer bar: file count + total size on left, Process button on right
-//   • Config gear: opens Sheet from right side
-
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Upload, X, Plus, Settings, FileImage, Microscope, Check } from "lucide-react";
+import {
+  Upload,
+  X,
+  Plus,
+  Settings,
+  Check,
+  ArrowLeft,
+  ArrowUpFromLine,
+  FileIcon,
+  FolderIcon,
+  Image as ImageIcon,
+  Camera,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { storeProcessingFiles, generateBatchId } from "@/features/upload/lib/processingSession";
 import { useProcessingStore } from "@/stores/processingStore";
 import { startProcessingFromSession, isManagerRunning } from "@/services/processingManager";
 import { ConfigPanel } from "@/features/upload/components/ConfigPanel";
 import { cn } from "@/lib/utils";
-
-// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface FileEntry {
   id: string;
@@ -28,8 +29,6 @@ interface FileEntry {
 }
 
 const SUPPORTED_TYPES = new Set(["image/jpeg", "image/png", "image/tiff", "image/tif", "image/bmp"]);
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -64,7 +63,6 @@ interface ThumbnailProps {
 function Thumbnail({ entry, onRemove, isSelected, onToggleSelect, anySelected }: ThumbnailProps) {
   return (
     <div className="group relative flex flex-col items-center gap-1">
-      {/* Image */}
       <div
         className={cn(
           "relative h-[120px] w-[120px] overflow-hidden rounded-md border bg-muted transition-shadow duration-200 hover:shadow-md",
@@ -79,7 +77,6 @@ function Thumbnail({ entry, onRemove, isSelected, onToggleSelect, anySelected }:
           className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
           loading="lazy"
         />
-        {/* Remove button */}
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onRemove(entry.id); }}
@@ -88,7 +85,6 @@ function Thumbnail({ entry, onRemove, isSelected, onToggleSelect, anySelected }:
         >
           <X className="h-3 w-3" />
         </button>
-        {/* Selection checkbox */}
         {(anySelected || isSelected) && (
           <button
             type="button"
@@ -105,15 +101,12 @@ function Thumbnail({ entry, onRemove, isSelected, onToggleSelect, anySelected }:
           </button>
         )}
       </div>
-      {/* Filename */}
       <span className="max-w-[120px] truncate text-xs text-muted-foreground" title={entry.file.name}>
         {entry.file.name}
       </span>
     </div>
   );
 }
-
-// ── Add-more card ─────────────────────────────────────────────────────────────
 
 function AddMoreCard({ onClick }: { onClick: () => void }) {
   return (
@@ -129,26 +122,17 @@ function AddMoreCard({ onClick }: { onClick: () => void }) {
   );
 }
 
-// ── Drop Zone ─────────────────────────────────────────────────────────────────
+// ── Drop Zone (empty state) ──────────────────────────────────────────────────
 
 interface DropZoneProps {
   isDragOver: boolean;
   onDrop: (files: File[]) => void;
   onPick: () => void;
+  onPickFolder: () => void;
 }
 
-function DropZone({ isDragOver, onDrop, onPick }: DropZoneProps) {
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const onDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const onDragLeave = useCallback((e: React.DragEvent) => {
+function DropZone({ isDragOver, onDrop, onPick, onPickFolder }: DropZoneProps) {
+  const stop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
@@ -165,53 +149,72 @@ function DropZone({ isDragOver, onDrop, onPick }: DropZoneProps) {
 
   return (
     <div
-      onDragOver={onDragOver}
-      onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
+      onDragOver={stop}
+      onDragEnter={stop}
+      onDragLeave={stop}
       onDrop={onDrop_}
-      onClick={onPick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(); } }}
       className={cn(
-        "rounded-xl border-2 border-dashed p-12 text-center transition-all duration-200 ease-out cursor-pointer",
-        "hover:bg-muted/40 hover:border-muted-foreground/40",
-        "focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-offset-2",
+        "flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed p-16 text-center transition-all duration-200 ease-out",
         isDragOver
-          ? "border-primary bg-primary/5 text-primary scale-[1.01] shadow-md"
-          : "border-muted-foreground/40 text-muted-foreground",
+          ? "border-primary bg-primary/5 text-primary"
+          : "border-muted-foreground/30 text-muted-foreground",
       )}
       aria-label="Drop zone for image upload"
     >
       <div className="rounded-full bg-muted p-4">
-        <Upload className="h-8 w-8" />
+        <ArrowUpFromLine className="h-7 w-7 text-foreground" />
       </div>
-      <div className="mt-4">
-        <p className="text-sm font-medium">
-          {isDragOver ? "Drop images here" : "Drop images here or click to browse"}
+      <div>
+        <p className="text-base font-medium text-foreground">
+          {isDragOver ? "Drop images here" : "Drag and drop file(s) to upload, or:"}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">Supports: JPG, PNG, TIFF, BMP</p>
+      </div>
+      <div className="flex items-center gap-3">
+        <Button variant="outline" onClick={onPick}>
+          <FileIcon className="mr-2 h-4 w-4" />
+          Select File(s)
+        </Button>
+        <Button variant="outline" onClick={onPickFolder}>
+          <FolderIcon className="mr-2 h-4 w-4" />
+          Select Folder
+        </Button>
+      </div>
+      <div className="mt-2">
+        <p className="mb-2 text-xs text-muted-foreground">Supported Formats</p>
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-md border bg-muted/30 px-4 py-2 text-xs">
+          <span className="flex items-center gap-1">
+            <ImageIcon className="h-3.5 w-3.5" />
+            <span className="font-medium">Images</span>
+            <span className="text-muted-foreground">.jpg, .png, .bmp, .tiff</span>
+          </span>
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">*Max size of 20MB per image.</p>
       </div>
     </div>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
-
 export default function UploadPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const organism = (searchParams.get("type") ?? "egg") as string;
   const organismLabel = organism.charAt(0).toUpperCase() + organism.slice(1);
+  const mode = (searchParams.get("mode") ?? "upload") as "upload" | "camera";
+  const modeLabel = mode === "camera" ? "Camera" : "Upload";
+  const ModeIcon = mode === "camera" ? Camera : Upload;
+
+  const projectName = useProcessingStore((s) => s.projectName);
 
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDragOver, setIsDragOver] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
-
-  // ── Drag state ──────────────────────────────────────────────────────────────
+  const [uploadProgress, setUploadProgress] = useState<
+    { current: number; total: number; currentName: string } | null
+  >(null);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -224,20 +227,13 @@ export default function UploadPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Track drag-over on the whole page (drop zone + thumbnails area)
   useEffect(() => {
-    const onDragEnter = (e: DragEvent) => {
-      e.preventDefault();
-      setIsDragOver(true);
-    };
+    const onDragEnter = (e: DragEvent) => { e.preventDefault(); setIsDragOver(true); };
     const onDragLeave = (e: DragEvent) => {
       e.preventDefault();
-      // Only clear when leaving the window entirely
       if (e.relatedTarget === null) setIsDragOver(false);
     };
-    const onDragOver = (e: DragEvent) => {
-      e.preventDefault();
-    };
+    const onDragOver = (e: DragEvent) => { e.preventDefault(); };
     const onDrop = () => setIsDragOver(false);
 
     window.addEventListener("dragenter", onDragEnter);
@@ -252,18 +248,23 @@ export default function UploadPage() {
     };
   }, []);
 
-  // ── File helpers ────────────────────────────────────────────────────────────
-
   async function addFiles(newFiles: File[]) {
     const valid = newFiles.filter((f) => SUPPORTED_TYPES.has(f.type));
-    const previews = await Promise.all(valid.map((f) => fileToPreview(f)));
-    const entries: FileEntry[] = valid.map((file, i) => ({
-      id: genId(),
-      file,
-      previewUrl: previews[i],
-      status: "pending",
-    }));
+    if (valid.length === 0) return;
+
+    const total = valid.length;
+    setUploadProgress({ current: 0, total, currentName: valid[0].name });
+
+    const entries: FileEntry[] = [];
+    for (let i = 0; i < valid.length; i++) {
+      const file = valid[i];
+      const previewUrl = await fileToPreview(file);
+      entries.push({ id: genId(), file, previewUrl });
+      setUploadProgress({ current: i + 1, total, currentName: file.name });
+    }
+
     setFiles((prev) => [...prev, ...entries]);
+    setUploadProgress(null);
   }
 
   function removeFile(id: string) {
@@ -283,12 +284,14 @@ export default function UploadPage() {
     fileInputRef.current?.click();
   }
 
+  function openFolderPicker() {
+    folderInputRef.current?.click();
+  }
+
   function onFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files) addFiles(Array.from(e.target.files));
     e.target.value = "";
   }
-
-  // ── Processing ──────────────────────────────────────────────────────────────
 
   function handleProcess() {
     if (files.length === 0) return;
@@ -306,19 +309,16 @@ export default function UploadPage() {
       organism,
       batchId,
     );
-    // Kick the manager off; navigate immediately so the user is never blocked.
     void startProcessingFromSession();
     navigate("/analyze/processing");
   }
-
-  // ── Computed ────────────────────────────────────────────────────────────────
 
   const totalBytes = files.reduce((sum, f) => sum + f.file.size, 0);
   const hasFiles = files.length > 0;
 
   return (
     <div className="flex h-full flex-col">
-      {/* Hidden file input */}
+      {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
         type="file"
@@ -327,52 +327,89 @@ export default function UploadPage() {
         className="hidden"
         onChange={onFileInputChange}
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        // @ts-expect-error — non-standard but widely supported
+        webkitdirectory=""
+        directory=""
+        multiple
+        className="hidden"
+        onChange={onFileInputChange}
+      />
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between border-b px-6 py-4">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="Go back"
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="flex items-center gap-2">
-            <Microscope className="h-5 w-5 text-primary" />
-            <h1 className="text-lg font-semibold">{organismLabel} Analysis — Upload Images</h1>
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-6xl px-6 py-8">
+          {/* Breadcrumb: project name · mode */}
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => navigate("/analyze")}
+                className="flex items-center gap-1 transition-colors hover:text-foreground"
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <span className="font-medium text-foreground">{projectName ?? "Untitled Project"}</span>
+              <span className="text-muted-foreground/50">·</span>
+              <span className="flex items-center gap-1">
+                <ModeIcon className="h-3.5 w-3.5" />
+                {modeLabel}
+              </span>
+              <span className="text-muted-foreground/50">·</span>
+              <span>{organismLabel}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setConfigOpen(true)}
+              aria-label="Open inference settings"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
           </div>
-        </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => setConfigOpen(true)}
-          aria-label="Open inference settings"
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-      </header>
 
-      {/* ── Content ──────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {/* Drop zone — visible when no files */}
-        {!hasFiles && (
-          <div className="mx-auto max-w-lg">
+          {/* Title */}
+          <h1 className="mb-6 flex items-center gap-2 text-2xl font-semibold tracking-tight">
+            <ArrowUpFromLine className="h-6 w-6" />
+            Upload
+          </h1>
+
+          {/* Upload progress bar */}
+          {uploadProgress && (
+            <div className="mb-6 rounded-lg border bg-muted/30 px-6 py-5">
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-base font-semibold text-primary">Processing files…</p>
+                <p
+                  className="max-w-full truncate font-mono text-xs text-muted-foreground"
+                  title={uploadProgress.currentName}
+                >
+                  {uploadProgress.currentName}
+                </p>
+              </div>
+              <Progress
+                className="mt-4"
+                value={(uploadProgress.current / Math.max(uploadProgress.total, 1)) * 100}
+              />
+              <p className="mt-2 text-right text-xs text-muted-foreground tabular-nums">
+                {uploadProgress.current} / {uploadProgress.total}
+              </p>
+            </div>
+          )}
+
+          {/* Empty state — big drop zone */}
+          {!hasFiles && !uploadProgress && (
             <DropZone
               isDragOver={isDragOver}
               onDrop={addFiles}
               onPick={openFilePicker}
+              onPickFolder={openFolderPicker}
             />
-          </div>
-        )}
+          )}
 
-        {/* Thumbnail grid + drop zone fallback when has files */}
-        {hasFiles && (
-          <div className="space-y-4">
-            {/* Compact drop zone */}
+          {/* With files — compact strip + left-aligned grid */}
+          {hasFiles && (
             <div
               onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
               onDrop={(e) => {
@@ -382,58 +419,72 @@ export default function UploadPage() {
                 if (dropped.length > 0) addFiles(dropped);
                 setIsDragOver(false);
               }}
+              className={cn(
+                "rounded-lg border transition-colors",
+                isDragOver ? "border-primary bg-primary/5" : "border-border",
+              )}
             >
-              <DropZone
-                isDragOver={isDragOver}
-                onDrop={addFiles}
-                onPick={openFilePicker}
-              />
-            </div>
+              {/* Compact header strip */}
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b bg-muted/30 px-5 py-4">
+                <div className="flex flex-col gap-1">
+                  <h2 className="text-base font-semibold">
+                    Drag and drop images to upload.
+                  </h2>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      .jpg, .png, .bmp, .tiff
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    *Max size of 20MB per image.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={openFilePicker}>
+                    <FileIcon className="mr-2 h-4 w-4" />
+                    Select Files
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={openFolderPicker}>
+                    <FolderIcon className="mr-2 h-4 w-4" />
+                    Select Folder
+                  </Button>
+                  <Button size="sm" onClick={handleProcess}>
+                    Process Images
+                    <svg className="ml-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                  </Button>
+                </div>
+              </div>
 
-            {/* Thumbnails */}
-            <div className="flex flex-wrap gap-4">
-              {files.map((entry) => (
-                <Thumbnail
-                  key={entry.id}
-                  entry={entry}
-                  onRemove={removeFile}
-                  isSelected={selectedIds.has(entry.id)}
-                  onToggleSelect={toggleSelect}
-                  anySelected={selectedIds.size > 0}
-                />
-              ))}
-              <AddMoreCard onClick={openFilePicker} />
+              {/* Thumbnails — left aligned */}
+              <div className="flex flex-wrap justify-start gap-4 p-6">
+                {files.map((entry) => (
+                  <Thumbnail
+                    key={entry.id}
+                    entry={entry}
+                    onRemove={removeFile}
+                    isSelected={selectedIds.has(entry.id)}
+                    onToggleSelect={toggleSelect}
+                    anySelected={selectedIds.size > 0}
+                  />
+                ))}
+                <AddMoreCard onClick={openFilePicker} />
+              </div>
+
+              {/* Footnote */}
+              <div className="flex items-center justify-between border-t px-5 py-3 text-xs text-muted-foreground">
+                <span>
+                  {files.length} image{files.length !== 1 ? "s" : ""} · {formatBytes(totalBytes)}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* ── Footer ──────────────────────────────────────────────────────── */}
-      <footer className="flex items-center justify-between border-t px-6 py-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <FileImage className="h-4 w-4" />
-          <span>
-            {files.length === 0
-              ? "No images selected"
-              : `${files.length} image${files.length !== 1 ? "s" : ""} · ${formatBytes(totalBytes)}`}
-          </span>
-        </div>
-        <Button
-          onClick={handleProcess}
-          disabled={!hasFiles}
-        >
-          Process Images
-          <svg className="ml-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
-          </svg>
-        </Button>
-      </footer>
-
-      {/* ── Config Panel ───────────────────────────────────────────────── */}
-      <ConfigPanel
-        open={configOpen}
-        onOpenChange={setConfigOpen}
-      />
+      <ConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
     </div>
   );
 }

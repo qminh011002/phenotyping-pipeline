@@ -87,7 +87,7 @@ export function ResultViewerHeader({
                 <span className="font-mono font-semibold text-foreground">
                   {batchSummary.total_count}
                 </span>{" "}
-                eggs ·{" "}
+                {currentResult.organism === "neonate" ? "neonates" : "eggs"} ·{" "}
                 <span className="font-mono">
                   {batchSummary.total_elapsed_seconds.toFixed(1)}s
                 </span>
