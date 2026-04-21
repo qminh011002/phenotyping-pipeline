@@ -288,6 +288,23 @@ class EggInferenceService:
 
     # ── Synchronous inference (runs in ThreadPoolExecutor) ─────────────────────
 
+    def _stage(self, code: str, filename: str, batch_id: str) -> None:
+        """Emit a structured stage log consumed by the frontend via /logs/stream.
+
+        Safe to call from worker threads — RingBufferHandler bridges via
+        loop.call_soon_threadsafe.
+        """
+        logger.info(
+            "stage",
+            extra={
+                "event": "analysis.stage",
+                "stage": code,
+                "batch_id": batch_id,
+                "filename": filename,
+                "organism": "egg",
+            },
+        )
+
     def _run_inference(
         self, image: np.ndarray, filename: str, batch_id: str
     ) -> DetectionResult:
@@ -336,9 +353,11 @@ class EggInferenceService:
         h, w = image.shape[:2]
 
         # ── 2. Tile ───────────────────────────────────────────────────────────
+        self._stage("image.tile", filename, batch_id)
         tiles, coords = self._tile_image(image)
 
         # ── 3. Batch inference ────────────────────────────────────────────────
+        self._stage("image.detect", filename, batch_id)
         all_boxes: list[np.ndarray] = []
         all_scores: list[float] = []
         skipped = 0
@@ -391,6 +410,7 @@ class EggInferenceService:
                     all_scores.append(float(conf))
 
         # ── 5. Post-filter ────────────────────────────────────────────────────
+        self._stage("image.dedup", filename, batch_id)
         if all_boxes:
             boxes_arr = np.stack(all_boxes, axis=0)
             scores_arr = np.array(all_scores, dtype=np.float32)
@@ -412,6 +432,7 @@ class EggInferenceService:
         egg_count = len(boxes_arr)
 
         # ── 6. Draw overlay ──────────────────────────────────────────────────
+        self._stage("image.draw", filename, batch_id)
         overlay = image.copy()
         annotations: list[BBox] = []
 
@@ -470,6 +491,7 @@ class EggInferenceService:
         self._draw_board(overlay, result_lines, board_x, bottom + 10)
 
         # ── 9. Save overlay + raw image to disk ──────────────────────────────
+        self._stage("image.save", filename, batch_id)
         batch_dir = self._get_storage_dir() / batch_id
         batch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -531,6 +553,8 @@ class EggInferenceService:
         InvalidImageError
             If the bytes cannot be decoded as an image.
         """
+        self._stage("image.decode", filename, batch_id)
+
         # Decode image bytes (CPU-bound, runs in executor)
         def _decode() -> np.ndarray:
             arr = np.frombuffer(image_data, np.uint8)

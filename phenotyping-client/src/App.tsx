@@ -1,7 +1,9 @@
 import "./index.css";
+import { useEffect, useState } from "react";
 import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 
 import { AppShell } from "@/components/layout/AppShell";
+import { LoadingScreen } from "@/components/LoadingScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HomePage from "@/pages/HomePage";
@@ -43,5 +45,11 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
+  const [booting, setBooting] = useState(true);
+  useEffect(() => {
+    const t = window.setTimeout(() => setBooting(false), 600);
+    return () => window.clearTimeout(t);
+  }, []);
+  if (booting) return <LoadingScreen />;
   return <RouterProvider router={router} />;
 }

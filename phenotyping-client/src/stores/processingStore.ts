@@ -53,6 +53,10 @@ interface ProcessingStore {
   totalElapsedSeconds: number;
   error: string | null;
   interruptedBatch: InterruptedBatchInfo | null;
+  // Human-readable description of the current processing phase, streamed from
+  // the backend logs WS via stageTracker (or set directly by the manager for
+  // client-side phases).
+  stage: string | null;
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -75,6 +79,7 @@ interface ProcessingStore {
   setTotalElapsed: (seconds: number) => void;
   setError: (msg: string | null) => void;
   setInterruptedBatch: (info: InterruptedBatchInfo | null) => void;
+  setStage: (stage: string | null) => void;
 
   setProjectName: (name: string | null) => void;
   setClasses: (classes: string[]) => void;
@@ -94,6 +99,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
   totalElapsedSeconds: 0,
   error: null,
   interruptedBatch: null,
+  stage: null,
   projectName: null,
   classes: [],
 
@@ -109,6 +115,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       completedDurations: [],
       totalElapsedSeconds: 0,
       processedCount: 0,
+      stage: null,
     }),
 
   setImages: (images) => set({ images }),
@@ -118,7 +125,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       images: state.images.map((img) => (img.id === id ? { ...img, ...update } : img)),
     })),
 
-  finishProcessing: () => set({ isProcessing: false, currentImageStartMs: null }),
+  finishProcessing: () => set({ isProcessing: false, currentImageStartMs: null, stage: null }),
 
   reset: () =>
     set({
@@ -135,6 +142,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       totalElapsedSeconds: 0,
       error: null,
       interruptedBatch: null,
+      stage: null,
       projectName: null,
       classes: [],
     }),
@@ -155,7 +163,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
   markRestoredFromBackend: () => set({ isRestoredFromBackend: true }),
 
   setCompletedBatch: (batchId) =>
-    set({ completedBatchId: batchId, isProcessing: false, currentImageStartMs: null }),
+    set({ completedBatchId: batchId, isProcessing: false, currentImageStartMs: null, stage: null }),
 
   setCurrentImageStart: (ms) => set({ currentImageStartMs: ms }),
 
@@ -168,6 +176,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
 
   setInterruptedBatch: (info) =>
     set({ interruptedBatch: info, isProcessing: false }),
+
+  setStage: (stage) => set({ stage }),
 
   setProjectName: (projectName) => set({ projectName }),
 

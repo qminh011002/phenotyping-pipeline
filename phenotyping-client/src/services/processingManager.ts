@@ -36,7 +36,12 @@ import {
   type StoredFile,
 } from "@/features/upload/lib/processingSession";
 import { useProcessingStore } from "@/stores/processingStore";
+import { startStageTracker } from "./stageTracker";
 import type { DetectionResult } from "@/types/api";
+
+function setStage(stage: string | null): void {
+  useProcessingStore.getState().setStage(stage);
+}
 
 interface RuntimeState {
   running: boolean;
@@ -151,6 +156,7 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
       );
       runtime.dbBatchId = batch.id;
       runtime.organism = (batch.organism_type ?? loadOrganism()) as Organism;
+      startStageTracker();
       void runProcessLoop(stored, batch.processed_image_count, batch.id);
       return true;
     }
@@ -218,10 +224,12 @@ export async function finalizeInterruptedBatch(): Promise<void> {
 async function runNewBatch(stored: StoredFile[]): Promise<void> {
   runtime.running = true;
   runtime.cancelled = false;
+  startStageTracker();
   const store = useProcessingStore.getState();
   const organism = loadOrganism() as Organism;
   runtime.organism = organism;
 
+  setStage("Loading configuration…");
   let configSnapshot: Record<string, unknown> = {};
   try {
     const currentConfig = await getConfig();
@@ -231,6 +239,7 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
     /* non-fatal — proceed with empty snapshot */
   }
 
+  setStage("Creating analysis batch…");
   let dbBatchId: string;
   try {
     const detail = await createBatch({
@@ -284,15 +293,20 @@ async function runProcessLoop(
     store.updateImage(file.id, { status: "processing" });
 
     try {
+      setStage(`Loading image — ${file.name} (${i + 1}/${stored.length})…`);
       const resp = await fetch(file.blobUrl);
       if (!resp.ok) throw new Error(`source image unavailable (${resp.status})`);
       const blob = await resp.blob();
       const fileObj = new File([blob], file.name, { type: file.type });
 
       if (runtime.cancelled) break;
+      // Backend now drives per-image stages (decode/tile/detect/dedup/draw/save)
+      // via the logs WS — those will overwrite this label below as they arrive.
+      setStage(`Uploading — ${file.name} (${i + 1}/${stored.length})…`);
       const result = await inferSingle(runtime.organism, fileObj, dbBatchId);
       if (runtime.cancelled) break;
 
+      setStage(`Persisting result — ${file.name} (${i + 1}/${stored.length})…`);
       await addImageResult(dbBatchId, {
         filename: result.filename,
         count: result.count,
@@ -337,8 +351,10 @@ async function runProcessLoop(
   const elapsed = (Date.now() - startTime) / 1000;
   store.setTotalElapsed(elapsed);
 
+  setStage("Finalizing batch…");
   try {
     await completeBatch(dbBatchId);
+    setStage("Loading results…");
     const detail = await getAnalysisDetail(dbBatchId);
     storeBatchDetail({
       id: detail.id,
