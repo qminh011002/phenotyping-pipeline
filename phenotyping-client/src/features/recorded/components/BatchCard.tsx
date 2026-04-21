@@ -158,6 +158,55 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
             <span className="hidden sm:inline">{formatDate(batch.created_at)} · </span>
             {formatTime(batch.created_at)}
           </div>
+          {/* Delete — inline in the flex so it never collides with the
+              date / chevron. Kept hidden until hover so the resting state
+              reads as a single "info row", then swaps to chevron + trash
+              on hover. Wrapped in a stopPropagation span so clicking
+              anywhere on the trash icon doesn't bubble into the card's
+              "open detail" handler. */}
+          {onDelete && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground",
+                      "opacity-0 transition-all duration-150",
+                      "group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive",
+                      "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                      deleting && "pointer-events-none opacity-50",
+                    )}
+                    title="Delete batch"
+                    disabled={deleting}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </AlertDialogTrigger>
+                <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove the {batch.organism_type} analysis from{" "}
+                      {formatDate(batch.created_at)} with {batch.total_image_count} image
+                      {batch.total_image_count !== 1 ? "s" : ""}. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleDelete}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    >
+                      {deleting ? "Deleting…" : "Delete"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </span>
+          )}
           <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 -translate-x-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-x-0" />
         </div>
       </div>
@@ -202,11 +251,11 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
       {/* Footer: device tag + confidence bar */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1">
-          <Badge variant="outline" className="font-mono text-[10px] gap-1 h-5">
+          <Badge variant="outline" className="font-mono text-[10px] gap-1 h-5 uppercase">
             <Cpu className="h-2.5 w-2.5" />
             {batch.device}
           </Badge>
-          <Badge variant="outline" className="text-[10px] h-5">{batch.mode}</Badge>
+          <Badge variant="outline" className="text-[10px] h-5 capitalize">{batch.mode}</Badge>
         </div>
 
         {confidencePct !== null && (
@@ -223,49 +272,6 @@ export function BatchCard({ batch, onDelete }: BatchCardProps) {
         )}
       </div>
 
-      {/* Delete button — shown on hover, stop propagation */}
-      {onDelete && (
-        <div
-          className="absolute top-3 right-7 opacity-0 group-hover:opacity-100 transition-opacity"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  "rounded-md p-1.5 text-muted-foreground",
-                  "hover:bg-destructive/10 hover:text-destructive transition-colors",
-                  deleting && "opacity-50 pointer-events-none"
-                )}
-                title="Delete batch"
-                disabled={deleting}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </AlertDialogTrigger>
-            <AlertDialogContent onClick={(e) => e.stopPropagation()}>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will permanently remove the {batch.organism_type} analysis from{" "}
-                  {formatDate(batch.created_at)} with {batch.total_image_count} image
-                  {batch.total_image_count !== 1 ? "s" : ""}. This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={handleDelete}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                >
-                  {deleting ? "Deleting…" : "Delete"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      )}
     </div>
   );
 }

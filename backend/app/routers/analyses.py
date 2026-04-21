@@ -24,10 +24,12 @@ from app.schemas.analysis import (
     AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisListResponse,
+    BatchDownloadRequest,
     EditedAnnotationsUpdate,
     FailBatchRequest,
 )
 from app.services.analysis_service import AnalysisService
+from app.services.batch_export import stream_batch_archive
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +398,59 @@ async def get_raw(
         file_iterator(raw_path),
         media_type="image/png",
         headers={"Content-Disposition": f'inline; filename="{raw_path.name}"'},
+    )
+
+
+@router.post(
+    "/{batch_id}/download",
+    summary="Download a ZIP of overlay images + an .xlsx summary",
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "ZIP archive streamed to the client",
+        },
+        400: {"description": "No completed images match the selection"},
+        404: {"description": "Batch not found"},
+    },
+)
+async def download_analysis(
+    batch_id: UUID,
+    data: BatchDownloadRequest,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> StreamingResponse:
+    """Build a ZIP of overlay images + a styled summary.xlsx and stream it.
+
+    If `image_ids` is omitted the whole batch is included. Only completed
+    images are ever exported.
+    """
+    settings = get_settings()
+    storage_dir = Path(settings.image_storage_dir)
+    try:
+        result = await stream_batch_archive(
+            batch_id=batch_id,
+            image_ids=data.image_ids,
+            db=db,
+            storage_dir=storage_dir,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+
+    filename, iterator = result
+    return StreamingResponse(
+        iterator,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )
 
 

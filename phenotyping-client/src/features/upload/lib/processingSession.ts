@@ -42,6 +42,8 @@ export interface StoredImageDetail {
   overlay_path: string | null;
   error_message: string | null;
   created_at: string;
+  /** Model annotations at inference time — persisted since migration 008. */
+  annotations?: BBox[] | null;
   /** User-edited annotations (FS-009); supersedes model annotations if present */
   edited_annotations?: BBox[] | null;
 }

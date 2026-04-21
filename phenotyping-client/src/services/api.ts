@@ -224,6 +224,38 @@ export async function deleteAnalysis(batchId: string): Promise<void> {
   await http.delete(`analyses/${batchId}`);
 }
 
+/**
+ * POST /analyses/{batch_id}/download — build a ZIP of overlay images + an
+ * .xlsx summary. Returns the raw response so the caller can pull a Blob and
+ * the suggested filename from Content-Disposition.
+ */
+export async function downloadBatchArchive(
+  batchId: string,
+  imageIds: string[] | null,
+): Promise<{ blob: Blob; filename: string }> {
+  const url = `${getBaseUrl().replace(/\/$/, "")}/analyses/${batchId}/download`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_ids: imageIds ?? null }),
+  });
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const json = (await response.json()) as { detail?: string };
+      detail = json.detail ?? null;
+    } catch {
+      detail = response.statusText || null;
+    }
+    throw new Error(detail ?? `Download failed (${response.status})`);
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const filename = match?.[1] ?? `batch-${batchId}.zip`;
+  const blob = await response.blob();
+  return { blob, filename };
+}
+
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 /** GET /dashboard/stats — return aggregate statistics for the home page */

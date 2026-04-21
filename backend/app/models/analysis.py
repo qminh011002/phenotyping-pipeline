@@ -78,6 +78,12 @@ class AnalysisImage(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=datetime.utcnow
     )
+    # Model-produced bounding boxes at inference time (read-only baseline).
+    # Needed so saved batches can be reopened in the result viewer with the
+    # same model boxes the user saw on first processing.
+    annotations: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True
+    )
     # FS-009: operator-corrected bounding boxes — supersedes model annotations when set
     edited_annotations: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True

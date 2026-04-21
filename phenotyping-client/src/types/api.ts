@@ -88,6 +88,8 @@ export interface AnalysisImageSummary {
   overlay_path: string | null;
   error_message: string | null;
   created_at: string; // ISO 8601
+  /** Model-produced annotations at inference time (read-only baseline). */
+  annotations?: BBox[] | null;
   /** User-edited annotations; if present, supersedes annotations for display. */
   edited_annotations?: BBox[] | null;
 }

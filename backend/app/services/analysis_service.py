@@ -161,6 +161,7 @@ class AnalysisService:
             avg_confidence=result.avg_confidence,
             elapsed_secs=result.elapsed_seconds,
             overlay_path=overlay_path_value,
+            annotations=result.annotations or None,
         )
         db.add(image)
         await db.flush()

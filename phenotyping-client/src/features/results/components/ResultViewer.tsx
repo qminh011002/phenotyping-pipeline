@@ -29,6 +29,7 @@ import {
   loadProjectClasses,
   storeBatchDetail,
 } from "@/features/upload/lib/processingSession";
+import { consumeStartIndex } from "@/features/recorded/lib/openBatchInResults";
 import {
   getAnalysesOverlayUrl,
   getAnalysesRawUrl,
@@ -115,6 +116,13 @@ export function ResultViewer({ className }: ResultViewerProps) {
     setRawUrlByName(
       Object.fromEntries(storedFiles.map((f) => [f.name, f.blobUrl])),
     );
+    // Bridge from /recorded can pre-select an image — consume it once so
+    // refreshing the page after landing doesn't keep re-selecting the
+    // same index.
+    const startIdx = consumeStartIndex();
+    if (startIdx !== null && startIdx >= 0 && startIdx < stored.length) {
+      setCurrentIndex(startIdx);
+    }
     setLoading(false);
   }, [navigate]);
 

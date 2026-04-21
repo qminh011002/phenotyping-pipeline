@@ -88,6 +88,7 @@ class AnalysisImageSummary(BaseModel):
     overlay_path: str | None = None
     error_message: str | None = None
     created_at: datetime
+    annotations: list[dict] | None = None
     edited_annotations: list[dict] | None = None
 
     model_config = {"from_attributes": True}
@@ -193,3 +194,16 @@ class FailBatchRequest(BaseModel):
     """Request body for POST /analyses/{id}/fail."""
 
     reason: str = Field(..., min_length=1, max_length=1000)
+
+
+class BatchDownloadRequest(BaseModel):
+    """Request body for POST /analyses/{id}/download.
+
+    `image_ids` is the subset of images to include. If omitted or empty the
+    server includes every completed image in the batch.
+    """
+
+    image_ids: list[UUID] | None = Field(
+        default=None,
+        description="Subset of image IDs to include. None/empty means all.",
+    )
