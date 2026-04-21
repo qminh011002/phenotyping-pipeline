@@ -413,8 +413,7 @@ export function BatchDetail() {
 
   function openSingleImage(image: AnalysisImageSummary) {
     if (!detail) return;
-    const idx = detail.images.findIndex((i) => i.id === image.id);
-    const ok = openBatchInResults(detail, { startIndex: idx >= 0 ? idx : 0 });
+    const ok = openBatchInResults(detail, { singleImageId: image.id });
     if (ok) {
       setTransitioning(true);
       // Defer the navigation so the LoadingScreen paints before React Router
