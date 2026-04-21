@@ -45,6 +45,10 @@ class LogBuffer:
         self._lock = asyncio.Lock()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._stop_heartbeat = False
+        # Captured in start_heartbeat (runs in the event loop) so logs emitted
+        # from worker threads — where asyncio.get_running_loop() raises — can
+        # still schedule fan-out via loop.call_soon_threadsafe.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ── Subscriber management ────────────────────────────────────────────────
 
@@ -130,8 +134,12 @@ class LogBuffer:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop — skip fan-out (will be handled on next log call)
-            return
+            # Called from a worker thread — fall back to the loop captured at
+            # startup. Without this, all logs emitted from the inference pool
+            # are silently dropped.
+            loop = self._loop
+            if loop is None or loop.is_closed():
+                return
 
         def _schedule() -> None:
             asyncio.create_task(
@@ -218,6 +226,7 @@ class LogBuffer:
         self._stop_heartbeat = False
         try:
             loop = asyncio.get_running_loop()
+            self._loop = loop
             self._heartbeat_task = loop.create_task(self._heartbeat_loop())
         except RuntimeError:
             # No running loop yet — start_heartbeat is called during startup

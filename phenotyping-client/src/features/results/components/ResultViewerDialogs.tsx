@@ -8,27 +8,46 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface ResultViewerDialogsProps {
   dirtyNavDialogOpen: boolean;
+  quitDialogOpen: boolean;
   resetDialogOpen: boolean;
   onDirtyNavOpenChange: (open: boolean) => void;
+  onQuitDialogOpenChange: (open: boolean) => void;
   onResetDialogOpenChange: (open: boolean) => void;
   onKeepEditing: () => void;
   onDiscardEdits: () => void;
+  onQuitWithoutSaving: () => void;
+  onSaveAndQuit: () => void;
   onCancelReset: () => void;
   onConfirmReset: () => void;
+  saveAndQuitDisabled: boolean;
 }
 
 export function ResultViewerDialogs({
   dirtyNavDialogOpen,
+  quitDialogOpen,
   resetDialogOpen,
   onDirtyNavOpenChange,
+  onQuitDialogOpenChange,
   onResetDialogOpenChange,
   onKeepEditing,
   onDiscardEdits,
+  onQuitWithoutSaving,
+  onSaveAndQuit,
   onCancelReset,
   onConfirmReset,
+  saveAndQuitDisabled,
 }: ResultViewerDialogsProps) {
   return (
     <>
@@ -54,6 +73,25 @@ export function ResultViewerDialogs({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={quitDialogOpen} onOpenChange={onQuitDialogOpenChange}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Save before quitting?</DialogTitle>
+            <DialogDescription>
+              Leave the results viewer now, or save your latest annotation edits before you quit.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={onQuitWithoutSaving}>
+              Quit
+            </Button>
+            <Button onClick={onSaveAndQuit} disabled={saveAndQuitDisabled}>
+              Save &amp; Quit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={resetDialogOpen}

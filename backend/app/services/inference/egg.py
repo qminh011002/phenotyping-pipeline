@@ -289,21 +289,14 @@ class EggInferenceService:
     # ── Synchronous inference (runs in ThreadPoolExecutor) ─────────────────────
 
     def _stage(self, code: str, filename: str, batch_id: str) -> None:
-        """Emit a structured stage log consumed by the frontend via /logs/stream.
+        """Emit a stage event to the /ws/stages broker.
 
-        Safe to call from worker threads — RingBufferHandler bridges via
-        loop.call_soon_threadsafe.
+        Safe to call from worker threads — the broker uses
+        run_coroutine_threadsafe with the loop captured at startup.
         """
-        logger.info(
-            "stage",
-            extra={
-                "event": "analysis.stage",
-                "stage": code,
-                "batch_id": batch_id,
-                "filename": filename,
-                "organism": "egg",
-            },
-        )
+        from app.services.stage_broker import emit_stage
+
+        emit_stage(code, batch_id, filename, organism="egg")
 
     def _run_inference(
         self, image: np.ndarray, filename: str, batch_id: str

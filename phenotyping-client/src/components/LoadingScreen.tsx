@@ -20,7 +20,7 @@ export function LoadingScreen({
                 src="/assets/gif/worm_cute_antennae.gif"
                 alt=""
                 aria-hidden
-                className="h-20 w-auto [image-rendering:pixelated]"
+                className="h-24 w-auto [image-rendering:pixelated]"
             />
             <p className="mt-6 font-mono text-sm text-muted-foreground">{status}</p>
             {counter && (

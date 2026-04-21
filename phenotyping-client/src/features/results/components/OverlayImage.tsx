@@ -28,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import type { BBox } from '@/types/api';
 import { clampBox, enforceMinSize, MIN_BOX_SIZE, normalizeBox } from '../lib/bboxMath';
+import { rasterizeBoxes } from '../lib/rasterizeBoxes';
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,13 @@ interface OverlayImageProps {
      * selection + resize handles + draw + delete are enabled.
      */
     editor?: OverlayImageEditor;
+    /**
+     * When true, render every non-selected box via a single rasterized canvas
+     * instead of per-box Konva.Rect nodes. Big perf win at 1k+ boxes; same
+     * pixels at natural image resolution. Defaults to false until proven on
+     * the dense neonate-egg case.
+     */
+    useOffscreen?: boolean;
 }
 
 // ── Tunables ───────────────────────────────────────────────────────────────
@@ -92,6 +100,12 @@ const FILL_SELECTED = 'rgba(59,130,246,0.10)';
 const DIM_OPACITY_BASE = 0.5;
 const DIM_OPACITY_HOVER = 0.3; // additional dim on top of base
 
+// The dim effect punches one destination-out rect per visible box — fine at
+// tens or hundreds, but a real cost in the thousands. Above this count we
+// drop the dim layer entirely: with that many boxes the scene is already
+// saturated and the highlight effect adds no information.
+const DIM_MAX_BOXES = 500;
+
 const HANDLE_PX = 10;
 
 // ── Label tunables ─────────────────────────────────────────────────────────
@@ -104,6 +118,13 @@ const HANDLE_PX = 10;
 const LABEL_SCREEN_PX = 10;
 const LABEL_SCALE_EXPONENT = 0.75;
 const LABEL_FG = '#f59e0b'; // slate-900 — high contrast on yellow
+
+// Auto-hide thresholds. Above LABEL_DENSITY_CAP visible boxes OR below
+// LABEL_MIN_SCREEN_PX effective font size, labels become unreadable pixel
+// mush — dropping them preserves information and saves the per-label
+// Tag+Text layout cost (the single dominant term in dense scenes).
+const LABEL_DENSITY_CAP = 200;
+const LABEL_MIN_SCREEN_PX = 6;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -133,6 +154,7 @@ export function OverlayImage({
     onBackgroundClick,
     onDimensions,
     editor,
+    useOffscreen = false,
 }: OverlayImageProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<Konva.Stage>(null);
@@ -586,8 +608,47 @@ export function OverlayImage({
             .filter(({ box }) => isVisible(box, confidenceThreshold));
     }, [renderBoxes, confidenceThreshold]);
 
-    // Dim is hidden during interaction and in draw mode.
-    const showDim = dimEnabled && !interacting && mode !== 'draw';
+    // Rasterize all non-selected boxes into a single canvas when useOffscreen
+    // is on. Rebuilds only when inputs actually change — NOT on zoom / pan /
+    // hover, so interaction stays free. The Stage transform scales the bitmap.
+    const rasterCanvas = useMemo(() => {
+        if (!useOffscreen || !imageEl) return null;
+        return rasterizeBoxes({
+            imageWidth: imageEl.naturalWidth,
+            imageHeight: imageEl.naturalHeight,
+            boxes: renderBoxes,
+            excludeIndex: editing && mode === 'drag' ? selectedIndex : null,
+            confidenceThreshold,
+        });
+    }, [useOffscreen, imageEl, renderBoxes, selectedIndex, editing, mode, confidenceThreshold]);
+
+    // Edit-mode click-to-select when non-selected boxes are inside the raster
+    // (they have no individual Konva nodes to listen on). AABB test in reverse
+    // order so top-drawn boxes win, matching the per-Rect path's z-order.
+    const handleRasterClick = useCallback(() => {
+        if (!editing || mode !== 'drag' || !editor) return;
+        const pt = getImagePointer();
+        if (!pt) return;
+        for (let i = visibleBoxesWithIdx.length - 1; i >= 0; i--) {
+            const { box, index } = visibleBoxesWithIdx[i];
+            if (index === selectedIndex) continue;
+            const [x1, y1, x2, y2] = box.bbox;
+            if (pt.x >= x1 && pt.x <= x2 && pt.y >= y1 && pt.y <= y2) {
+                editor.onSelect(index);
+                return;
+            }
+        }
+        editor.onSelect(null);
+    }, [editing, mode, editor, getImagePointer, visibleBoxesWithIdx, selectedIndex]);
+
+    // Dim is hidden during interaction, in draw mode, and when the box count
+    // exceeds DIM_MAX_BOXES (the destination-out compositing becomes the hot
+    // loop otherwise).
+    const showDim =
+        dimEnabled &&
+        !interacting &&
+        mode !== 'draw' &&
+        visibleBoxesWithIdx.length <= DIM_MAX_BOXES;
 
     const hovered = hoverIdx !== null ? renderBoxes[hoverIdx] : null;
 
@@ -597,6 +658,16 @@ export function OverlayImage({
 
     const invScale = 1 / Math.max(scale, 0.001);
     const handleSize = HANDLE_PX * invScale;
+
+    // With useOffscreen: non-selected boxes live inside rasterCanvas, so the
+    // per-box <Rect> loop only needs to render the selected one (for its
+    // Transformer + drag handlers). Without useOffscreen: render all of them
+    // as before.
+    const rectBoxes = useOffscreen
+        ? visibleBoxesWithIdx.filter(
+              ({ index }) => editing && mode === 'drag' && index === selectedIndex,
+          )
+        : visibleBoxesWithIdx;
 
     // Label sizing — see LABEL_SCALE_EXPONENT comment above. Clamp the font
     // size so very-zoomed-out views don't produce a label that swallows the
@@ -616,7 +687,7 @@ export function OverlayImage({
             >
                 {/* Zoom controls */}
                 <div className="pointer-events-none absolute bottom-4 left-4 z-20">
-                    <div className="pointer-events-auto flex items-center gap-1.5 rounded-[14px] border border-cyan-400/40 bg-card/70 px-2 py-1.5 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
+                    <div className="pointer-events-auto flex items-center rounded-[12px] border border-cyan-400/40 bg-card/70 px-1.5 py-1 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
                         <Button
                             variant="ghost"
                             size="icon-sm"
@@ -820,7 +891,22 @@ export function OverlayImage({
 
                         {/* Boxes layer — interactive when editing, display-only otherwise */}
                         <Layer>
-                            {visibleBoxesWithIdx.map(({ box, index }) => {
+                            {/* Rasterized non-selected boxes (useOffscreen path).
+                  One KonvaImage node for thousands of strokes. Click is
+                  routed to an AABB hit test so edit-mode selection works. */}
+                            {useOffscreen && rasterCanvas && (
+                                <KonvaImage
+                                    image={rasterCanvas}
+                                    width={imageSize.width}
+                                    height={imageSize.height}
+                                    listening={editing && mode === 'drag'}
+                                    onClick={handleRasterClick}
+                                    onTap={handleRasterClick}
+                                    perfectDrawEnabled={false}
+                                    shadowForStrokeEnabled={false}
+                                />
+                            )}
+                            {rectBoxes.map(({ box, index }) => {
                                 const [x1, y1, x2, y2] = box.bbox;
                                 const w = Math.max(0, x2 - x1);
                                 const h = Math.max(0, y2 - y1);
@@ -919,8 +1005,13 @@ export function OverlayImage({
 
                             {/* Class-name labels (above each visible box). Rendered last so
                   they sit on top of strokes; non-listening so they never
-                  interfere with selection / drag hit testing. */}
+                  interfere with selection / drag hit testing. Density-gated:
+                  skipped entirely when there are too many boxes to read or
+                  the effective on-screen font size is sub-readable — this
+                  drops the text-layout cost that dominates dense scenes. */}
                             {labelsVisible &&
+                                visibleBoxesWithIdx.length <= LABEL_DENSITY_CAP &&
+                                labelFontSize * scale >= LABEL_MIN_SCREEN_PX &&
                                 visibleBoxesWithIdx.map(({ box, index }) => {
                                     const [x1, y1, x2, y2] = box.bbox;
                                     // Approximate label height in image-space so we can flip the

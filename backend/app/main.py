@@ -137,6 +137,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Start the 1-second heartbeat task for WebSocket log streaming
     log_buffer.start_heartbeat()
 
+    # Bind the running loop to the stage broker so inference worker threads
+    # can emit stage events safely via run_coroutine_threadsafe.
+    import asyncio as _asyncio
+    from app.services.stage_broker import get_broker as _get_stage_broker
+
+    _get_stage_broker().bind_loop(_asyncio.get_running_loop())
+
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
@@ -172,7 +179,7 @@ app.add_middleware(RequestLoggingMiddleware)
 register_exception_handlers(app)
 
 # Import and include routers — use direct module paths to avoid circular __init__.py
-from app.routers import health, logs, config, inference
+from app.routers import health, logs, config, inference, stages
 from app.routers.analyses import router as analysis_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.models import router as models_router
@@ -181,6 +188,7 @@ from app.routers.settings import router as settings_router
 
 app.include_router(health.router)
 app.include_router(logs.router)
+app.include_router(stages.router)
 app.include_router(config.router)
 app.include_router(inference.router)
 app.include_router(analysis_router)

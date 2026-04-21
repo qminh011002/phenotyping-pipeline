@@ -92,6 +92,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [savingEdits, setSavingEdits] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [dirtyNavDialogOpen, setDirtyNavDialogOpen] = useState(false);
+  const [quitDialogOpen, setQuitDialogOpen] = useState(false);
   /** Index the user wants to navigate to while dirty */
   const [pendingNavIdx, setPendingNavIdx] = useState<number | null>(null);
   /** Ctrl/Cmd held — in non-edit mode this temporarily hides the dim overlay. */
@@ -181,15 +182,9 @@ export function ResultViewer({ className }: ResultViewerProps) {
     setDirtyNavDialogOpen(false);
     if (pendingNavIdx === null) return;
 
-    if (pendingNavIdx === -1) {
-      setPendingNavIdx(null);
-      navigate("/");
-      return;
-    }
-
     setCurrentIndex(pendingNavIdx);
     setPendingNavIdx(null);
-  }, [navigate, pendingNavIdx]);
+  }, [pendingNavIdx]);
 
   const cancelDirtyNav = useCallback(() => {
     setDirtyNavDialogOpen(false);
@@ -362,14 +357,21 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const redoAvailable = canRedo(history);
 
   const handleBack = useCallback(() => {
-    if (isDirty) {
-      setPendingNavIdx(-1);
-      setDirtyNavDialogOpen(true);
-      return;
-    }
+    setQuitDialogOpen(true);
+  }, []);
 
+  const handleQuitWithoutSaving = useCallback(() => {
+    setQuitDialogOpen(false);
     navigate("/");
-  }, [isDirty, navigate]);
+  }, [navigate]);
+
+  const handleSaveAndQuit = useCallback(async () => {
+    if (isDirty && !savingEdits) {
+      await handleSaveEdits();
+    }
+    setQuitDialogOpen(false);
+    navigate("/");
+  }, [handleSaveEdits, isDirty, navigate, savingEdits]);
 
   const handleRenameBatch = useCallback(
     async (next: string) => {
@@ -443,7 +445,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
   if (loading) {
     return (
-      <div className={cn("flex h-full items-center justify-center", className)}>
+      <div className={cn("flex h-screen items-center justify-center", className)}>
         <div className="flex items-center gap-3 text-muted-foreground">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <span>Loading results…</span>
@@ -454,7 +456,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
   if (!currentResult) {
     return (
-      <div className={cn("flex h-full flex-col", className)}>
+      <div className={cn("flex h-screen flex-col", className)}>
         <EmptyState
           icon={Download}
           title="No results found"
@@ -467,7 +469,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   }
 
   return (
-    <div className={cn("flex h-full flex-col", className)}>
+    <div className={cn("flex h-screen flex-col", className)}>
       <ResultViewerHeader
         batchDetail={batchDetail}
         batchSummary={batchSummary}
@@ -523,13 +525,18 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
       <ResultViewerDialogs
         dirtyNavDialogOpen={dirtyNavDialogOpen}
+        quitDialogOpen={quitDialogOpen}
         resetDialogOpen={resetDialogOpen}
         onDirtyNavOpenChange={setDirtyNavDialogOpen}
+        onQuitDialogOpenChange={setQuitDialogOpen}
         onResetDialogOpenChange={setResetDialogOpen}
         onKeepEditing={cancelDirtyNav}
         onDiscardEdits={confirmDirtyNav}
+        onQuitWithoutSaving={handleQuitWithoutSaving}
+        onSaveAndQuit={handleSaveAndQuit}
         onCancelReset={() => setResetDialogOpen(false)}
         onConfirmReset={handleResetToModel}
+        saveAndQuitDisabled={savingEdits}
       />
     </div>
   );

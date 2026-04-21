@@ -2,7 +2,6 @@ import { NavLink } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Home,
-  Microscope,
   History,
   Settings,
   ChevronLeft,
@@ -23,7 +22,6 @@ import { ProcessingIndicator } from "./ProcessingIndicator";
 
 const NAV_ITEMS = [
   { to: "/", icon: Home, label: "Home" },
-  { to: "/analyze", icon: Microscope, label: "Analyze" },
   { to: "/recorded", icon: History, label: "Recorded" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ] as const;

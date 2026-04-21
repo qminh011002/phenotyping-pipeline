@@ -1,12 +1,10 @@
-// Subscribes to the /logs/stream WebSocket, filters for "analysis.stage"
-// events tied to the currently running batch, and writes a human-readable
-// label into the processing store so the UI can display the current phase.
+// Subscribes to the dedicated /ws/stages WebSocket and writes a human-readable
+// label for the currently-running batch into the processing store so the UI
+// can display the current phase of inference.
 
 import { getBaseUrl } from "./http";
 import { getRunningBatchId } from "./processingManager";
-import { LogStreamClient } from "./websocket";
 import { useProcessingStore } from "@/stores/processingStore";
-import type { LogEntry } from "@/types/api";
 
 const STAGE_LABELS: Record<string, string> = {
     "image.decode": "Decoding image",
@@ -16,6 +14,13 @@ const STAGE_LABELS: Record<string, string> = {
     "image.draw": "Drawing overlay",
     "image.save": "Saving overlay",
 };
+
+interface StageEvent {
+    stage: string;
+    batch_id: string;
+    filename?: string;
+    organism?: string;
+}
 
 function composeStageText(code: string, filename?: string): string {
     const base = STAGE_LABELS[code] ?? code;
@@ -27,32 +32,105 @@ function composeStageText(code: string, filename?: string): string {
     return `${base}${filePart}${indexPart}…`;
 }
 
-function isStageEntry(entry: LogEntry): boolean {
-    const ctx = entry.context ?? {};
-    return ctx.event === "analysis.stage" && typeof ctx.stage === "string";
+function toWsUrl(base: string): string {
+    const u = base.replace(/^http/, "ws").replace(/\/$/, "");
+    return `${u}/ws/stages`;
 }
 
-let client: LogStreamClient | null = null;
+let ws: WebSocket | null = null;
+let stopped = true;
+let reconnectTimer: number | null = null;
+let reconnectDelay = 500;
+
+function clearReconnect(): void {
+    if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+}
+
+function scheduleReconnect(): void {
+    if (stopped) return;
+    clearReconnect();
+    const delay = Math.min(reconnectDelay, 5000);
+    reconnectDelay = Math.min(reconnectDelay * 2, 5000);
+    reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        openSocket();
+    }, delay);
+}
+
+function openSocket(): void {
+    if (stopped) return;
+    const url = toWsUrl(getBaseUrl());
+    console.debug("[stageTracker] connecting to", url);
+    let sock: WebSocket;
+    try {
+        sock = new WebSocket(url);
+    } catch (e) {
+        console.warn("[stageTracker] ws construct failed:", e);
+        scheduleReconnect();
+        return;
+    }
+    ws = sock;
+
+    sock.onopen = () => {
+        reconnectDelay = 500;
+        console.info("[stageTracker] ✅ connected to", url);
+    };
+    sock.onmessage = (ev) => {
+        let evt: StageEvent;
+        try {
+            evt = JSON.parse(ev.data as string) as StageEvent;
+        } catch (e) {
+            console.warn("[stageTracker] bad frame:", ev.data, e);
+            return;
+        }
+        const active = getRunningBatchId();
+        if (!active) {
+            console.log("[stageTracker] 📥", evt.stage, evt.filename, "(no active batch — ignored)");
+            return;
+        }
+        if (evt.batch_id !== active) {
+            console.log(
+                "[stageTracker] 📥 (batch mismatch — ignored)",
+                "got=",
+                evt.batch_id,
+                "active=",
+                active,
+                evt,
+            );
+            return;
+        }
+        console.log("[stageTracker] 📥", evt.stage, "—", evt.filename, "(batch", active, ")");
+        useProcessingStore.getState().setStage(composeStageText(evt.stage, evt.filename));
+    };
+    sock.onerror = (e) => {
+        console.warn("[stageTracker] ws error:", e);
+    };
+    sock.onclose = (e) => {
+        console.debug("[stageTracker] ws closed:", e.code, e.reason);
+        if (ws === sock) ws = null;
+        scheduleReconnect();
+    };
+}
 
 export function startStageTracker(): void {
-    if (client) return;
-    client = new LogStreamClient({
-        onLog: (entry) => {
-            if (!isStageEntry(entry)) return;
-            const ctx = entry.context as { stage: string; batch_id?: string; filename?: string };
-            const active = getRunningBatchId();
-            if (!active || ctx.batch_id !== active) return;
-            useProcessingStore.getState().setStage(composeStageText(ctx.stage, ctx.filename));
-        },
-        onHeartbeat: () => {
-            /* no-op */
-        },
-    });
-    client.connect(getBaseUrl());
+    if (!stopped && ws) return;
+    stopped = false;
+    reconnectDelay = 500;
+    openSocket();
 }
 
 export function stopStageTracker(): void {
-    if (!client) return;
-    client.disconnect();
-    client = null;
+    stopped = true;
+    clearReconnect();
+    if (ws) {
+        try {
+            ws.close();
+        } catch {
+            /* ignore */
+        }
+        ws = null;
+    }
 }

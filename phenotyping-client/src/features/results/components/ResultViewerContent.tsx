@@ -84,6 +84,12 @@ export function ResultViewerContent({
           saveInProgress={savingEdits}
           dimEnabled={!ctrlHeld}
           labelsVisible={labelsVisible}
+          // Dense scenes (>500 boxes) rasterize non-selected boxes into a
+          // single canvas to keep zoom/pan/hover snappy. Sparse scenes stay
+          // on the per-Rect path which has richer hover behavior.
+          useOffscreen={
+            (editMode && currentImageRecordId ? sessionBoxes : viewBoxes).length > 500
+          }
           onBackgroundClick={onBackgroundClick}
           onDimensions={onDimensions}
           editor={

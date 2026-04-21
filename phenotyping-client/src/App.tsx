@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { startStageTracker, stopStageTracker } from "@/services/stageTracker";
 import HomePage from "@/pages/HomePage";
 import AnalyzePage from "@/pages/AnalyzePage";
 import UploadPage from "@/pages/UploadPage";
@@ -32,14 +33,14 @@ const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <HomePage /> },
-          { path: "analyze/upload", element: <UploadPage /> },
           { path: "analyze/processing", element: <ProcessingPage /> },
-          { path: "analyze/results", element: <ResultPage /> },
           { path: "recorded", element: <RecordedPage /> },
           { path: "settings", element: <SettingsPage /> },
         ],
       },
       { path: "analyze", element: <AnalyzePage /> },
+      { path: "analyze/upload", element: <UploadPage /> },
+      { path: "analyze/results", element: <ResultPage /> },
     ],
   },
 ]);
@@ -49,6 +50,10 @@ export default function App() {
   useEffect(() => {
     const t = window.setTimeout(() => setBooting(false), 600);
     return () => window.clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    startStageTracker();
+    return () => stopStageTracker();
   }, []);
   if (booting) return <LoadingScreen />;
   return <RouterProvider router={router} />;

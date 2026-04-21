@@ -18,18 +18,18 @@ const renderSidebar = (initialEntries: string[] = ["/"]) => {
 };
 
 describe("Sidebar", () => {
-  it("renders all 4 navigation items", () => {
+  it("renders the remaining navigation items", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: /home/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /analyze/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /recorded/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /settings/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /analyze/i })).not.toBeInTheDocument();
   });
 
-  it("renders exactly 4 nav links", () => {
+  it("renders exactly 3 nav links", () => {
     renderSidebar();
     const links = screen.getAllByRole("link");
-    expect(links).toHaveLength(4);
+    expect(links).toHaveLength(3);
   });
 
   it("applies active class to the current route", () => {
@@ -85,7 +85,6 @@ describe("Sidebar", () => {
   it("has correct href for each nav item", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: /home/i })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: /analyze/i })).toHaveAttribute("href", "/analyze");
     expect(screen.getByRole("link", { name: /recorded/i })).toHaveAttribute("href", "/recorded");
     expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
   });
