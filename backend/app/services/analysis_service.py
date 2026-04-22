@@ -183,16 +183,14 @@ class AnalysisService:
 
         return image
 
-    async def complete_batch(
+    async def _recompute_aggregates(
         self,
-        batch_id: UUID,
+        batch: AnalysisBatch,
         db: AsyncSession,
-    ) -> AnalysisBatch:
-        """Mark a batch as completed and compute aggregate statistics.
+    ) -> None:
+        """Recompute total_count / avg_confidence / total_elapsed_secs from child images.
 
-        Aggregates are computed from all child AnalysisImage rows that have
-        status='completed'. Images with status='failed' are excluded from
-        aggregates but counted in total_image_count.
+        Only images with status='completed' contribute. Mutates ``batch`` in place.
         """
         stmt = (
             select(
@@ -201,32 +199,88 @@ class AnalysisService:
                 func.coalesce(func.avg(AnalysisImage.avg_confidence), 0).label("avg_conf"),
                 func.coalesce(func.sum(AnalysisImage.elapsed_secs), 0).label("total_elapsed"),
             )
-            .where(AnalysisImage.batch_id == batch_id)
+            .where(AnalysisImage.batch_id == batch.id)
             .where(AnalysisImage.status == "completed")
         )
         result = await db.execute(stmt)
         row = result.one()
-
-        stmt_batch = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
-        batch_result = await db.execute(stmt_batch)
-        batch = batch_result.scalar_one()
-
-        batch.status = "completed"
-        batch.completed_at = datetime.now(timezone.utc)
         batch.total_count = int(row.total_count)
         batch.avg_confidence = float(row.avg_conf) if row.n > 0 else None
         batch.total_elapsed_secs = float(row.total_elapsed)
 
+    async def complete_batch(
+        self,
+        batch_id: UUID,
+        db: AsyncSession,
+    ) -> AnalysisBatch:
+        """Finish processing and drop the batch into ``draft`` state.
+
+        Computes aggregates now so the ResultViewer can show stats while the
+        operator reviews. The batch only moves to ``completed`` when the user
+        explicitly clicks Finish (see :meth:`finish_batch`). A draft is *not*
+        listed on the Recorded page until it's finished.
+        """
+        stmt_batch = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        batch_result = await db.execute(stmt_batch)
+        batch = batch_result.scalar_one()
+
+        await self._recompute_aggregates(batch, db)
+        batch.status = "draft"
+        batch.completed_at = None
+
         await db.flush()
         await db.refresh(batch)
         logger.info(
-            "Analysis batch completed",
+            "Analysis batch moved to draft",
             extra={
                 "context": {
                     "batch_id": str(batch_id),
                     "total_count": batch.total_count,
                     "avg_confidence": batch.avg_confidence,
                     "total_elapsed_secs": batch.total_elapsed_secs,
+                }
+            },
+        )
+        return batch
+
+    async def finish_batch(
+        self,
+        batch_id: UUID,
+        db: AsyncSession,
+    ) -> AnalysisBatch | None:
+        """Promote a draft to ``completed`` — the explicit "save to Records" step.
+
+        Re-runs aggregate calculation so any annotation edits made in the
+        reviewer are reflected in the stored totals. Returns ``None`` if the
+        batch is missing; raises ``ValueError`` if it's not in ``draft`` state
+        (the router maps this to HTTP 409).
+        """
+        stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        result = await db.execute(stmt)
+        batch = result.scalar_one_or_none()
+        if batch is None:
+            return None
+        # Idempotent re-finish is a no-op.
+        if batch.status == "completed":
+            return batch
+        if batch.status != "draft":
+            raise ValueError(
+                f"Cannot finish batch in status {batch.status!r}; must be 'draft'"
+            )
+
+        await self._recompute_aggregates(batch, db)
+        batch.status = "completed"
+        batch.completed_at = datetime.now(timezone.utc)
+
+        await db.flush()
+        await db.refresh(batch)
+        logger.info(
+            "Analysis batch finished (saved to records)",
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "total_count": batch.total_count,
+                    "avg_confidence": batch.avg_confidence,
                 }
             },
         )
@@ -344,6 +398,7 @@ class AnalysisService:
         search: str | None,
         organism: str | None,
         db: AsyncSession,
+        statuses: list[str] | None = None,
     ) -> AnalysisListResponse:
         """Return a paginated list of analysis batches.
 
@@ -353,6 +408,9 @@ class AnalysisService:
             search: Optional substring. ILIKE match against batch ``name`` OR
                 any child image's ``original_filename``.
             organism: Optional organism type filter.
+            statuses: Restrict to the given status values (e.g.
+                ``["completed"]`` for the Records list, ``["draft"]`` for a
+                drafts view). ``None`` returns every status.
         """
         # Base count query
         count_stmt = select(func.count(AnalysisBatch.id))
@@ -367,6 +425,10 @@ class AnalysisService:
         if organism:
             count_stmt = count_stmt.where(AnalysisBatch.organism_type == organism)
             batch_stmt = batch_stmt.where(AnalysisBatch.organism_type == organism)
+
+        if statuses:
+            count_stmt = count_stmt.where(AnalysisBatch.status.in_(statuses))
+            batch_stmt = batch_stmt.where(AnalysisBatch.status.in_(statuses))
 
         if search:
             # Match the search string against the batch name OR any image's
@@ -542,9 +604,11 @@ class AnalysisService:
         agg_result = await db.execute(agg_stmt)
         agg_row = agg_result.one()
 
-        # Recent analyses
+        # Recent analyses — only saved batches (drafts are hidden from home
+        # and Records until the operator clicks Finish).
         recent_stmt = (
             select(AnalysisBatch)
+            .where(AnalysisBatch.status == "completed")
             .order_by(AnalysisBatch.created_at.desc())
             .limit(_RECENT_COUNT)
         )

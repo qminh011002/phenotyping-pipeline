@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronRight, Download, Pencil, Save } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { ResultNavigation } from "./ResultNavigation";
 interface BatchDetailLike {
   id: string;
   name: string;
+  status?: string;
 }
 
 interface BatchSummaryLike {
@@ -26,12 +27,15 @@ interface ResultViewerHeaderProps {
   canEdit: boolean;
   editMode: boolean;
   isDirty: boolean;
+  /** True when the batch has already been saved to Records — hides Finish. */
+  isSaved: boolean;
+  /** True while the Finish request is in flight. */
+  finishing: boolean;
   onBack: () => void;
   onNavigate: (index: number) => void;
   // Kept for API compatibility; rename is no longer available from this header.
   onRename?: (next: string) => Promise<void>;
-  onSaveToRecords: () => void;
-  onDownload: () => void;
+  onFinish: () => void;
 }
 
 export function ResultViewerHeader({
@@ -42,10 +46,11 @@ export function ResultViewerHeader({
   canEdit,
   editMode,
   isDirty,
+  isSaved,
+  finishing,
   onBack,
   onNavigate,
-  onSaveToRecords,
-  onDownload,
+  onFinish,
 }: ResultViewerHeaderProps) {
   const isBatch = results.length > 1;
   const filename = currentResult.filename;
@@ -96,6 +101,11 @@ export function ResultViewerHeader({
                 <span className="ml-0.5 text-green-500 dark:text-green-400">•</span>
               )}
             </span>
+            {!isSaved && batchDetail?.status === "draft" && (
+              <span className="ml-1 inline-flex items-center rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                Draft
+              </span>
+            )}
           </div>
 
           <button
@@ -127,25 +137,21 @@ export function ResultViewerHeader({
 
       {/* Right — actions */}
       <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onSaveToRecords}
-          className="gap-2"
-        >
-          <Save className="h-4 w-4" />
-          Save to Records
-        </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onDownload}
-          className="gap-2"
-        >
-          <Download className="h-4 w-4" />
-          Download
-        </Button>
+        {!isSaved && (
+          <Button
+            size="sm"
+            onClick={onFinish}
+            disabled={finishing}
+            className="gap-2"
+          >
+            {finishing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
+            {finishing ? "Saving…" : "Finish"}
+          </Button>
+        )}
       </div>
     </header>
   );

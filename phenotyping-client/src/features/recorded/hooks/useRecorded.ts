@@ -62,6 +62,8 @@ export function useRecorded(): UseRecordedReturn {
           pageSize: PAGE_SIZE,
           q: currentFilters.q || undefined,
           organism: currentFilters.organism || undefined,
+          // Hide drafts — they only reappear once the operator clicks Finish.
+          statuses: ["completed", "failed"],
         });
 
         let items = data.items;

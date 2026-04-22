@@ -132,6 +132,7 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
           avg_confidence: detail.avg_confidence,
           images: detail.images,
           classes: detail.classes,
+          status: detail.status,
         });
         storeDbBatchId(batch.id);
       } catch {
