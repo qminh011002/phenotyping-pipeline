@@ -80,6 +80,7 @@ class AnalysisService:
         self,
         data: AnalysisBatchCreate,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisBatch:
         """Insert a new analysis batch row with status 'processing'.
 
@@ -97,6 +98,7 @@ class AnalysisService:
 
         batch = AnalysisBatch(
             name=name,
+            user_id=user_id,
             status="processing",
             organism_type=data.organism_type,
             mode=data.mode,
@@ -126,7 +128,8 @@ class AnalysisService:
         batch_id: UUID,
         result: AnalysisImageResult,
         db: AsyncSession,
-    ) -> AnalysisImage:
+        user_id: UUID,
+    ) -> AnalysisImage | None:
         """Record a single image's inference result into the database.
 
         The overlay image is already saved to disk by EggInferenceService at:
@@ -152,6 +155,16 @@ class AnalysisService:
                 if suffix.endswith("/overlay.png"):
                     overlay_path_value = suffix.removesuffix("/overlay.png") + "_overlay.png"
 
+        # Verify the batch belongs to the user before inserting the image row.
+        batch_stmt = (
+            select(AnalysisBatch)
+            .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
+        batch_row = (await db.execute(batch_stmt)).scalar_one_or_none()
+        if batch_row is None:
+            return None
+
         image = AnalysisImage(
             batch_id=batch_id,
             original_filename=result.filename,
@@ -166,9 +179,6 @@ class AnalysisService:
         await db.flush()
         await db.refresh(image)
 
-        # Increment processed_image_count and optionally upgrade auto-name
-        batch_stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
-        batch_row = (await db.execute(batch_stmt)).scalar_one_or_none()
         if batch_row is not None:
             batch_row.processed_image_count = batch_row.processed_image_count + 1
             if (
@@ -186,7 +196,8 @@ class AnalysisService:
         self,
         batch_id: UUID,
         db: AsyncSession,
-    ) -> AnalysisBatch:
+        user_id: UUID,
+    ) -> AnalysisBatch | None:
         """Mark a batch as completed and compute aggregate statistics.
 
         Aggregates are computed from all child AnalysisImage rows that have
@@ -211,9 +222,15 @@ class AnalysisService:
         result = await db.execute(stmt)
         row = result.one()
 
-        stmt_batch = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        stmt_batch = (
+            select(AnalysisBatch)
+            .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
         batch_result = await db.execute(stmt_batch)
-        batch = batch_result.scalar_one()
+        batch = batch_result.scalar_one_or_none()
+        if batch is None:
+            return None
 
         total_count = int(row.total_count)
         batch.status = "completed"
@@ -244,9 +261,14 @@ class AnalysisService:
         batch_id: UUID,
         data: AnalysisBatchUpdate,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisBatchDetail | None:
         """Rename a batch. Returns the full detail, or None if the batch is missing."""
-        stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        stmt = (
+            select(AnalysisBatch)
+            .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
         if batch is None:
@@ -257,16 +279,21 @@ class AnalysisService:
             "Analysis batch renamed",
             extra={"context": {"batch_id": str(batch_id), "name": batch.name}},
         )
-        return await self.get_batch_detail(batch_id=batch_id, db=db)
+        return await self.get_batch_detail(batch_id=batch_id, db=db, user_id=user_id)
 
     async def fail_batch(
         self,
         batch_id: UUID,
         error: str,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisBatch | None:
         """Mark a batch as failed. Returns None if batch not found or not in processing state."""
-        stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+        stmt = (
+            select(AnalysisBatch)
+            .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
         if batch is None:
@@ -293,8 +320,10 @@ class AnalysisService:
 
     # ── Active batch ────────────────────────────────────────────────────────────
 
-    async def get_active_batch(self, db: AsyncSession) -> ActiveBatchResponse:
-        """Return the currently-processing batch, if any.
+    async def get_active_batch(
+        self, db: AsyncSession, user_id: UUID
+    ) -> ActiveBatchResponse:
+        """Return the currently-processing batch for this user, if any.
 
         Zombie cleanup: if the active batch is older than 24 hours, auto-mark
         it as failed so it doesn't block new batches forever.
@@ -303,6 +332,7 @@ class AnalysisService:
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
             .where(AnalysisBatch.status == "processing")
+            .where(AnalysisBatch.user_id == user_id)
             .order_by(AnalysisBatch.created_at.desc())
             .limit(1)
         )
@@ -329,14 +359,17 @@ class AnalysisService:
             )
             return ActiveBatchResponse(active=False, batch=None)
 
-        detail = await self.get_batch_detail(batch_id=batch.id, db=db)
+        detail = await self.get_batch_detail(batch_id=batch.id, db=db, user_id=user_id)
         return ActiveBatchResponse(active=True, batch=detail)
 
-    async def has_active_batch(self, db: AsyncSession) -> AnalysisBatch | None:
-        """Return the active processing batch row (without images), or None."""
+    async def has_active_batch(
+        self, db: AsyncSession, user_id: UUID
+    ) -> AnalysisBatch | None:
+        """Return this user's active processing batch row (without images), or None."""
         stmt = (
             select(AnalysisBatch)
             .where(AnalysisBatch.status == "processing")
+            .where(AnalysisBatch.user_id == user_id)
             .order_by(AnalysisBatch.created_at.desc())
             .limit(1)
         )
@@ -352,6 +385,7 @@ class AnalysisService:
         search: str | None,
         organism: str | None,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisListResponse:
         """Return a paginated list of analysis batches.
 
@@ -362,13 +396,16 @@ class AnalysisService:
                 any child image's ``original_filename``.
             organism: Optional organism type filter.
         """
-        # Base count query
-        count_stmt = select(func.count(AnalysisBatch.id))
+        # Base count query — always scoped to this user.
+        count_stmt = select(func.count(AnalysisBatch.id)).where(
+            AnalysisBatch.user_id == user_id
+        )
 
         # Base batch query with eager-loaded images
         batch_stmt = (
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
+            .where(AnalysisBatch.user_id == user_id)
             .order_by(AnalysisBatch.created_at.desc())
         )
 
@@ -412,12 +449,14 @@ class AnalysisService:
         self,
         batch_id: UUID,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisBatchDetail | None:
-        """Return full batch detail including all images."""
+        """Return full batch detail including all images. Scoped to ``user_id``."""
         stmt = (
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
             .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
         )
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
@@ -435,6 +474,7 @@ class AnalysisService:
                 overlay_path=img.overlay_path,
                 error_message=img.error_message,
                 created_at=img.created_at,
+                annotations=img.annotations,
                 edited_annotations=img.edited_annotations,
             )
             for img in batch.images
@@ -442,6 +482,7 @@ class AnalysisService:
 
         return AnalysisBatchDetail(
             id=batch.id,
+            user_id=batch.user_id,
             name=batch.name,
             created_at=batch.created_at,
             completed_at=batch.completed_at,
@@ -468,6 +509,7 @@ class AnalysisService:
         batch_id: UUID,
         db: AsyncSession,
         storage_dir: Path,
+        user_id: UUID,
     ) -> bool:
         """Delete a batch, its images, and all associated overlay files on disk.
 
@@ -477,6 +519,7 @@ class AnalysisService:
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
             .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
         )
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
@@ -531,28 +574,42 @@ class AnalysisService:
 
     # ── Dashboard ─────────────────────────────────────────────────────────────
 
-    async def get_dashboard_stats(self, db: AsyncSession) -> DashboardStats:
-        """Return aggregate statistics for the home dashboard."""
+    async def get_dashboard_stats(
+        self, db: AsyncSession, user_id: UUID
+    ) -> DashboardStats:
+        """Return aggregate statistics for this user's dashboard."""
         # Count total completed analyses
-        count_stmt = select(func.count(AnalysisBatch.id)).where(
-            AnalysisBatch.status == "completed"
+        count_stmt = (
+            select(func.count(AnalysisBatch.id))
+            .where(AnalysisBatch.status == "completed")
+            .where(AnalysisBatch.user_id == user_id)
         )
         count_result = await db.execute(count_stmt)
         total_analyses = count_result.scalar() or 0
 
-        # Aggregate image-level stats
-        agg_stmt = select(
-            func.count(AnalysisImage.id).label("total_images"),
-            func.coalesce(func.sum(AnalysisImage.count), 0).label("total_eggs"),
-            func.coalesce(func.avg(AnalysisImage.avg_confidence), 0).label("avg_conf"),
-            func.coalesce(func.avg(AnalysisImage.elapsed_secs), 0).label("avg_time"),
-        ).where(AnalysisImage.status == "completed")
+        # Aggregate image-level stats — scoped via the parent batch's user_id.
+        agg_stmt = (
+            select(
+                func.count(AnalysisImage.id).label("total_images"),
+                func.coalesce(func.sum(AnalysisImage.count), 0).label("total_eggs"),
+                func.coalesce(
+                    func.avg(AnalysisImage.avg_confidence), 0
+                ).label("avg_conf"),
+                func.coalesce(
+                    func.avg(AnalysisImage.elapsed_secs), 0
+                ).label("avg_time"),
+            )
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.status == "completed")
+            .where(AnalysisBatch.user_id == user_id)
+        )
         agg_result = await db.execute(agg_stmt)
         agg_row = agg_result.one()
 
         # Recent analyses
         recent_stmt = (
             select(AnalysisBatch)
+            .where(AnalysisBatch.user_id == user_id)
             .order_by(AnalysisBatch.created_at.desc())
             .limit(_RECENT_COUNT)
         )
@@ -580,6 +637,7 @@ class AnalysisService:
         image_id: UUID,
         data: EditedAnnotationsUpdate,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisImageDetail | None:
         """Replace the edited_annotations for a single image (full-replace semantics).
 
@@ -590,6 +648,7 @@ class AnalysisService:
             .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
             .where(AnalysisImage.id == image_id)
             .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
         )
         result = await db.execute(stmt)
         image = result.scalar_one_or_none()
@@ -620,6 +679,7 @@ class AnalysisService:
             overlay_path=image.overlay_path,
             error_message=image.error_message,
             created_at=image.created_at,
+            annotations=image.annotations,
             edited_annotations=image.edited_annotations,
         )
 
@@ -628,6 +688,7 @@ class AnalysisService:
         batch_id: UUID,
         image_id: UUID,
         db: AsyncSession,
+        user_id: UUID,
     ) -> bool:
         """Clear edited_annotations back to NULL (reset to model output).
 
@@ -638,6 +699,7 @@ class AnalysisService:
             .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
             .where(AnalysisImage.id == image_id)
             .where(AnalysisBatch.id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
         )
         result = await db.execute(stmt)
         image = result.scalar_one_or_none()
@@ -663,6 +725,7 @@ class AnalysisService:
     def _to_summary(self, batch: AnalysisBatch) -> AnalysisBatchSummary:
         return AnalysisBatchSummary(
             id=batch.id,
+            user_id=batch.user_id,
             name=batch.name,
             created_at=batch.created_at,
             completed_at=batch.completed_at,

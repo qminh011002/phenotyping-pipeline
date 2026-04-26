@@ -9,12 +9,17 @@ FileResponse handles caching headers and streaming natively; disk is the source 
 from __future__ import annotations
 
 import logging
+import uuid as _uuid
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 
-from app.deps import get_cached_storage_dir
+from app.database import AsyncSession, get_session
+from app.deps import CurrentUser, get_cached_storage_dir
+from app.models.analysis import AnalysisBatch
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +47,37 @@ def _resolve_overlay_path(storage_dir: Path, batch_id: str, filename: str) -> Pa
 async def get_overlay(
     batch_id: str,
     filename: str,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
 ) -> FileResponse:
     """Return the overlay PNG image for the specified batch and original filename.
 
     The file is read from disk at:
         {image_storage_dir}/{batch_id}/{filename}_overlay.png
 
-    Returns 404 if the file does not exist.
+    Requires the bearer access token; returns 404 if the batch does not belong
+    to the current user (don't leak existence). Returns 404 if the file is
+    missing on disk.
     """
+    # Verify ownership before any disk access.
+    try:
+        bid = _uuid.UUID(batch_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid batch_id",
+        ) from exc
+    stmt = (
+        select(AnalysisBatch.id)
+        .where(AnalysisBatch.id == bid)
+        .where(AnalysisBatch.user_id == user.id)
+    )
+    if (await db.execute(stmt)).scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Overlay not found for batch {batch_id}.",
+        )
+
     storage_dir = Path(get_cached_storage_dir()).resolve()
     overlay_path = _resolve_overlay_path(storage_dir, batch_id, filename)
 

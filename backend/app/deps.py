@@ -20,6 +20,12 @@ from app.services.inference.neonate import NeonateInferenceService  # noqa: E402
 from app.services.analysis_service import AnalysisService  # noqa: E402
 from app.services.app_settings_service import AppSettingsService  # noqa: E402
 
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+
 # Module-level singletons set by main.py lifespan
 _model_registry: "ModelRegistry | None" = None
 _log_buffer: "LogBuffer | None" = None
@@ -199,6 +205,75 @@ def get_app_settings_service() -> AppSettingsService:
     Stateless; safe to reuse across all requests.
     """
     return AppSettingsService()
+
+
+# ── Auth (BE-020) ─────────────────────────────────────────────────────────────
+
+# auto_error=False so we can return our own structured 401 with an error code,
+# instead of FastAPI's default {"detail": "Not authenticated"} message.
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _unauthorized(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": code, "message": message},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_current_user(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
+    ],
+):
+    """Resolve the bearer access token to a ``User`` row.
+
+    Returns 401 with one of: ``token_invalid``, ``token_expired``.
+    Refresh-token revocation is not consulted here — access tokens are not
+    revoked server-side; they expire fast (see jwt_access_ttl_min).
+    """
+    from app.database import get_db
+    from app.models.user import User
+    from app.services.auth import AuthError, decode_token
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise _unauthorized("token_invalid", "Missing bearer token")
+
+    settings = get_settings()
+    try:
+        decoded = decode_token(credentials.credentials, "access", settings)
+    except AuthError as exc:
+        raise _unauthorized(exc.code, str(exc)) from exc
+
+    db = get_db()
+    async with db.session() as session:
+        try:
+            import uuid as _uuid
+
+            user_id = _uuid.UUID(decoded.sub)
+        except ValueError as exc:
+            raise _unauthorized("token_invalid", "Bad subject claim") from exc
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise _unauthorized("token_invalid", "User no longer exists")
+        return user
+
+
+# Type alias for route signatures: user: CurrentUser
+from app.models.user import User as _User
+
+CurrentUser = Annotated[_User, Depends(get_current_user)]
+
+
+async def get_session_dep():
+    """FastAPI dependency yielding an async DB session for auth routes."""
+    from app.database import get_db
+
+    db = get_db()
+    async with db.session() as session:
+        yield session
 
 
 # ── Cached storage_dir ( invalidated on PUT /settings/storage ) ─────────────────

@@ -5,6 +5,7 @@ interface LoadingScreenProps {
     status?: string;
     counter?: string;
     action?: ReactNode;
+    children?: ReactNode;
 }
 
 export function LoadingScreen({
@@ -12,6 +13,7 @@ export function LoadingScreen({
     status = 'Loading...',
     counter,
     action,
+    children,
 }: LoadingScreenProps) {
     return (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
@@ -28,6 +30,7 @@ export function LoadingScreen({
                     {counter}
                 </p>
             )}
+            {children}
             {action && <div className="mt-8">{action}</div>}
         </div>
     );

@@ -39,20 +39,35 @@ export function ProjectTypeCard({
             aria-pressed={selected}
             aria-disabled={!enabled}
             className={cn(
-                'relative flex w-full items-start justify-between gap-4 px-5 py-4 text-left transition-colors',
-                'focus:outline-none not-first:border-t-0 first:rounded-t-lg last:rounded-b-lg focus-visible:z-10 border focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                'group relative flex min-h-[96px] w-full items-start justify-between gap-5 px-6 py-5 text-left transition-colors',
+                'border border-transparent focus:outline-none not-first:border-t-0 first:rounded-t-lg last:rounded-b-lg focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
                 enabled
                     ? selected
-                        ? 'bg-primary/5 border-green-600! border-t! cursor-pointer'
-                        : 'hover:bg-accent cursor-pointer'
-                    : 'bg-muted/20 cursor-not-allowed opacity-60',
+                        ? 'border-l-green-600! bg-green-50/70 text-green-700 dark:bg-green-950/20 dark:text-green-300'
+                        : 'text-foreground hover:bg-muted/45 cursor-pointer'
+                    : 'bg-muted/10 text-muted-foreground/45 cursor-not-allowed',
             )}
         >
-            <div className="flex flex-col gap-1">
+            {selected && (
+                <span
+                    aria-hidden
+                    className="absolute inset-y-0 left-0 w-1 bg-green-600"
+                />
+            )}
+
+            <div className="min-w-0 flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
-                    <span className="text-base font-semibold">{label}</span>
+                    <span
+                        className={cn(
+                            'text-base font-semibold',
+                            selected && 'text-green-700 dark:text-green-300',
+                            !enabled && 'text-muted-foreground/55',
+                        )}
+                    >
+                        {label}
+                    </span>
                     {!available && (
-                        <span className="rounded-full bg-muted-foreground/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground/65">
                             Soon
                         </span>
                     )}
@@ -70,16 +85,33 @@ export function ProjectTypeCard({
                         </span>
                     )}
                 </div>
-                <span className="text-sm text-muted-foreground">
+                <span
+                    className={cn(
+                        'max-w-xl text-sm leading-6 text-muted-foreground',
+                        selected && 'text-muted-foreground',
+                        !enabled && 'text-muted-foreground/55',
+                    )}
+                >
                     {modelMissing ? hint : description}
                 </span>
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-1.5 pt-0.5">
+            <div className="flex max-w-[250px] shrink-0 flex-wrap items-center justify-end gap-2 pt-0.5">
                 {badges.map((b) => {
                     const BIcon = b.icon;
                     return (
-                        <Badge key={b.label} variant="secondary" className="gap-1 font-normal">
+                        <Badge
+                            key={b.label}
+                            variant="outline"
+                            className={cn(
+                                'h-8 rounded-lg bg-background/80 px-3 text-xs font-semibold shadow-sm',
+                                selected
+                                    ? 'border-green-200 text-green-700 dark:border-green-800 dark:text-green-300'
+                                    : enabled
+                                      ? 'text-muted-foreground'
+                                      : 'border-border/50 bg-background/35 text-muted-foreground/45 shadow-none',
+                            )}
+                        >
                             <BIcon className="h-3 w-3" />
                             {b.label}
                         </Badge>

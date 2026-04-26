@@ -41,7 +41,11 @@ import { startStageTracker } from "./stageTracker";
 import type { DetectionResult } from "@/types/api";
 
 function setStage(stage: string | null): void {
-  useProcessingStore.getState().setStage(stage);
+  const store = useProcessingStore.getState();
+  store.setStage(stage);
+  if (stage) {
+    store.addLiveLog({ level: "INFO", message: stage.replace(/…$/, "") });
+  }
 }
 
 interface RuntimeState {
@@ -345,6 +349,7 @@ async function runProcessLoop(
       const msg = err instanceof Error ? err.message : String(err);
       runResults.push({ id: file.id, filename: file.name, error: msg });
       store.updateImage(file.id, { status: "error", error: msg });
+      store.addLiveLog({ level: "ERROR", message: `${file.name}: ${msg}` });
     } finally {
       store.setCurrentImageStart(null);
     }

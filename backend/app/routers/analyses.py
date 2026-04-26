@@ -15,7 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database import AsyncSession, get_session
-from app.deps import get_analysis_service, get_cached_storage_dir, get_settings
+from app.deps import (
+    CurrentUser,
+    get_analysis_service,
+    get_cached_storage_dir,
+)
 from app.schemas.analysis import (
     ActiveBatchResponse,
     AnalysisBatchCreate,
@@ -54,22 +58,25 @@ _DEFAULT_PAGE_SIZE = 20
 async def create_analysis(
     data: AnalysisBatchCreate,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
     """Create a new analysis batch with status 'processing'.
 
     Returns 409 if another batch is already in 'processing' state.
     """
-    active = await analysis_svc.has_active_batch(db=db)
+    active = await analysis_svc.has_active_batch(db=db, user_id=user.id)
     if active is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A batch is already processing",
             headers={"X-Active-Batch-Id": str(active.id)},
         )
-    batch = await analysis_svc.create_batch(data=data, db=db)
+    batch = await analysis_svc.create_batch(data=data, db=db, user_id=user.id)
     await db.commit()
-    detail = await analysis_svc.get_batch_detail(batch_id=batch.id, db=db)
+    detail = await analysis_svc.get_batch_detail(
+        batch_id=batch.id, db=db, user_id=user.id
+    )
     if detail is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -86,13 +93,14 @@ async def create_analysis(
 )
 async def get_active_batch(
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> ActiveBatchResponse:
     """Return the active processing batch with progress details.
 
     Automatically marks zombie batches (>24h old) as failed.
     """
-    resp = await analysis_svc.get_active_batch(db=db)
+    resp = await analysis_svc.get_active_batch(db=db, user_id=user.id)
     await db.commit()
     return resp
 
@@ -111,13 +119,19 @@ async def fail_analysis(
     batch_id: UUID,
     data: FailBatchRequest,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
     """Mark a batch as failed with a reason string."""
-    from app.models.analysis import AnalysisBatch
     from sqlalchemy import select
 
-    stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+    from app.models.analysis import AnalysisBatch
+
+    stmt = (
+        select(AnalysisBatch)
+        .where(AnalysisBatch.id == batch_id)
+        .where(AnalysisBatch.user_id == user.id)
+    )
     result = await db.execute(stmt)
     batch = result.scalar_one_or_none()
     if batch is None:
@@ -130,7 +144,9 @@ async def fail_analysis(
             status_code=status.HTTP_409_CONFLICT,
             detail="Batch is not in processing state",
         )
-    failed = await analysis_svc.fail_batch(batch_id=batch_id, error=data.reason, db=db)
+    failed = await analysis_svc.fail_batch(
+        batch_id=batch_id, error=data.reason, db=db, user_id=user.id
+    )
     await db.commit()
     if failed is None:
         raise HTTPException(
@@ -152,6 +168,7 @@ async def fail_analysis(
 )
 async def list_analyses(
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
     page: int = Query(default=_DEFAULT_PAGE, ge=1, description="1-indexed page number"),
     page_size: int = Query(
@@ -178,6 +195,7 @@ async def list_analyses(
         search=q,
         organism=organism,
         db=db,
+        user_id=user.id,
     )
 
 
@@ -193,10 +211,13 @@ async def list_analyses(
 async def get_analysis(
     batch_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
     """Return the full detail of a single analysis batch including all images."""
-    detail = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    detail = await analysis_svc.get_batch_detail(
+        batch_id=batch_id, db=db, user_id=user.id
+    )
     if detail is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -220,6 +241,7 @@ async def patch_analysis(
     batch_id: UUID,
     data: AnalysisBatchUpdate,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
     """Rename a batch. Only ``name`` is supported today.
@@ -227,7 +249,9 @@ async def patch_analysis(
     Shaped as a partial-update object so additional fields slot in without
     breaking existing clients.
     """
-    updated = await analysis_svc.rename_batch(batch_id=batch_id, data=data, db=db)
+    updated = await analysis_svc.rename_batch(
+        batch_id=batch_id, data=data, db=db, user_id=user.id
+    )
     if updated is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -249,6 +273,7 @@ async def patch_analysis(
 async def delete_analysis(
     batch_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> None:
     """Delete an analysis batch and all its data.
@@ -261,6 +286,7 @@ async def delete_analysis(
         batch_id=batch_id,
         db=db,
         storage_dir=storage_dir,
+        user_id=user.id,
     )
     if not deleted:
         raise HTTPException(
@@ -281,6 +307,7 @@ async def get_overlay(
     batch_id: UUID,
     image_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> FileResponse:
     """Serve the overlay PNG image for a processed image."""
@@ -293,6 +320,7 @@ async def get_overlay(
         .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
         .where(AnalysisImage.id == image_id)
         .where(AnalysisImage.batch_id == batch_id)
+        .where(AnalysisBatch.user_id == user.id)
     )
     result = await db.execute(stmt)
     image = result.scalar_one_or_none()
@@ -338,6 +366,7 @@ async def get_raw(
     batch_id: UUID,
     image_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
 ) -> FileResponse:
     """Serve the raw source image the operator uploaded."""
     from sqlalchemy import select
@@ -349,6 +378,7 @@ async def get_raw(
         .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
         .where(AnalysisImage.id == image_id)
         .where(AnalysisImage.batch_id == batch_id)
+        .where(AnalysisBatch.user_id == user.id)
     )
     result = await db.execute(stmt)
     image = result.scalar_one_or_none()
@@ -402,6 +432,7 @@ async def download_analysis(
     batch_id: UUID,
     data: BatchDownloadRequest,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
 ) -> StreamingResponse:
     """Build a ZIP of overlay images + a styled summary.xlsx and stream it.
 
@@ -415,6 +446,7 @@ async def download_analysis(
             image_ids=data.image_ids,
             db=db,
             storage_dir=storage_dir,
+            user_id=user.id,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -451,6 +483,7 @@ async def add_image_result(
     batch_id: UUID,
     data: AnalysisImageResult,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
     """Record one image's inference result into an existing batch.
@@ -458,15 +491,14 @@ async def add_image_result(
     Call this once per image after processing. The overlay PNG must already be
     saved to disk — only the path reference is stored in the database.
     """
-    # Verify batch exists
-    detail = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
-    if detail is None:
+    image = await analysis_svc.add_image_result(
+        batch_id=batch_id, result=data, db=db, user_id=user.id
+    )
+    if image is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis batch {batch_id} not found.",
         )
-
-    await analysis_svc.add_image_result(batch_id=batch_id, result=data, db=db)
     await db.commit()
     return {"status": "ok", "batch_id": str(batch_id)}
 
@@ -484,24 +516,27 @@ async def add_image_result(
 async def complete_analysis(
     batch_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
     """Mark a batch as completed and compute aggregate statistics.
 
     Call this after all images have been recorded via POST /analyses/{id}/images.
     """
-    detail = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
-    if detail is None:
+    completed = await analysis_svc.complete_batch(
+        batch_id=batch_id, db=db, user_id=user.id
+    )
+    if completed is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis batch {batch_id} not found.",
         )
-
-    await analysis_svc.complete_batch(batch_id=batch_id, db=db)
     await db.commit()
 
     # Re-fetch updated detail
-    updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    updated = await analysis_svc.get_batch_detail(
+        batch_id=batch_id, db=db, user_id=user.id
+    )
     if updated is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -526,6 +561,7 @@ async def save_edited_annotations(
     image_id: UUID,
     data: EditedAnnotationsUpdate,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisImageDetail:
     """Replace the edited_annotations for a single image (full-replace semantics).
@@ -539,6 +575,7 @@ async def save_edited_annotations(
         image_id=image_id,
         data=data,
         db=db,
+        user_id=user.id,
     )
     if updated is None:
         raise HTTPException(
@@ -562,6 +599,7 @@ async def reset_edited_annotations(
     batch_id: UUID,
     image_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> None:
     """Clear edited_annotations back to NULL — restores the model's original output.
@@ -573,6 +611,7 @@ async def reset_edited_annotations(
         batch_id=batch_id,
         image_id=image_id,
         db=db,
+        user_id=user.id,
     )
     if not cleared:
         raise HTTPException(

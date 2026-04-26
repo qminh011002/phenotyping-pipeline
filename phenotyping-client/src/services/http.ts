@@ -1,7 +1,20 @@
 // HTTP client factory — creates a configured fetch-based client for the backend API.
 // The base URL is configurable so callers can override it at runtime.
+//
+// FE-029 added:
+//   - Bearer token attachment from the auth store on every request.
+//   - Response interceptor: on 401 `token_expired`, run a single-flight refresh
+//     and retry the original request once. On `token_invalid`/`token_revoked`,
+//     force-logout. Other 401s pass through as ApiError.
+//   - Concurrent requests during a refresh share one in-flight refresh promise
+//     so we never hit /auth/refresh more than once per access expiry.
 
 import { ApiError } from "./errors";
+import {
+  getAccessToken,
+  loadRefreshToken,
+  useAuthStore,
+} from "@/stores/authStore";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -37,10 +50,192 @@ export function onBaseUrlChange(cb: BaseUrlListener): () => void {
 }
 
 function _url(path: string): string {
+  // Allow callers to pass either a relative path ("analyses/abc") or an
+  // already-built absolute URL (from getBaseUrl() helpers). Detecting absolute
+  // URLs lets shared helpers like getOverlayImageUrl() keep returning full
+  // URLs while still flowing through the auth interceptor.
+  if (/^https?:\/\//i.test(path)) return path;
   return `${_baseUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 }
 
+// ── Auth header + single-flight refresh ────────────────────────────────────────
+
+function _authHeader(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+let _refreshInFlight: Promise<boolean> | null = null;
+
+/**
+ * Run a single-flight refresh.
+ *
+ * Returns true if a fresh access token is now in the store, false on failure
+ * (in which case the caller should give up — the user has been forced out).
+ *
+ * Implemented inline (not via api.ts) to avoid a circular import between
+ * services/http.ts and services/auth.ts.
+ */
+async function _refreshAccess(): Promise<boolean> {
+  if (_refreshInFlight) return _refreshInFlight;
+
+  _refreshInFlight = (async () => {
+    const refresh = loadRefreshToken();
+    if (!refresh) {
+      _forceLogout();
+      return false;
+    }
+    try {
+      const response = await fetch(_url("auth/refresh"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!response.ok) {
+        // Any non-2xx on /auth/refresh means the refresh token is unusable.
+        _forceLogout();
+        return false;
+      }
+      const json = (await response.json()) as {
+        access_token: string;
+        refresh_token: string;
+      };
+      useAuthStore.getState().setTokens(json.access_token, json.refresh_token);
+      return true;
+    } catch {
+      _forceLogout();
+      return false;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+
+  return _refreshInFlight;
+}
+
+let _onForceLogout: (() => void) | null = null;
+
+/** Register a callback fired when the refresh token is no longer usable. */
+export function onForceLogout(cb: () => void): () => void {
+  _onForceLogout = cb;
+  return () => {
+    if (_onForceLogout === cb) _onForceLogout = null;
+  };
+}
+
+function _forceLogout(): void {
+  useAuthStore.getState().clear();
+  _onForceLogout?.();
+}
+
 // ── Internal helpers ────────────────────────────────────────────────────────────
+
+interface ParsedError {
+  status: number;
+  detail: string | null;
+  code: string | null;
+}
+
+async function _parseError(response: Response): Promise<ParsedError> {
+  let detail: string | null = null;
+  let code: string | null = null;
+  try {
+    const json = (await response.json()) as {
+      detail?: string | { code?: string; message?: string } | unknown;
+    };
+    if (typeof json.detail === "string") {
+      detail = json.detail;
+    } else if (json.detail && typeof json.detail === "object") {
+      const d = json.detail as { code?: string; message?: string };
+      if (typeof d.code === "string") code = d.code;
+      if (typeof d.message === "string") detail = d.message;
+    }
+  } catch {
+    detail = response.statusText || null;
+  }
+  return { status: response.status, detail, code };
+}
+
+async function _doFetch(
+  method: HttpMethod,
+  path: string,
+  body: unknown,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  const url = _url(path);
+  const headers: Record<string, string> = { ..._authHeader() };
+  if (body != null) headers["Content-Type"] = "application/json";
+
+  return fetch(url, {
+    method,
+    headers,
+    body: body != null ? JSON.stringify(body) : undefined,
+    signal,
+  });
+}
+
+async function _doFetchFormData(
+  method: HttpMethod,
+  path: string,
+  fieldName: string,
+  files: File[],
+  params: Record<string, string> | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  let url = _url(path);
+  if (params) {
+    const qs = new URLSearchParams(params).toString();
+    url = `${url}?${qs}`;
+  }
+  const form = new FormData();
+  for (const file of files) {
+    form.append(fieldName, file, file.name);
+  }
+  return fetch(url, { method, body: form, signal, headers: { ..._authHeader() } });
+}
+
+/** Wrap a fetch and apply 401 → refresh-and-retry once. */
+async function _withRefresh(
+  doFetch: () => Promise<Response>,
+  url: string,
+): Promise<Response> {
+  let response: Response;
+  try {
+    response = await doFetch();
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") throw err;
+    throw new ApiError(0, `Network error: could not connect to ${url}. Is the backend running?`);
+  }
+
+  if (response.status !== 401) return response;
+
+  // Don't try to refresh on /auth/* itself — those endpoints failing means
+  // the credentials were bad, not that we need a new access token.
+  if (url.includes("/auth/")) return response;
+
+  const parsed = await _parseError(response.clone());
+  if (parsed.code === "token_invalid" || parsed.code === "token_revoked") {
+    _forceLogout();
+    throw new ApiError(parsed.status, parsed.detail, parsed.code);
+  }
+  if (parsed.code !== "token_expired") {
+    // 401 from a non-auth source — pass through.
+    throw new ApiError(parsed.status, parsed.detail, parsed.code);
+  }
+
+  // token_expired: try a single refresh, then retry once.
+  const ok = await _refreshAccess();
+  if (!ok) {
+    throw new ApiError(parsed.status, parsed.detail, parsed.code);
+  }
+  try {
+    response = await doFetch();
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") throw err;
+    throw new ApiError(0, `Network error: could not connect to ${url}. Is the backend running?`);
+  }
+  return response;
+}
 
 async function _fetch<T>(
   method: HttpMethod,
@@ -49,22 +244,10 @@ async function _fetch<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const url = _url(path);
-  const headers: Record<string, string> =
-    body != null ? { "Content-Type": "application/json" } : {};
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers,
-      body: body != null ? JSON.stringify(body) : undefined,
-      signal,
-    });
-  } catch (err) {
-    if ((err as Error)?.name === "AbortError") throw err;
-    throw new ApiError(0, `Network error: could not connect to ${url}. Is the backend running?`);
-  }
-
+  const response = await _withRefresh(
+    () => _doFetch(method, path, body, signal),
+    url,
+  );
   return _parseResponse(response);
 }
 
@@ -76,37 +259,18 @@ async function _fetchFormData<T>(
   params?: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<T> {
-  let url = _url(path);
-  if (params) {
-    const qs = new URLSearchParams(params).toString();
-    url = `${url}?${qs}`;
-  }
-  const form = new FormData();
-  for (const file of files) {
-    form.append(fieldName, file, file.name);
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(url, { method, body: form, signal });
-  } catch (err) {
-    if ((err as Error)?.name === "AbortError") throw err;
-    throw new ApiError(0, `Network error: could not connect to ${url}. Is the backend running?`);
-  }
-
+  const url = _url(path);
+  const response = await _withRefresh(
+    () => _doFetchFormData(method, path, fieldName, files, params, signal),
+    url,
+  );
   return _parseResponse(response);
 }
 
 async function _parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    let detail: string | null = null;
-    try {
-      const json = (await response.json()) as { detail?: string };
-      detail = json.detail ?? null;
-    } catch {
-      detail = response.statusText || null;
-    }
-    throw new ApiError(response.status, detail);
+    const { status, detail, code } = await _parseError(response);
+    throw new ApiError(status, detail, code);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -135,6 +299,29 @@ export const http = {
 
   async delete(path: string, signal?: AbortSignal): Promise<void> {
     await _fetch<void>("DELETE", path, undefined, signal);
+  },
+
+  /**
+   * Fetch a binary resource (e.g. overlay PNG) with the same Bearer + refresh
+   * dance the JSON helpers use. Required because <img src=...> can't carry an
+   * Authorization header on its own.
+   */
+  async getBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+    const url = _url(path);
+    const response = await _withRefresh(
+      () =>
+        fetch(url, {
+          method: "GET",
+          headers: { ..._authHeader() },
+          signal,
+        }),
+      url,
+    );
+    if (!response.ok) {
+      const { status, detail, code } = await _parseError(response);
+      throw new ApiError(status, detail, code);
+    }
+    return response.blob();
   },
 
   /**

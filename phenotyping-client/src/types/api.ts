@@ -2,6 +2,38 @@
 
 export type Organism = "egg" | "larvae" | "pupae" | "neonate";
 
+// ── Auth (BE-020 / FE-029) ────────────────────────────────────────────────────
+
+export interface UserOut {
+  id: string; // UUID
+  email: string;
+  name: string | null;
+  created_at: string; // ISO 8601
+}
+
+export interface AuthResponse {
+  user: UserOut;
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  access_expires_in: number; // seconds
+}
+
+export interface TokenPair {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  access_expires_in: number;
+}
+
+/** Stable error codes returned in 401 responses by the auth backend. */
+export type AuthErrorCode =
+  | "token_expired"
+  | "token_invalid"
+  | "token_revoked"
+  | "invalid_credentials"
+  | "email_taken";
+
 export type LogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR";
 
 export interface BBox {
@@ -105,6 +137,7 @@ export interface AnalysisImageDetail extends AnalysisImageSummary {
 
 export interface AnalysisBatchSummary {
   id: string; // UUID
+  user_id: string | null; // owner; null only on legacy pre-BE-021 rows
   name: string;
   created_at: string; // ISO 8601
   completed_at: string | null;

@@ -26,6 +26,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { getHealth } from "@/services/api";
+import { me, refresh as refreshTokens } from "@/services/auth";
+import { loadRefreshToken, useAuthStore } from "@/stores/authStore";
 import type { HealthResponse, ModelStatus, Organism } from "@/types/api";
 
 type BootPhase = "loading" | "ready" | "error";
@@ -63,6 +65,27 @@ export function BootProvider({ children }: { children: ReactNode }) {
       const data = await getHealth(controller.signal);
       if (attemptIdRef.current !== id) return;
       setHealth(data);
+
+      // Silent auth bootstrap — try the persisted refresh token before the
+      // router renders so protected routes don't flash /login then snap back.
+      // Failure here is normal (no token, or token expired/revoked) — fall
+      // through to "anon" and let RequireAuth send the user to /login.
+      if (loadRefreshToken()) {
+        const tokens = await refreshTokens();
+        if (tokens) {
+          try {
+            const user = await me(tokens.access_token);
+            useAuthStore.getState().setSession(user, tokens.access_token, tokens.refresh_token);
+          } catch {
+            useAuthStore.getState().clear();
+          }
+        } else {
+          useAuthStore.getState().clear();
+        }
+      } else {
+        useAuthStore.getState().setStatus("anon");
+      }
+
       setPhase("ready");
     } catch (err) {
       if (attemptIdRef.current !== id) return;

@@ -21,7 +21,6 @@ export default function AnalyzePage() {
     const [mode, setMode] = useState<Mode | null>('upload');
     const [organism, setOrganism] = useState<Organism | null>(null);
     const [showNameError, setShowNameError] = useState(false);
-    const [className, setClassName] = useState('');
     const { modelsStatus } = useBoot();
 
     useEffect(() => {
@@ -40,20 +39,13 @@ export default function AnalyzePage() {
         }
     }, [organism, modelsStatus]);
 
-    // Class name is intentionally not pre-filled from the project-type label —
-    // the project-type label ("Egg", "Neonate", …) is *not* the same thing as
-    // the class predicted by the model. The user names the class they want
-    // surfaced in their report; the model can later predict multiple classes
-    // and the per-detection labels come from the model itself.
-
     const nameTrimmed = projectName.trim();
-    const classNameTrimmed = className.trim();
     const modeOk = mode !== null && MODES.find((m) => m.id === mode)?.available === true;
     const organismOk =
         organism !== null
         && PROJECT_TYPES.find((p) => p.id === organism)?.available === true
         && (modelsStatus[organism] === 'loaded' || modelsStatus[organism] === undefined);
-    const canSubmit = nameTrimmed.length > 0 && modeOk && organismOk && classNameTrimmed.length > 0;
+    const canSubmit = nameTrimmed.length > 0 && modeOk && organismOk;
 
     function handleSubmit() {
         if (nameTrimmed.length === 0) {
@@ -61,10 +53,11 @@ export default function AnalyzePage() {
             return;
         }
         if (!canSubmit || !mode || !organism) return;
-        const classes = [classNameTrimmed];
+        // No class names anymore — keep the store + session storage clean so
+        // any old values from a previous project don't leak through.
         setProjectNameStore(nameTrimmed);
-        setClassesStore(classes);
-        storeProjectClasses(classes);
+        setClassesStore([]);
+        storeProjectClasses([]);
         navigate(`/analyze/upload?mode=${mode}&type=${organism}`);
     }
 
@@ -112,21 +105,6 @@ export default function AnalyzePage() {
                         <div className="flex flex-col gap-2">
                             <Label>Mode</Label>
                             <ModeToggle value={mode} onChange={setMode} />
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                            <Label htmlFor="class-name">Class Name</Label>
-                            <Input
-                                id="class-name"
-                                placeholder="Type a label for your detections"
-                                value={className}
-                                className="w-72"
-                                onChange={(e) => setClassName(e.target.value)}
-                            />
-                            <span className="text-xs text-muted-foreground">
-                                Used as the title of the class column in your report. The
-                                per-detection label comes from the model itself.
-                            </span>
                         </div>
                     </div>
 

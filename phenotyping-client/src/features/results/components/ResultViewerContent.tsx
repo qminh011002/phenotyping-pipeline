@@ -13,7 +13,6 @@ interface ResultViewerContentProps {
   defaultClass: string | undefined;
   editMode: boolean;
   editorTool: "drag" | "draw";
-  labelsVisible: boolean;
   modelBoxes: BBox[];
   processingConfig: Record<string, unknown> | null;
   redoAvailable: boolean;
@@ -33,7 +32,6 @@ interface ResultViewerContentProps {
   onRedo: () => void;
   onSelectDragTool: () => void;
   onToggleDrawTool: () => void;
-  onToggleLabels: () => void;
   onUndo: () => void;
 }
 
@@ -46,7 +44,6 @@ export function ResultViewerContent({
   defaultClass,
   editMode,
   editorTool,
-  labelsVisible,
   modelBoxes,
   processingConfig,
   redoAvailable,
@@ -66,7 +63,6 @@ export function ResultViewerContent({
   onRedo,
   onSelectDragTool,
   onToggleDrawTool,
-  onToggleLabels,
   onUndo,
 }: ResultViewerContentProps) {
   return (
@@ -83,13 +79,10 @@ export function ResultViewerContent({
           annotations={editMode && currentImageRecordId ? sessionBoxes : viewBoxes}
           saveInProgress={savingEdits}
           dimEnabled={!ctrlHeld}
-          labelsVisible={labelsVisible}
-          // Dense scenes (>500 boxes) rasterize non-selected boxes into a
-          // single canvas to keep zoom/pan/hover snappy. Sparse scenes stay
-          // on the per-Rect path which has richer hover behavior.
-          useOffscreen={
-            (editMode && currentImageRecordId ? sessionBoxes : viewBoxes).length > 500
-          }
+          // Keep boxes vector-rendered so their edges stay sharp at every
+          // zoom level. The raster path scales a bitmap of the strokes, which
+          // makes the boxes look soft when zooming.
+          useOffscreen={false}
           onBackgroundClick={onBackgroundClick}
           onDimensions={onDimensions}
           editor={
@@ -109,14 +102,12 @@ export function ResultViewerContent({
         {editMode && currentImageRecordId && (
           <ResultViewerEditToolbar
             editorTool={editorTool}
-            labelsVisible={labelsVisible}
             redoAvailable={redoAvailable}
             undoAvailable={undoAvailable}
             onOpenResetDialog={onOpenResetDialog}
             onRedo={onRedo}
             onSelectDragTool={onSelectDragTool}
             onToggleDrawTool={onToggleDrawTool}
-            onToggleLabels={onToggleLabels}
             onUndo={onUndo}
           />
         )}

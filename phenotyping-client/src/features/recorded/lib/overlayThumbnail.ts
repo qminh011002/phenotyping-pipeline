@@ -22,6 +22,7 @@
 //   batch doesn't kick off 200 simultaneous fetches.
 
 import { useEffect, useRef, useState } from "react";
+import { http } from "@/services/http";
 
 const THUMB_MAX_EDGE = 300;
 const THUMB_QUALITY = 0.4;
@@ -79,11 +80,8 @@ function release(): void {
 async function buildThumbnail(srcUrl: string, signal?: AbortSignal): Promise<CacheEntry> {
   await acquire();
   try {
-    const resp = await fetch(srcUrl, { credentials: "same-origin", signal });
-    if (!resp.ok) {
-      throw new Error(`overlay fetch failed: ${resp.status}`);
-    }
-    const blob = await resp.blob();
+    // Auth-required after BE-021 — getBlob attaches Bearer + handles refresh.
+    const blob = await http.getBlob(srcUrl, signal);
     let objectUrl: string;
     try {
       const bitmap = await createImageBitmap(blob);

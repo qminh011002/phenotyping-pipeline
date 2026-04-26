@@ -54,6 +54,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         extra={"context": {"version": "0.1.0"}},
     )
 
+    # ── Auth secrets check (BE-020) ───────────────────────────────────────────
+    from app.config import AppSettings as _AppSettings
+
+    _auth_settings = _AppSettings()
+    _DEV_PLACEHOLDERS = {
+        "dev-only-access-secret-change-me",
+        "dev-only-refresh-secret-change-me",
+    }
+    if (
+        _auth_settings.jwt_access_secret in _DEV_PLACEHOLDERS
+        or _auth_settings.jwt_refresh_secret in _DEV_PLACEHOLDERS
+    ):
+        settings_logger.warning(
+            "JWT secrets are placeholders — set JWT_ACCESS_SECRET and "
+            "JWT_REFRESH_SECRET in .env before any non-dev use."
+        )
+    if _auth_settings.jwt_access_secret == _auth_settings.jwt_refresh_secret:
+        raise RuntimeError(
+            "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values."
+        )
+
     # Resolve filesystem layout + load every organism's weights best-effort.
     from app.deps import get_model_storage, get_model_upload_service
     from app.services.model_registry import ModelRegistry
@@ -213,6 +234,7 @@ register_exception_handlers(app)
 # Import and include routers — use direct module paths to avoid circular __init__.py
 from app.routers import health, logs, config, inference, stages
 from app.routers.analyses import router as analysis_router
+from app.routers.auth import router as auth_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.models import router as models_router
 from app.routers.overlay import router as overlay_router
@@ -223,6 +245,7 @@ app.include_router(logs.router)
 app.include_router(stages.router)
 app.include_router(config.router)
 app.include_router(inference.router)
+app.include_router(auth_router)
 app.include_router(analysis_router)
 app.include_router(dashboard_router)
 app.include_router(models_router)

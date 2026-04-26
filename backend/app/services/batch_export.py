@@ -219,6 +219,7 @@ async def build_batch_archive(
     image_ids: list[UUID] | None,
     db: AsyncSession,
     storage_dir: Path,
+    user_id: UUID,
 ) -> tuple[str, bytes] | None:
     """Build the ZIP archive for a batch.
 
@@ -229,7 +230,11 @@ async def build_batch_archive(
     × a few MB each so this is fine; if we later ship batches in the hundreds
     of MB we should stream it through a SpooledTemporaryFile instead.
     """
-    batch_stmt = select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+    batch_stmt = (
+        select(AnalysisBatch)
+        .where(AnalysisBatch.id == batch_id)
+        .where(AnalysisBatch.user_id == user_id)
+    )
     batch = (await db.execute(batch_stmt)).scalar_one_or_none()
     if batch is None:
         return None
@@ -293,11 +298,16 @@ async def stream_batch_archive(
     image_ids: list[UUID] | None,
     db: AsyncSession,
     storage_dir: Path,
+    user_id: UUID,
     chunk_size: int = 64 * 1024,
 ) -> tuple[str, AsyncIterator[bytes]] | None:
     """Wrapper that yields the archive bytes in chunks for StreamingResponse."""
     built = await build_batch_archive(
-        batch_id=batch_id, image_ids=image_ids, db=db, storage_dir=storage_dir
+        batch_id=batch_id,
+        image_ids=image_ids,
+        db=db,
+        storage_dir=storage_dir,
+        user_id=user_id,
     )
     if built is None:
         return None

@@ -126,7 +126,7 @@ The `.cursor/rules/*.mdc` files are authoritative and apply to Claude Code too. 
 
 1. **Never modify `phenotyping_pipeline/`.** It is read-only reference code (config.yaml is the one exception — it's edited via `PUT /config`).
 2. **Never `importlib`/`sys.path`-import from `phenotyping_pipeline/`** at runtime — backend must be self-contained.
-3. **No authentication** — single-tenant desktop app.
+3. **JWT authentication is required.** Per BE-020/BE-021: every batch-touching route depends on `CurrentUser` (`app/deps.py`); batches carry `user_id` and queries filter by it; cross-user access returns 404 (not 403). Access tokens are short-lived, refresh tokens rotate + are revocable. `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` must be distinct values in `.env` for any non-dev deployment.
 4. **MVP scope = Upload + Egg only.** Camera capture and larvae/pupae/neonate are deferred placeholders.
 5. **Testing is mandatory after each task** — use the protocol in `task-execution.mdc` (start server, hit endpoints, `pnpm tsc --noEmit`, etc.) before reporting done.
 6. **CUDA fallback:** if config requests CUDA and `torch.cuda.is_available()` is false, log a warning and fall back to CPU — never crash.

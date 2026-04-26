@@ -40,6 +40,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useTheme } from "@/hooks/useTheme";
+import { useAuthStore } from "@/stores/authStore";
+import { logout } from "@/services/auth";
+import { useNavigate } from "react-router-dom";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 
 const NAV_ITEMS = [
@@ -55,10 +58,20 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { isMobile, state } = useSidebar();
   const { theme, toggleTheme } = useTheme();
   const collapsed = collapsedProp ?? state === "collapsed";
   const ThemeIcon = theme === "light" ? Moon : Sun;
+  const user = useAuthStore((s) => s.user);
+  const displayName = user?.name?.trim() || user?.email?.split("@")[0] || "User";
+  const initial = (user?.name?.trim()?.[0] || user?.email?.[0] || "U").toUpperCase();
+  const subtitle = user?.email ?? "Workspace";
+
+  async function handleLogout() {
+    await logout();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <SidebarRoot collapsible="icon" variant="inset">
@@ -143,15 +156,15 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                   size="lg"
                   aria-label="Profile menu"
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                  tooltip="Profile"
+                  tooltip={displayName}
                 >
                   <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
-                    P
+                    {initial}
                   </div>
                   <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold">Phenotyping</span>
+                    <span className="truncate font-semibold">{displayName}</span>
                     <span className="truncate text-xs text-sidebar-foreground/70">
-                      Workspace
+                      {subtitle}
                     </span>
                   </div>
                   <ChevronsUpDown className="ml-auto size-4" />
@@ -166,12 +179,12 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                 <DropdownMenuLabel className="p-0 font-normal">
                   <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                     <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
-                      P
+                      {initial}
                     </div>
                     <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">Phenotyping</span>
+                      <span className="truncate font-semibold">{displayName}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        Workspace
+                        {subtitle}
                       </span>
                     </div>
                   </div>
@@ -203,7 +216,7 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void handleLogout()}>
                   <LogOut />
                   Log out
                 </DropdownMenuItem>

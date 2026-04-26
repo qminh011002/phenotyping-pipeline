@@ -24,6 +24,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { http } from '@/services/http';
 import type { BBox } from '@/types/api';
 import { clampBox, enforceMinSize, MIN_BOX_SIZE, normalizeBox } from '../lib/bboxMath';
 
@@ -55,13 +56,6 @@ interface OverlayImageProps {
      */
     dimEnabled?: boolean;
     /**
-     * When true (default), each box renders its class-name label above the
-     * top-left corner. The label font size is computed from the current zoom
-     * so screen size stays close to constant (softly inverse — see
-     * LABEL_SCREEN_PX / LABEL_SCALE_EXPONENT below).
-     */
-    labelsVisible?: boolean;
-    /**
      * Fired when the user clicks the empty background (pointerdown → up with
      * no drag). Used by the parent to deselect on empty-area clicks.
      */
@@ -89,63 +83,78 @@ const ZOOM_FACTOR = 1.15;
 // Smaller = more wheel ticks per doubling. Roboflow-like finesse.
 const WHEEL_ZOOM_SENSITIVITY = 0.0006;
 
-const STROKE_MODEL = '#22c55e';
-const STROKE_USER = '#f59e0b';
+// All non-selected boxes share one green stroke (model + user). Selection
+// stays blue so it remains distinguishable.
+const STROKE_BOX = '#22c55e';
+const STROKE_MODEL = STROKE_BOX;
+const STROKE_USER = STROKE_BOX;
 const STROKE_SELECTED = '#3b82f6';
 const FILL_SELECTED = 'rgba(59,130,246,0.10)';
 
+// Default dim is "darker" by design — emphasizes the boxes on busy scenes.
+// Hover layer adds a second pass that darkens everything *except* the hovered
+// box, producing a soft spotlight without per-box CPU work.
 const DIM_OPACITY_BASE = 0.5;
-const DIM_OPACITY_HOVER = 0.3; // additional dim on top of base
+const DIM_OPACITY_HOVER = 0.6; // additional dim on top of base when hovering
 
-// The dim effect punches one destination-out rect per visible box — fine at
-// tens or hundreds, but a real cost in the thousands. Above this count we
-// drop the dim layer entirely: with that many boxes the scene is already
-// saturated and the highlight effect adds no information.
-const DIM_MAX_BOXES = 500;
+// Dim is composited via a single Konva Shape's sceneFunc — N native
+// canvas fillRect calls per render instead of N Konva.Rect nodes — which
+// scales to several thousand boxes without dropping frames. No box-count
+// gate is needed.
 
 const HANDLE_PX = 10;
 
-// ── Label tunables ─────────────────────────────────────────────────────────
-// Labels live in image coordinates but should look ~constant on screen.
-// `screen_px = fontSize_image * scale`, so to make the *screen* size shrink
-// when the user zooms in (and grow when they zoom out) we set
-//   fontSize_image = LABEL_SCREEN_PX / scale^LABEL_SCALE_EXPONENT
-// with the exponent slightly above 1 — "softly inverse": at 200% zoom labels
-// are a touch smaller than baseline, at 50% zoom a touch larger.
-const LABEL_SCREEN_PX = 10;
-const LABEL_FG = '#f59e0b';
+// (Class-name labels removed — boxes now render strokes only.)
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function loadImageEl(
+/**
+ * Load an HTMLImageElement from `src`, going through the authed http client
+ * so backend-served overlays carry the Bearer header (BE-021 made these
+ * routes auth-required and `<img src=...>` can't attach the token itself).
+ *
+ * Yields an HTMLImageElement whose `src` is an `object:` URL backed by the
+ * fetched bytes. The caller is responsible for releasing the URL — Konva's
+ * KonvaImage hangs on to the element for the component lifetime, so we
+ * revoke when the effect that called this loader cleans up.
+ */
+async function loadImageEl(
     src: string,
     signal?: AbortSignal,
-): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        const onAbort = () => {
-            img.onload = null;
-            img.onerror = null;
-            img.src = '';
-            reject(new DOMException('aborted', 'AbortError'));
-        };
-        if (signal) {
-            if (signal.aborted) {
-                onAbort();
-                return;
+): Promise<{ img: HTMLImageElement; objectUrl: string }> {
+    const blob = await http.getBlob(src, signal);
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const el = new Image();
+            const onAbort = () => {
+                el.onload = null;
+                el.onerror = null;
+                el.src = '';
+                reject(new DOMException('aborted', 'AbortError'));
+            };
+            if (signal) {
+                if (signal.aborted) {
+                    onAbort();
+                    return;
+                }
+                signal.addEventListener('abort', onAbort, { once: true });
             }
-            signal.addEventListener('abort', onAbort, { once: true });
-        }
-        img.onload = () => {
-            signal?.removeEventListener('abort', onAbort);
-            resolve(img);
-        };
-        img.onerror = (err) => {
-            signal?.removeEventListener('abort', onAbort);
-            reject(err);
-        };
-        img.src = src;
-    });
+            el.onload = () => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve(el);
+            };
+            el.onerror = (err) => {
+                signal?.removeEventListener('abort', onAbort);
+                reject(err);
+            };
+            el.src = objectUrl;
+        });
+        return { img, objectUrl };
+    } catch (err) {
+        URL.revokeObjectURL(objectUrl);
+        throw err;
+    }
 }
 
 function isVisible(b: BBox, threshold: number): boolean {
@@ -161,7 +170,6 @@ export function OverlayImage({
     className,
     saveInProgress = false,
     dimEnabled = true,
-    labelsVisible = true,
     onBackgroundClick,
     onDimensions,
     editor,
@@ -207,13 +215,18 @@ export function OverlayImage({
     useEffect(() => {
         let cancelled = false;
         const controller = new AbortController();
+        let createdObjectUrl: string | null = null;
         setImageEl(null);
         setImageError(false);
         setHoverIdx(null);
         if (!src) return;
         loadImageEl(src, controller.signal)
-            .then((img) => {
-                if (cancelled) return;
+            .then(({ img, objectUrl }) => {
+                if (cancelled) {
+                    URL.revokeObjectURL(objectUrl);
+                    return;
+                }
+                createdObjectUrl = objectUrl;
                 setImageEl(img);
                 onDimensionsRef.current?.(img.naturalWidth, img.naturalHeight);
             })
@@ -225,6 +238,7 @@ export function OverlayImage({
         return () => {
             cancelled = true;
             controller.abort();
+            if (createdObjectUrl) URL.revokeObjectURL(createdObjectUrl);
         };
     }, [src]);
 
@@ -421,6 +435,52 @@ export function OverlayImage({
         }
     }, []);
 
+    // Hit-test the pointer against the visible-box set to find the topmost
+    // box under the cursor. Used by the stage-level hover handler so the dim
+    // spotlight works even when boxes are rendered as a single rasterized
+    // canvas (no per-Rect onMouseEnter events).
+    //
+    // Stored as a ref so the rAF throttle callback can read the latest set
+    // without re-binding on every render. Populated by the effect below
+    // (which runs after `visibleBoxesWithIdx` is computed further down).
+    const visibleBoxesRef = useRef<Array<{ box: BBox; index: number }>>([]);
+
+    const hoverRafRef = useRef<number | null>(null);
+    const hoverRafQueued = useRef(false);
+
+    const computeHoverFromPointer = useCallback(() => {
+        hoverRafQueued.current = false;
+        const pt = getImagePointer();
+        if (!pt) {
+            setHoverIdx(null);
+            return;
+        }
+        const list = visibleBoxesRef.current;
+        // Top-most wins — iterate in reverse so a small box drawn on top of a
+        // larger one gets the hover.
+        for (let i = list.length - 1; i >= 0; i--) {
+            const { box, index } = list[i];
+            const [x1, y1, x2, y2] = box.bbox;
+            if (pt.x >= x1 && pt.x <= x2 && pt.y >= y1 && pt.y <= y2) {
+                setHoverIdx((p) => (p === index ? p : index));
+                return;
+            }
+        }
+        setHoverIdx((p) => (p === null ? p : null));
+    }, [getImagePointer]);
+
+    const queueHoverHitTest = useCallback(() => {
+        if (hoverRafQueued.current) return;
+        hoverRafQueued.current = true;
+        hoverRafRef.current = requestAnimationFrame(computeHoverFromPointer);
+    }, [computeHoverFromPointer]);
+
+    useEffect(() => {
+        return () => {
+            if (hoverRafRef.current !== null) cancelAnimationFrame(hoverRafRef.current);
+        };
+    }, []);
+
     const handleStageMouseMove = useCallback(() => {
         const stage = stageRef.current;
         if (!stage) return;
@@ -438,7 +498,22 @@ export function OverlayImage({
             const dy = p.y - backgroundDownPos.current.y;
             if (Math.hypot(dx, dy) > 3) backgroundMoved.current = true;
         }
-    }, [getImagePointer, mode]);
+        // Stage-level hover hit-test for the dim spotlight. Runs at most
+        // once per animation frame, regardless of pointer event rate.
+        if (mode !== 'draw' && !interacting) {
+            queueHoverHitTest();
+        }
+    }, [getImagePointer, mode, interacting, queueHoverHitTest]);
+
+    // Clear the hover state when the pointer leaves the stage or interaction
+    // begins so the spotlight doesn't stay locked on a box.
+    const handleStageMouseLeave = useCallback(() => {
+        setHoverIdx(null);
+    }, []);
+
+    useEffect(() => {
+        if (interacting || mode === 'draw') setHoverIdx(null);
+    }, [interacting, mode]);
 
     // Reset cursor when leaving draw mode or the stage.
     useEffect(() => {
@@ -648,6 +723,13 @@ export function OverlayImage({
             .filter(({ box }) => isVisible(box, deferredThreshold));
     }, [renderBoxes, deferredThreshold]);
 
+    // Keep the hover hit-test's source-of-truth in sync with the latest
+    // visible set. Declared here (instead of next to the ref above) because
+    // `visibleBoxesWithIdx` isn't in scope until this point.
+    useEffect(() => {
+        visibleBoxesRef.current = visibleBoxesWithIdx;
+    }, [visibleBoxesWithIdx]);
+
     // Rasterize all non-selected boxes off the main thread via a Web Worker
     // that writes into an OffscreenCanvas and transfers back an ImageBitmap.
     // The main thread never allocates the full-resolution canvas or strokes
@@ -658,14 +740,11 @@ export function OverlayImage({
     const latestReqIdRef = useRef(0);
 
     useEffect(() => {
-        const worker = new Worker(
-            new URL('../lib/rasterizeBoxes.worker.ts', import.meta.url),
-            { type: 'module' },
-        );
+        const worker = new Worker(new URL('../lib/rasterizeBoxes.worker.ts', import.meta.url), {
+            type: 'module',
+        });
         workerRef.current = worker;
-        worker.onmessage = (
-            e: MessageEvent<{ id: number; bitmap: ImageBitmap }>,
-        ) => {
+        worker.onmessage = (e: MessageEvent<{ id: number; bitmap: ImageBitmap }>) => {
             if (e.data.id !== latestReqIdRef.current) {
                 // Stale — close the bitmap to free its GPU memory.
                 e.data.bitmap.close();
@@ -727,14 +806,11 @@ export function OverlayImage({
         editor.onSelect(null);
     }, [editing, mode, editor, getImagePointer, visibleBoxesWithIdx, selectedIndex]);
 
-    // Dim is hidden during interaction, in draw mode, and when the box count
-    // exceeds DIM_MAX_BOXES (the destination-out compositing becomes the hot
-    // loop otherwise).
-    const showDim =
-        dimEnabled &&
-        !interacting &&
-        mode !== 'draw' &&
-        visibleBoxesWithIdx.length <= DIM_MAX_BOXES;
+    // Dim is hidden during interaction and in draw mode so the user sees raw
+    // pixels while editing. Otherwise it's always on — a single Konva Shape
+    // composites the whole effect (base dim + per-box holes + optional hover
+    // dim) in one sceneFunc, which scales fine to thousands of boxes.
+    const showDim = dimEnabled && !interacting && mode !== 'draw';
 
     const hovered = hoverIdx !== null ? renderBoxes[hoverIdx] : null;
 
@@ -871,6 +947,7 @@ export function OverlayImage({
                             handleStageMouseUp();
                             handleStageMouseUpDraw();
                         }}
+                        onMouseLeave={handleStageMouseLeave}
                         onTouchStart={(e) => {
                             handleStageMouseDown(e);
                             handleStageMouseDownDraw(e);
@@ -894,54 +971,53 @@ export function OverlayImage({
                             />
                         </Layer>
 
-                        {/* Dim layer — one rect covering the image with holes punched out
-                over every visible box via destination-out. */}
+                        {/* Dim layer — a single Shape paints the full effect in one
+                sceneFunc:
+                  1. Fill image area with semi-transparent black (base dim).
+                  2. destination-out each visible box → boxes appear clear.
+                  3. If hovering, paint a second black layer over everything,
+                     then destination-out only the hovered box → spotlight.
+                Drawing all of this with native canvas calls (a single Konva
+                node) keeps it cheap even at thousands of boxes. */}
                         {showDim && (
                             <Layer listening={false}>
-                                <Group>
-                                    <Rect
-                                        x={0}
-                                        y={0}
-                                        width={imageSize.width}
-                                        height={imageSize.height}
-                                        fill="black"
-                                        opacity={DIM_OPACITY_BASE}
-                                    />
-                                    {visibleBoxesWithIdx.map(({ box, index }) => {
-                                        const [x1, y1, x2, y2] = box.bbox;
-                                        return (
-                                            <Rect
-                                                key={`dim-${index}`}
-                                                x={x1}
-                                                y={y1}
-                                                width={Math.max(0, x2 - x1)}
-                                                height={Math.max(0, y2 - y1)}
-                                                fill="black"
-                                                globalCompositeOperation="destination-out"
-                                            />
-                                        );
-                                    })}
-                                </Group>
-                                {hovered && (
-                                    <Group>
-                                        <Rect
-                                            x={0}
-                                            y={0}
-                                            width={imageSize.width}
-                                            height={imageSize.height}
-                                            fill="black"
-                                            opacity={DIM_OPACITY_HOVER}
-                                        />
-                                        <Rect
-                                            x={hovered.bbox[0]}
-                                            y={hovered.bbox[1]}
-                                            width={Math.max(0, hovered.bbox[2] - hovered.bbox[0])}
-                                            height={Math.max(0, hovered.bbox[3] - hovered.bbox[1])}
-                                            fill="black"
-                                            globalCompositeOperation="destination-out"
-                                        />
-                                    </Group>
-                                )}
+                                <Shape
+                                    perfectDrawEnabled={false}
+                                    sceneFunc={(context) => {
+                                        const ctx = context._context as CanvasRenderingContext2D;
+                                        ctx.save();
+                                        // Base dim across the image.
+                                        ctx.globalCompositeOperation = 'source-over';
+                                        ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_BASE})`;
+                                        ctx.fillRect(0, 0, imageSize.width, imageSize.height);
+                                        // Punch holes for every visible box.
+                                        ctx.globalCompositeOperation = 'destination-out';
+                                        ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+                                        for (let i = 0; i < visibleBoxesWithIdx.length; i++) {
+                                            const [x1, y1, x2, y2] =
+                                                visibleBoxesWithIdx[i].box.bbox;
+                                            const w = x2 - x1;
+                                            const h = y2 - y1;
+                                            if (w > 0 && h > 0) ctx.fillRect(x1, y1, w, h);
+                                        }
+                                        // Hover spotlight: re-dim everything, then clear the
+                                        // hovered box so it pops above its neighbours.
+                                        if (hovered) {
+                                            ctx.globalCompositeOperation = 'source-over';
+                                            ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_HOVER})`;
+                                            ctx.fillRect(0, 0, imageSize.width, imageSize.height);
+                                            const [hx1, hy1, hx2, hy2] = hovered.bbox;
+                                            const hw = hx2 - hx1;
+                                            const hh = hy2 - hy1;
+                                            if (hw > 0 && hh > 0) {
+                                                ctx.globalCompositeOperation = 'destination-out';
+                                                ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+                                                ctx.fillRect(hx1, hy1, hw, hh);
+                                            }
+                                        }
+                                        ctx.restore();
+                                    }}
+                                />
                             </Layer>
                         )}
 
@@ -1080,55 +1156,6 @@ export function OverlayImage({
                                         onClick={handleDeleteSelected}
                                     />
                                 )}
-
-                            {/* Class-name labels (above each visible box). Rendered last so
-                  they sit on top of strokes; non-listening so they never
-                  interfere with selection / drag hit testing. Density-gated:
-                  skipped entirely when there are too many boxes to read or
-                  the effective on-screen font size is sub-readable — this
-                  drops the text-layout cost that dominates dense scenes. */}
-                            {labelsVisible && (
-                                <Shape
-                                    listening={false}
-                                    perfectDrawEnabled={false}
-                                    // Scene cache key: force a re-draw when zoom or the
-                                    // visible set changes. The sceneFunc closure reads
-                                    // fresh refs each invocation anyway.
-                                    sceneFunc={(context) => {
-                                        const stage = stageRef.current;
-                                        if (!stage) return;
-                                        const ctx = context._context as CanvasRenderingContext2D;
-                                        const tx = stage.x();
-                                        const ty = stage.y();
-                                        const s = stage.scaleX();
-                                        ctx.save();
-                                        // Draw in SCREEN space so font size stays constant
-                                        // regardless of zoom.
-                                        ctx.setTransform(1, 0, 0, 1, 0, 0);
-                                        ctx.font = `bold ${LABEL_SCREEN_PX}px sans-serif`;
-                                        // Bottom baseline so `y` is the text's bottom
-                                        // edge — makes "sit on top of the box" trivial.
-                                        ctx.textBaseline = 'bottom';
-                                        ctx.fillStyle = LABEL_FG;
-                                        const LABEL_GAP = 2;
-                                        for (let i = 0; i < visibleBoxesWithIdx.length; i++) {
-                                            const { box } = visibleBoxesWithIdx[i];
-                                            const [x1, y1] = box.bbox;
-                                            const sx = x1 * s + tx;
-                                            const sy = y1 * s + ty;
-                                            // Sit the text's bottom LABEL_GAP pixels above
-                                            // the box top. Flip inside when the label would
-                                            // clip off the top of the viewport.
-                                            const yText =
-                                                sy - LABEL_GAP < LABEL_SCREEN_PX
-                                                    ? sy + LABEL_SCREEN_PX + LABEL_GAP
-                                                    : sy - LABEL_GAP;
-                                            ctx.fillText(box.label || 'object', sx, yText);
-                                        }
-                                        ctx.restore();
-                                    }}
-                                />
-                            )}
 
                             {/* Rubber-band while drawing */}
                             {editing &&
