@@ -26,13 +26,32 @@ import { useEffect, useRef, useState } from "react";
 const THUMB_MAX_EDGE = 300;
 const THUMB_QUALITY = 0.4;
 const THUMB_CONCURRENCY = 4;
+const CACHE_MAX = 200;
 
 interface CacheEntry {
   url: string; // object URL for the downscaled JPEG
   refCount: number;
 }
 
+// Map preserves insertion order; we evict from the front when oversized.
 const cache = new Map<string, Promise<CacheEntry>>();
+
+function touch(srcUrl: string, value: Promise<CacheEntry>) {
+  // Re-insert to bump LRU position.
+  cache.delete(srcUrl);
+  cache.set(srcUrl, value);
+}
+
+async function evictIfNeeded() {
+  if (cache.size <= CACHE_MAX) return;
+  for (const [key, valuePromise] of cache) {
+    if (cache.size <= CACHE_MAX) break;
+    const entry = await valuePromise.catch(() => null);
+    if (!entry || entry.refCount > 0) continue;
+    URL.revokeObjectURL(entry.url);
+    cache.delete(key);
+  }
+}
 
 // Tiny semaphore — queue of resolver functions waiting for a slot.
 let active = 0;
@@ -57,10 +76,10 @@ function release(): void {
   if (next) next();
 }
 
-async function buildThumbnail(srcUrl: string): Promise<CacheEntry> {
+async function buildThumbnail(srcUrl: string, signal?: AbortSignal): Promise<CacheEntry> {
   await acquire();
   try {
-    const resp = await fetch(srcUrl, { credentials: "same-origin" });
+    const resp = await fetch(srcUrl, { credentials: "same-origin", signal });
     if (!resp.ok) {
       throw new Error(`overlay fetch failed: ${resp.status}`);
     }
@@ -97,11 +116,15 @@ async function buildThumbnail(srcUrl: string): Promise<CacheEntry> {
   }
 }
 
-function getOrCreate(srcUrl: string): Promise<CacheEntry> {
+function getOrCreate(srcUrl: string, signal?: AbortSignal): Promise<CacheEntry> {
   const existing = cache.get(srcUrl);
-  if (existing) return existing;
-  const fresh = buildThumbnail(srcUrl);
+  if (existing) {
+    touch(srcUrl, existing);
+    return existing;
+  }
+  const fresh = buildThumbnail(srcUrl, signal);
   cache.set(srcUrl, fresh);
+  void evictIfNeeded();
   return fresh;
 }
 
@@ -127,20 +150,23 @@ export function useOverlayThumbnail(
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     lastSrcRef.current = srcUrl;
     setError(false);
-    getOrCreate(srcUrl)
+    getOrCreate(srcUrl, controller.signal)
       .then((entry) => {
         if (cancelled || lastSrcRef.current !== srcUrl) return;
         entry.refCount++;
         setThumbUrl(entry.url);
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setError(true);
       });
     return () => {
       cancelled = true;
+      controller.abort();
       // Decrement on unmount — when refCount hits 0 we *could* revoke the
       // object URL and drop the cache entry, but navigating back to the
       // same batch is common so we keep thumbnails around for the page

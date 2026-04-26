@@ -38,9 +38,18 @@ function toWsUrl(base: string): string {
 }
 
 let ws: WebSocket | null = null;
+let opening = false;
 let stopped = true;
 let reconnectTimer: number | null = null;
 let reconnectDelay = 500;
+
+const DEV = import.meta.env.DEV;
+
+function isStageEvent(value: unknown): value is StageEvent {
+    if (!value || typeof value !== "object") return false;
+    const v = value as Record<string, unknown>;
+    return typeof v.stage === "string" && typeof v.batch_id === "string";
+}
 
 function clearReconnect(): void {
     if (reconnectTimer !== null) {
@@ -52,8 +61,8 @@ function clearReconnect(): void {
 function scheduleReconnect(): void {
     if (stopped) return;
     clearReconnect();
-    const delay = Math.min(reconnectDelay, 5000);
-    reconnectDelay = Math.min(reconnectDelay * 2, 5000);
+    const delay = Math.min(reconnectDelay, 30_000) + Math.random() * 1000;
+    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
     reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
         openSocket();
@@ -62,61 +71,58 @@ function scheduleReconnect(): void {
 
 function openSocket(): void {
     if (stopped) return;
+    if (opening || ws) return;
+    opening = true;
     const url = toWsUrl(getBaseUrl());
-    console.debug("[stageTracker] connecting to", url);
+    if (DEV) console.debug("[stageTracker] connecting to", url);
     let sock: WebSocket;
     try {
         sock = new WebSocket(url);
     } catch (e) {
-        console.warn("[stageTracker] ws construct failed:", e);
+        opening = false;
+        if (DEV) console.warn("[stageTracker] ws construct failed:", e);
         scheduleReconnect();
         return;
     }
     ws = sock;
 
     sock.onopen = () => {
+        opening = false;
         reconnectDelay = 500;
-        console.info("[stageTracker] ✅ connected to", url);
+        if (DEV) console.info("[stageTracker] ✅ connected to", url);
     };
     sock.onmessage = (ev) => {
-        let evt: StageEvent;
+        let parsed: unknown;
         try {
-            evt = JSON.parse(ev.data as string) as StageEvent;
+            parsed = JSON.parse(ev.data as string);
         } catch (e) {
-            console.warn("[stageTracker] bad frame:", ev.data, e);
+            if (DEV) console.warn("[stageTracker] bad frame:", ev.data, e);
             return;
         }
+        if (!isStageEvent(parsed)) {
+            if (DEV) console.warn("[stageTracker] invalid event shape:", parsed);
+            return;
+        }
+        const evt = parsed;
         const active = getRunningBatchId();
-        if (!active) {
-            console.log("[stageTracker] 📥", evt.stage, evt.filename, "(no active batch — ignored)");
-            return;
-        }
-        if (evt.batch_id !== active) {
-            console.log(
-                "[stageTracker] 📥 (batch mismatch — ignored)",
-                "got=",
-                evt.batch_id,
-                "active=",
-                active,
-                evt,
-            );
-            return;
-        }
-        console.log("[stageTracker] 📥", evt.stage, "—", evt.filename, "(batch", active, ")");
+        if (!active) return;
+        if (evt.batch_id !== active) return;
+        if (DEV) console.debug("[stageTracker] 📥", evt.stage, "—", evt.filename);
         useProcessingStore.getState().setStage(composeStageText(evt.stage, evt.filename));
     };
     sock.onerror = (e) => {
-        console.warn("[stageTracker] ws error:", e);
+        if (DEV) console.warn("[stageTracker] ws error:", e);
     };
     sock.onclose = (e) => {
-        console.debug("[stageTracker] ws closed:", e.code, e.reason);
+        if (DEV) console.debug("[stageTracker] ws closed:", e.code, e.reason);
+        opening = false;
         if (ws === sock) ws = null;
         scheduleReconnect();
     };
 }
 
 export function startStageTracker(): void {
-    if (!stopped && ws) return;
+    if (!stopped && (ws || opening)) return;
     stopped = false;
     reconnectDelay = 500;
     openSocket();
@@ -124,6 +130,7 @@ export function startStageTracker(): void {
 
 export function stopStageTracker(): void {
     stopped = true;
+    opening = false;
     clearReconnect();
     if (ws) {
         try {

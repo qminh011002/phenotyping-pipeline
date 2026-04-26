@@ -205,5 +205,6 @@ class BatchDownloadRequest(BaseModel):
 
     image_ids: list[UUID] | None = Field(
         default=None,
+        max_length=1000,
         description="Subset of image IDs to include. None/empty means all.",
     )

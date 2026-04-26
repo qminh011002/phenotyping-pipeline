@@ -18,17 +18,24 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
     # ── analysis_batch ──────────────────────────────────────────────────────────
     op.create_table(
         "analysis_batch",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("created_at", postgresql.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("completed_at", postgresql.TIMESTAMP(timezone=True), nullable=True),
-        sa.Column("status", sa.String(20), server_default="pending", nullable=False),
+        sa.Column("status", sa.String(20), server_default="processing", nullable=False),
         sa.Column("organism_type", sa.String(20), server_default="egg", nullable=False),
         sa.Column("mode", sa.String(20), server_default="upload", nullable=False),
         sa.Column("device", sa.String(20), server_default="cpu", nullable=False),
-        sa.Column("config_snapshot", postgresql.JSONB(), nullable=False),
+        sa.Column(
+            "config_snapshot",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column("total_image_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("total_count", sa.Integer(), nullable=True),
         sa.Column("avg_confidence", sa.Float(), nullable=True),

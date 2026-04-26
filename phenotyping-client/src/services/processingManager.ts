@@ -24,6 +24,7 @@ import {
 import type { Organism } from "@/types/api";
 import {
   clearProcessingSession,
+  getCachedFile,
   loadDbBatchId,
   loadOrganism,
   loadProcessingFiles,
@@ -76,8 +77,12 @@ export function getRunningBatchId(): string | null {
  */
 export async function startProcessingFromSession(): Promise<void> {
   if (runtime.running) return;
+  runtime.running = true;
   const stored = loadProcessingFiles();
-  if (stored.length === 0) return;
+  if (stored.length === 0) {
+    runtime.running = false;
+    return;
+  }
 
   const store = useProcessingStore.getState();
   store.startProcessing(stored.length);
@@ -86,7 +91,10 @@ export async function startProcessingFromSession(): Promise<void> {
   );
 
   // Run in background — caller (UploadPage) navigates immediately.
-  void runNewBatch(stored);
+  void runNewBatch(stored).catch((err) => {
+    console.error("runNewBatch failed", err);
+    runtime.running = false;
+  });
 }
 
 /**
@@ -185,8 +193,8 @@ export function cancelProcessing(): void {
 export function discardInterruptedBatch(): void {
   const info = useProcessingStore.getState().interruptedBatch;
   if (info) {
-    failBatch(info.id, "User discarded interrupted batch").catch(() => {
-      /* non-fatal */
+    failBatch(info.id, "User discarded interrupted batch").catch((err) => {
+      console.warn("failBatch (discard) failed:", err);
     });
   }
   useProcessingStore.getState().reset();
@@ -234,7 +242,7 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
   let configSnapshot: Record<string, unknown> = {};
   try {
     const currentConfig = await getConfig();
-    const { model: _model, ...rest } = currentConfig as unknown as Record<string, unknown>;
+    const { model: _model, ...rest } = currentConfig;
     configSnapshot = rest;
   } catch {
     /* non-fatal — proceed with empty snapshot */
@@ -277,6 +285,7 @@ async function runProcessLoop(
   dbBatchId: string,
 ): Promise<void> {
   runtime.running = true;
+  runtime.cancelled = false;
   const store = useProcessingStore.getState();
   const startTime = Date.now();
   const runResults: Array<{
@@ -295,10 +304,13 @@ async function runProcessLoop(
 
     try {
       setStage(`Loading image — ${file.name} (${i + 1}/${stored.length})…`);
-      const resp = await fetch(file.blobUrl);
-      if (!resp.ok) throw new Error(`source image unavailable (${resp.status})`);
-      const blob = await resp.blob();
-      const fileObj = new File([blob], file.name, { type: file.type });
+      let fileObj = getCachedFile(file.id);
+      if (!fileObj) {
+        const resp = await fetch(file.blobUrl);
+        if (!resp.ok) throw new Error(`source image unavailable (${resp.status})`);
+        const blob = await resp.blob();
+        fileObj = new File([blob], file.name, { type: file.type });
+      }
 
       if (runtime.cancelled) break;
       // Backend now drives per-image stages (decode/tile/detect/dedup/draw/save)
@@ -327,6 +339,10 @@ async function runProcessLoop(
       });
       runResults.push({ id: file.id, filename: file.name, result });
     } catch (err) {
+      if (runtime.cancelled) {
+        store.setCurrentImageStart(null);
+        break;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       runResults.push({ id: file.id, filename: file.name, error: msg });
       store.updateImage(file.id, { status: "error", error: msg });

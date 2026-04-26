@@ -41,12 +41,12 @@ export function InlineEditableText({
     }, [value, editing]);
 
     useEffect(() => {
-        if (editing) {
-            requestAnimationFrame(() => {
-                inputRef.current?.focus();
-                inputRef.current?.select();
-            });
-        }
+        if (!editing) return;
+        const handle = requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+        });
+        return () => cancelAnimationFrame(handle);
     }, [editing]);
 
     const commit = useCallback(async () => {

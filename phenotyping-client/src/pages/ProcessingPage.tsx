@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PauseCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -91,12 +91,27 @@ export default function ProcessingPage() {
         }
     }, [completedBatchId, navigate]);
 
-    const doneCount = storeImages.filter((img) => img.status === 'done').length;
-    const errorCount = storeImages.filter((img) => img.status === 'error').length;
+    const { doneCount, errorCount, allCompleted } = useMemo(() => {
+        let done = 0;
+        let err = 0;
+        let completed = 0;
+        for (const img of storeImages) {
+            if (img.status === 'done') {
+                done += 1;
+                completed += 1;
+            } else if (img.status === 'error') {
+                err += 1;
+            }
+        }
+        return {
+            doneCount: done,
+            errorCount: err,
+            allCompleted: completed === storeImages.length,
+        };
+    }, [storeImages]);
     const processedSoFar = doneCount + errorCount;
     const anyError = errorCount > 0;
-    const allDone =
-        !isProcessing && totalImages > 0 && storeImages.every((img) => img.status === 'done');
+    const allDone = !isProcessing && totalImages > 0 && allCompleted;
 
     function handleCancel() {
         cancelProcessing();
@@ -104,8 +119,12 @@ export default function ProcessingPage() {
     }
 
     async function handleInterruptedViewResults() {
-        await finalizeInterruptedBatch();
-        navigate('/analyze/results');
+        try {
+            await finalizeInterruptedBatch();
+            navigate('/analyze/results');
+        } catch (err) {
+            console.error('finalizeInterruptedBatch failed', err);
+        }
     }
 
     function handleInterruptedDiscard() {

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from typing import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -35,7 +35,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self,
         request: Request,
-        call_next: Callable[[Request], Response],
+        call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         method = request.method
         path = request.url.path

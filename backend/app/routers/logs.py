@@ -6,7 +6,6 @@ WS   /logs/stream  — streams real-time log entries and 1-second heartbeat fram
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -71,7 +70,12 @@ async def ws_logs_stream(websocket: WebSocket) -> None:
 
         logger.debug(
             "WS client connected",
-            extra={"context": {"client_id": client_id, "total_clients": 1}},
+            extra={
+                "context": {
+                    "client_id": client_id,
+                    "total_clients": log_buffer.subscriber_count,
+                }
+            },
         )
 
         while True:
@@ -80,8 +84,9 @@ async def ws_logs_stream(websocket: WebSocket) -> None:
 
             try:
                 await websocket.send_json(frame)
-            except Exception:
-                # Client disconnected mid-stream — break and clean up
+            except Exception as exc:
+                # Client disconnected mid-stream — log cause and clean up.
+                logger.debug("logs WS send failed: %s", exc)
                 break
 
     except WebSocketDisconnect:

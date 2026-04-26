@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
     Upload,
@@ -439,18 +439,24 @@ export default function UploadPage() {
     }, []);
 
     useEffect(() => {
+        let depth = 0;
         const onDragEnter = (e: DragEvent) => {
             e.preventDefault();
-            setIsDragOver(true);
+            depth += 1;
+            if (depth === 1) setIsDragOver(true);
         };
         const onDragLeave = (e: DragEvent) => {
             e.preventDefault();
-            if (e.relatedTarget === null) setIsDragOver(false);
+            depth = Math.max(0, depth - 1);
+            if (depth === 0) setIsDragOver(false);
         };
         const onDragOver = (e: DragEvent) => {
             e.preventDefault();
         };
-        const onDrop = () => setIsDragOver(false);
+        const onDrop = () => {
+            depth = 0;
+            setIsDragOver(false);
+        };
 
         window.addEventListener('dragenter', onDragEnter);
         window.addEventListener('dragleave', onDragLeave);
@@ -465,7 +471,6 @@ export default function UploadPage() {
     }, []);
 
     useEffect(() => {
-        if (!files.length) return;
         const grid = gridRef.current;
         if (!grid) return;
 
@@ -483,7 +488,7 @@ export default function UploadPage() {
         const observer = new ResizeObserver(updateGridColumns);
         observer.observe(grid);
         return () => observer.disconnect();
-    }, [files.length]);
+    }, []);
 
     async function addFiles(newFiles: File[]) {
         const valid = newFiles.filter((f) => SUPPORTED_TYPES.has(f.type));
@@ -523,12 +528,18 @@ export default function UploadPage() {
     // Release all object URLs when this page unmounts so the browser can free
     // the underlying File refs. Downstream (processingSession) creates its own
     // object URLs for the chosen files, so revoking here is safe.
+    const filesRef = useRef(files);
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+    const previewUrlRef = useRef<string | null>(previewUrl);
+    useEffect(() => {
+        previewUrlRef.current = previewUrl;
+    }, [previewUrl]);
     useEffect(() => {
         return () => {
-            setFiles((current) => {
-                current.forEach((f) => URL.revokeObjectURL(f.previewUrl));
-                return current;
-            });
+            filesRef.current.forEach((f) => URL.revokeObjectURL(f.previewUrl));
+            if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
         };
     }, []);
 
@@ -599,14 +610,20 @@ export default function UploadPage() {
         navigate('/analyze/processing');
     }
 
-    const totalBytes = files.reduce((sum, f) => sum + f.file.size, 0);
+    const totalBytes = useMemo(
+        () => files.reduce((sum, f) => sum + f.file.size, 0),
+        [files],
+    );
     const hasFiles = files.length > 0;
     const pageSize = Math.max(gridColumns * MAX_GRID_ROWS, 1);
     const pageCount = Math.max(1, Math.ceil(files.length / pageSize));
     const currentPage = Math.min(page, pageCount);
     const pageStart = (currentPage - 1) * pageSize;
     const pageEnd = Math.min(pageStart + pageSize, files.length);
-    const pageFiles = files.slice(pageStart, pageEnd);
+    const pageFiles = useMemo(
+        () => files.slice(pageStart, pageEnd),
+        [files, pageStart, pageEnd],
+    );
     const showAddMoreCard = currentPage === pageCount && pageFiles.length < pageSize;
 
     // Clamp page when files change (removals etc.)
@@ -617,6 +634,7 @@ export default function UploadPage() {
     function openPreview(id: string) {
         const entry = files.find((f) => f.id === id);
         if (!entry) return;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
         // Create a fresh object URL for the ORIGINAL file — full quality, on demand.
         const url = URL.createObjectURL(entry.file);
         setPreviewUrl(url);

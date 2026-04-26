@@ -27,21 +27,30 @@ export function DeviceSection() {
   const [hasHealth, setHasHealth] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function fetchConfig() {
+  function fetchConfig(signal?: AbortSignal) {
     setLoading(true);
     setError(null);
-    Promise.all([getConfig(), getHealth().catch(() => null)])
+    Promise.all([getConfig(signal), getHealth(signal).catch(() => null)])
       .then(([cfg, health]) => {
+        if (signal?.aborted) return;
         setConfig(cfg);
         setCudaAvailable(health?.cuda_available ?? false);
         setHasHealth(!!health);
       })
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (signal?.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(String(err));
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }
 
   useEffect(() => {
-    fetchConfig();
+    const controller = new AbortController();
+    fetchConfig(controller.signal);
+    return () => controller.abort();
   }, []);
 
   const handleDeviceChange = useCallback((value: string) => {

@@ -2,6 +2,7 @@
 // The confidence slider lives here too: moving it updates both the displayed
 // Egg Count and the boxes rendered by OverlayImage.
 
+import { useMemo } from "react";
 import { Microscope, Clock, Image as ImageIcon, Settings, SlidersHorizontal } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,18 @@ interface StatBoardProps {
 
 const PRESETS: number[] = [0, 0.5, 0.7, 0.9];
 
+const CONFIG_KEYS: Array<[string, string]> = [
+  ["confidence_threshold", "Confidence threshold"],
+  ["tile_size", "Tile size"],
+  ["overlap", "Overlap"],
+  ["dedup_mode", "Dedup mode"],
+  ["min_box_area", "Min box area"],
+  ["edge_margin", "Edge margin"],
+  ["nms_iou_threshold", "NMS IoU"],
+  ["batch_size", "Batch size"],
+];
+
+
 function ConfidenceDot({ value }: { value: number }) {
   const color =
     value >= 0.7 ? "text-green-600 dark:text-green-400" :
@@ -54,43 +67,45 @@ export function StatBoard({
   visibleAnnotations,
   confidenceThreshold,
   onConfidenceChange,
-  editMode = false,
+  editMode: _editMode = false,
   modelBoxes = [],
   sessionBoxes = [],
 }: StatBoardProps) {
   const totalCount = result.annotations.length;
   const visibleCount = visibleAnnotations.length;
-  const avgConfVisible = visibleCount > 0
-    ? visibleAnnotations.reduce((s, a) => s + a.confidence, 0) / visibleCount
-    : 0;
+  const avgConfVisible = useMemo(
+    () =>
+      visibleCount > 0
+        ? visibleAnnotations.reduce((s, a) => s + a.confidence, 0) / visibleCount
+        : 0,
+    [visibleAnnotations, visibleCount],
+  );
 
-  // FS-009: compute edited-box counts
-  const sessionSet = new Set(sessionBoxes.map((b) => `${b.bbox[0]},${b.bbox[1]},${b.bbox[2]},${b.bbox[3]}`));
-  const addedCount = sessionBoxes.filter((b) => b.origin === "user").length;
-  const removedCount = modelBoxes.filter(
-    (b) => b.origin !== "user" && !sessionSet.has(`${b.bbox[0]},${b.bbox[1]},${b.bbox[2]},${b.bbox[3]}`),
-  ).length;
-  const modifiedCount = modelBoxes.filter(
-    (b, i) => {
-      const s = sessionBoxes[i];
-      return s && s.origin !== "user" && (
-        s.bbox[0] !== b.bbox[0] || s.bbox[1] !== b.bbox[1] ||
-        s.bbox[2] !== b.bbox[2] || s.bbox[3] !== b.bbox[3]
-      );
-    },
-  ).length;
+  // Edit counts (modelBoxes vs sessionBoxes) are intentionally not displayed yet —
+  // the calculation is preserved for the upcoming edit-summary card.
+  void modelBoxes;
+  void sessionBoxes;
 
-  // Build the ordered list of config params to display.
-  const CONFIG_KEYS: Array<[string, string]> = [
-    ["confidence_threshold", "Confidence threshold"],
-    ["tile_size", "Tile size"],
-    ["overlap", "Overlap"],
-    ["dedup_mode", "Dedup mode"],
-    ["min_box_area", "Min box area"],
-    ["edge_margin", "Edge margin"],
-    ["nms_iou_threshold", "NMS IoU"],
-    ["batch_size", "Batch size"],
-  ];
+  // Single-pass confidence breakdown.
+  const breakdown = useMemo(() => {
+    let ge90 = 0;
+    let ge70 = 0;
+    let ge50 = 0;
+    let lt50 = 0;
+    for (const a of result.annotations) {
+      const c = a.confidence;
+      if (c >= 0.9) ge90 += 1;
+      else if (c >= 0.7) ge70 += 1;
+      else if (c >= 0.5) ge50 += 1;
+      else lt50 += 1;
+    }
+    return [
+      { label: "≥ 90%", count: ge90 },
+      { label: "70–89%", count: ge70 },
+      { label: "50–69%", count: ge50 },
+      { label: "< 50%", count: lt50 },
+    ];
+  }, [result.annotations]);
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -234,12 +249,7 @@ export function StatBoard({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {[
-              { label: "≥ 90%", count: result.annotations.filter((a) => a.confidence >= 0.9).length },
-              { label: "70–89%", count: result.annotations.filter((a) => a.confidence >= 0.7 && a.confidence < 0.9).length },
-              { label: "50–69%", count: result.annotations.filter((a) => a.confidence >= 0.5 && a.confidence < 0.7).length },
-              { label: "< 50%", count: result.annotations.filter((a) => a.confidence < 0.5).length },
-            ].map(({ label, count }) => (
+            {breakdown.map(({ label, count }) => (
               <div key={label} className="flex items-center gap-3 text-sm">
                 <span className="w-16 text-muted-foreground">{label}</span>
                 <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">

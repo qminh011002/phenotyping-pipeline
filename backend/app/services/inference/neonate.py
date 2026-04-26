@@ -47,20 +47,19 @@ class NeonateInferenceService:
         self._config = None
         self._stride: int | None = None
 
+        max_concurrent = 1 if model_registry.neonate_device == "cpu" else 2
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+
     # ── Config ────────────────────────────────────────────────────────────────
 
     @property
     def _neonate_config(self):
-        if self._config is None:
-            self._config = self._pipeline_config.get_neonate_config()
-        return self._config
+        return self._pipeline_config.get_neonate_config()
 
     @property
     def _computed_stride(self) -> int:
-        if self._stride is None:
-            cfg = self._neonate_config
-            self._stride = int(cfg.tile_size * (1 - cfg.overlap))
-        return self._stride
+        cfg = self._neonate_config
+        return int(cfg.tile_size * (1 - cfg.overlap))
 
     # ── Tile / dedup helpers ──────────────────────────────────────────────────
 
@@ -202,8 +201,18 @@ class NeonateInferenceService:
         tiles, coords = self._tile_image(image)
 
         all_boxes: list[np.ndarray] = []
-        all_scores: list[float] = []
+        all_scores: list[np.ndarray] = []
+        all_cls_ids: list[np.ndarray] = []
         skipped = 0
+
+        # Class-name lookup driven by the loaded checkpoint, not a hardcoded literal.
+        names_map = getattr(model, "names", None) or {}
+        default_label = next(iter(names_map.values()), "neonate") if names_map else "neonate"
+
+        stride = self._computed_stride
+        half = stride // 2
+        tile_size = cfg.tile_size
+        edge_margin = cfg.edge_margin
 
         for i in range(0, len(tiles), cfg.batch_size):
             batch_tiles = tiles[i : i + cfg.batch_size]
@@ -219,39 +228,56 @@ class NeonateInferenceService:
             for res, (y_off, x_off) in zip(results, batch_coords):
                 if res.boxes is None or len(res.boxes) == 0:
                     continue
-                for box, conf in zip(
-                    res.boxes.xyxy.cpu().numpy(),
-                    res.boxes.conf.cpu().numpy(),
-                ):
-                    x1, y1, x2, y2 = box
-                    gx1 = x1 + x_off
-                    gy1 = y1 + y_off
-                    gx2 = x2 + x_off
-                    gy2 = y2 + y_off
-                    gx1_c = max(0.0, min(gx1, float(w)))
-                    gy1_c = max(0.0, min(gy1, float(h)))
-                    gx2_c = max(0.0, min(gx2, float(w)))
-                    gy2_c = max(0.0, min(gy2, float(h)))
+                xyxy = res.boxes.xyxy.cpu().numpy()
+                confs = res.boxes.conf.cpu().numpy()
+                cls_ids = (
+                    res.boxes.cls.cpu().numpy().astype(np.int32)
+                    if getattr(res.boxes, "cls", None) is not None
+                    else np.zeros(len(xyxy), dtype=np.int32)
+                )
+                if xyxy.size == 0:
+                    continue
 
-                    if cfg.dedup_mode == "center_zone":
-                        cx = (gx1_c + gx2_c) / 2
-                        cy = (gy1_c + gy2_c) / 2
-                        if not self._is_in_valid_zone(cx, cy, x_off, y_off, w, h):
-                            skipped += 1
-                            continue
-                    elif cfg.dedup_mode == "edge_nms":
-                        if self._is_box_touching_edge(x1, y1, x2, y2):
-                            skipped += 1
-                            continue
+                offset = np.array([x_off, y_off, x_off, y_off], dtype=xyxy.dtype)
+                g = xyxy + offset
+                np.clip(g[:, 0::2], 0, w, out=g[:, 0::2])
+                np.clip(g[:, 1::2], 0, h, out=g[:, 1::2])
 
-                    all_boxes.append(
-                        np.array([gx1_c, gy1_c, gx2_c, gy2_c], dtype=np.float32)
+                if cfg.dedup_mode == "center_zone":
+                    cx = (g[:, 0] + g[:, 2]) * 0.5
+                    cy = (g[:, 1] + g[:, 3]) * 0.5
+                    valid_x_min = x_off + (half if x_off > 0 else 0)
+                    valid_x_max = (x_off + half + stride) if (x_off + tile_size < w) else w
+                    valid_y_min = y_off + (half if y_off > 0 else 0)
+                    valid_y_max = (y_off + half + stride) if (y_off + tile_size < h) else h
+                    mask = (
+                        (cx >= valid_x_min)
+                        & (cx < valid_x_max)
+                        & (cy >= valid_y_min)
+                        & (cy < valid_y_max)
                     )
-                    all_scores.append(float(conf))
+                elif cfg.dedup_mode == "edge_nms":
+                    mask = ~(
+                        (xyxy[:, 0] <= edge_margin)
+                        | (xyxy[:, 1] <= edge_margin)
+                        | (xyxy[:, 2] >= tile_size - edge_margin)
+                        | (xyxy[:, 3] >= tile_size - edge_margin)
+                    )
+                else:
+                    mask = np.ones(len(g), dtype=bool)
+
+                kept = int(mask.sum())
+                skipped += len(g) - kept
+                if kept == 0:
+                    continue
+                all_boxes.append(g[mask].astype(np.float32, copy=False))
+                all_scores.append(confs[mask].astype(np.float32, copy=False))
+                all_cls_ids.append(cls_ids[mask])
 
         if all_boxes:
-            boxes_arr = np.stack(all_boxes, axis=0)
-            scores_arr = np.array(all_scores, dtype=np.float32)
+            boxes_arr = np.concatenate(all_boxes, axis=0)
+            scores_arr = np.concatenate(all_scores, axis=0)
+            cls_ids_arr = np.concatenate(all_cls_ids, axis=0)
 
             if cfg.min_box_area > 0:
                 areas = (boxes_arr[:, 2] - boxes_arr[:, 0]) * (
@@ -260,22 +286,26 @@ class NeonateInferenceService:
                 mask = areas >= cfg.min_box_area
                 boxes_arr = boxes_arr[mask]
                 scores_arr = scores_arr[mask]
+                cls_ids_arr = cls_ids_arr[mask]
 
             if cfg.dedup_mode == "edge_nms" and len(boxes_arr) > 0:
                 keep = self._nms_boxes(boxes_arr, scores_arr, cfg.nms_iou_threshold)
                 boxes_arr = boxes_arr[keep]
                 scores_arr = scores_arr[keep]
+                cls_ids_arr = cls_ids_arr[keep]
         else:
             boxes_arr = np.empty((0, 4), dtype=np.float32)
             scores_arr = np.empty(0, dtype=np.float32)
+            cls_ids_arr = np.empty(0, dtype=np.int32)
 
         neonate_count = len(boxes_arr)
 
         overlay = image.copy()
         annotations: list[BBox] = []
 
-        for box, conf in zip(boxes_arr, scores_arr):
+        for box, conf, cls_id in zip(boxes_arr, scores_arr, cls_ids_arr):
             x1_i, y1_i, x2_i, y2_i = box.astype(int).tolist()
+            label = str(names_map.get(int(cls_id), default_label))
             cv2.rectangle(overlay, (x1_i, y1_i), (x2_i, y2_i), (0, 255, 0), 1)
             cv2.putText(
                 overlay,
@@ -288,7 +318,7 @@ class NeonateInferenceService:
             )
             annotations.append(
                 BBox(
-                    label="neonate",
+                    label=label,
                     bbox=(x1_i, y1_i, x2_i, y2_i),
                     confidence=round(float(conf), 4),
                 )
@@ -297,7 +327,7 @@ class NeonateInferenceService:
         avg_confidence = float(scores_arr.mean()) if len(scores_arr) else 0.0
         elapsed = time.time() - t_start
 
-        model_name = cfg.model.split("/")[-1] if "/" in cfg.model else cfg.model
+        model_name = self._model_registry.active_filename("neonate")
         config_lines: list[str] = [
             "[ Configuration ]",
             f"  model       : {model_name}",
@@ -367,10 +397,8 @@ class NeonateInferenceService:
         image = await loop.run_in_executor(self._executor, _decode)
 
         device = self._model_registry.neonate_device
-        max_concurrent = 1 if device == "cpu" else 2
-        semaphore = asyncio.Semaphore(max_concurrent)
 
-        async with semaphore:
+        async with self._semaphore:
             result = await loop.run_in_executor(
                 self._executor,
                 lambda: self._run_inference(image, filename, batch_id),
@@ -398,14 +426,21 @@ class NeonateInferenceService:
         batch_id: str,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> BatchDetectionResult:
-        results: list[DetectionResult] = []
         total_start = time.time()
+        total = len(images)
+        completed = 0
 
-        for idx, (image_data, fname) in enumerate(images, start=1):
-            result = await self.process_single(image_data, fname, batch_id)
-            results.append(result)
+        async def _one(image_data: bytes, fname: str) -> DetectionResult:
+            nonlocal completed
+            r = await self.process_single(image_data, fname, batch_id)
+            completed += 1
             if on_progress is not None:
-                on_progress(idx, len(images))
+                on_progress(completed, total)
+            return r
+
+        results = await asyncio.gather(
+            *(_one(b, f) for b, f in images)
+        )
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)

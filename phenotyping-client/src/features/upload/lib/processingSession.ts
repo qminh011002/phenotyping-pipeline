@@ -63,18 +63,34 @@ export interface StoredBatchDetail {
 
 // ── Store files before navigating to processing page ─────────────────────────
 
+// In-memory cache: id -> File. Survives tab navigation (module-level), not reload.
+// Lets processingManager skip the fetch(blobUrl)->blob() roundtrip on the hot path.
+const _fileCache = new Map<string, File>();
+
+export function getCachedFile(id: string): File | undefined {
+  return _fileCache.get(id);
+}
+
 export function storeProcessingFiles(
   files: Array<{ id: string; file: File }>,
   organism: string,
   batchId: string,
 ): void {
-  const stored: StoredFile[] = files.map(({ id, file }) => ({
-    id,
-    name: file.name,
-    type: file.type,
-    size: file.size,
-    blobUrl: URL.createObjectURL(file),
-  }));
+  // Revoke any prior blob URLs and clear cache from a previous batch
+  const prior = loadProcessingFiles();
+  prior.forEach((f) => URL.revokeObjectURL(f.blobUrl));
+  _fileCache.clear();
+
+  const stored: StoredFile[] = files.map(({ id, file }) => {
+    _fileCache.set(id, file);
+    return {
+      id,
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      blobUrl: URL.createObjectURL(file),
+    };
+  });
   sessionStorage.setItem(KEY_FILES, JSON.stringify(stored));
   sessionStorage.setItem(KEY_ORGANISM, organism);
   sessionStorage.setItem(KEY_BATCH_ID, batchId);
@@ -94,7 +110,8 @@ export function loadProcessingFiles(): StoredFile[] {
   try {
     const raw = sessionStorage.getItem(KEY_FILES);
     return raw ? JSON.parse(raw) : [];
-  } catch {
+  } catch (err) {
+    console.warn("loadProcessingFiles: corrupted sessionStorage payload", err);
     return [];
   }
 }
@@ -105,7 +122,8 @@ export function loadProcessingResults(): StoredResult[] {
   try {
     const raw = sessionStorage.getItem(KEY_RESULTS);
     return raw ? JSON.parse(raw) : [];
-  } catch {
+  } catch (err) {
+    console.warn("loadProcessingResults: corrupted sessionStorage payload", err);
     return [];
   }
 }
@@ -189,6 +207,7 @@ export function clearProcessingSession(): void {
   // Revoke blob URLs to free memory
   const files = loadProcessingFiles();
   files.forEach((f) => URL.revokeObjectURL(f.blobUrl));
+  _fileCache.clear();
   sessionStorage.removeItem(KEY_FILES);
   sessionStorage.removeItem(KEY_RESULTS);
   sessionStorage.removeItem(KEY_ORGANISM);

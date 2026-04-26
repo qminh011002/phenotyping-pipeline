@@ -16,6 +16,7 @@ from app.schemas.detection import (
 )
 from app.schemas.health import (
     AppSettingsResponse,
+    AppSettingsUpdate,
     HealthResponse,
     StorageSettingsResponse,
     StorageSettingsUpdate,
@@ -40,6 +41,7 @@ __all__ = [
     # Health / Settings
     "HealthResponse",
     "AppSettingsResponse",
+    "AppSettingsUpdate",
     "StorageSettingsResponse",
     "StorageSettingsUpdate",
 ]

@@ -11,7 +11,7 @@
 //     on that single image — the full batch is still loaded underneath so
 //     the user can flip through neighbours after landing.
 
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -131,7 +131,7 @@ interface ImageCardProps {
   onOpen: (image: AnalysisImageSummary) => void;
 }
 
-function ImageCard({ image, batchId, onOpen }: ImageCardProps) {
+const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   // IntersectionObserver-gated thumbnail fetch. Opening a batch with hundreds
   // of images would otherwise fire every fetch + canvas resize on mount.
@@ -256,7 +256,7 @@ function ImageCard({ image, batchId, onOpen }: ImageCardProps) {
       </div>
     </div>
   );
-}
+});
 
 // ── Pagination bar ──────────────────────────────────────────────────────────
 // Same shape as UploadPage's compact window — first, last, current ±1, with
@@ -340,6 +340,14 @@ function PaginationBar({
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+function BatchIdRedirect() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate("/recorded", { replace: true });
+  }, [navigate]);
+  return null;
+}
+
 export function BatchDetail() {
   const [searchParams] = useSearchParams();
   const batchId = searchParams.get("batch");
@@ -356,18 +364,32 @@ export function BatchDetail() {
   const [transitioning, setTransitioning] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
 
-  function fetchBatch() {
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  function fetchBatch(signal?: AbortSignal) {
     if (!batchId) return;
     setLoading(true);
     setError(null);
-    getAnalysisDetail(batchId)
-      .then((data) => setDetail(data))
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
+    getAnalysisDetail(batchId, signal)
+      .then((data) => {
+        if (signal?.aborted) return;
+        setDetail(data);
+      })
+      .catch((err) => {
+        if (signal?.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(String(err));
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }
 
   useEffect(() => {
-    fetchBatch();
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+    fetchBatch(controller.signal);
+    return () => controller.abort();
   }, [batchId]);
 
   // Measure the grid so we can derive "how many cards fit per row" and
@@ -397,10 +419,21 @@ export function BatchDetail() {
       setColumns((prev) => (prev === cols ? prev : cols));
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    let rafId = 0;
+    const debounced = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        measure();
+      });
+    };
+    const ro = new ResizeObserver(debounced);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [detail]);
+    return () => {
+      ro.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [Boolean(detail)]);
 
   // Clamp `page` when the derived `pageCount` shrinks under us (resize,
   // batch reload). Sits before the early returns to keep hook order stable.
@@ -437,8 +470,7 @@ export function BatchDetail() {
   }
 
   if (!batchId) {
-    navigate("/recorded", { replace: true });
-    return null;
+    return <BatchIdRedirect />;
   }
 
   if (loading) {

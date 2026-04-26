@@ -50,8 +50,15 @@ async def get_overlay(
 
     Returns 404 if the file does not exist.
     """
-    storage_dir = Path(get_cached_storage_dir())
+    storage_dir = Path(get_cached_storage_dir()).resolve()
     overlay_path = _resolve_overlay_path(storage_dir, batch_id, filename)
+
+    # Reject crafted batch_id/filename that escape the storage root.
+    if storage_dir not in overlay_path.parents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid overlay path",
+        )
 
     if not overlay_path.exists():
         logger.debug(

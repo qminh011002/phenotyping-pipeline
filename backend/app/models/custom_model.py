@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import ForeignKey, String, Text, TIMESTAMP
+from sqlalchemy import BigInteger, ForeignKey, Index, String, Text, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,7 +19,7 @@ class CustomModel(Base):
     organism: Mapped[str] = mapped_column(String(20), index=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_path: Mapped[str] = mapped_column(Text)
-    file_size_bytes: Mapped[int] = mapped_column()
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger)
     uploaded_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -30,6 +30,9 @@ class ModelAssignment(Base):
     """Maps an organism slot to its active custom model, if any."""
 
     __tablename__ = "model_assignment"
+    __table_args__ = (
+        Index("ix_model_assignment_custom_model_id", "custom_model_id"),
+    )
 
     organism: Mapped[str] = mapped_column(String(20), primary_key=True)
     custom_model_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -1,29 +1,51 @@
-import { NavLink } from "react-router-dom";
-import { motion } from "framer-motion";
+import { NavLink, useLocation } from "react-router-dom";
 import {
-  Home,
+  Bell,
+  ChevronsUpDown,
+  CircleHelp,
+  CreditCard,
   History,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
-  Sun,
+  Home,
+  LogOut,
+  Microscope,
   Moon,
+  Send,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Sun,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sidebar as SidebarRoot,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+  useSidebar,
+} from "@/components/ui/sidebar";
 import { useTheme } from "@/hooks/useTheme";
 import { ProcessingIndicator } from "./ProcessingIndicator";
 
 const NAV_ITEMS = [
-  { to: "/", icon: Home, label: "Home" },
-  { to: "/recorded", icon: History, label: "Recorded" },
-  { to: "/settings", icon: Settings, label: "Settings" },
+  { to: "/", icon: Home, label: "Dashboard", end: true },
+  { to: "/recorded", icon: History, label: "Recorded", end: false },
+  { to: "/settings", icon: Settings, label: "Settings", end: false },
 ] as const;
 
 interface SidebarProps {
@@ -31,147 +53,166 @@ interface SidebarProps {
   onCollapsedChange?: (collapsed: boolean) => void;
 }
 
-const EXPANDED_WIDTH = "w-60";
-const COLLAPSED_WIDTH = "w-14";
-
-export function Sidebar({ collapsed = false, onCollapsedChange }: SidebarProps) {
+export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
+  const location = useLocation();
+  const { isMobile, state } = useSidebar();
   const { theme, toggleTheme } = useTheme();
+  const collapsed = collapsedProp ?? state === "collapsed";
+  const ThemeIcon = theme === "light" ? Moon : Sun;
 
   return (
-    <aside
-      className={cn(
-        "flex flex-col border-r bg-card transition-[width] duration-200 ease-out",
-        collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH
-      )}
-    >
-      {/* Header */}
-      <div className="flex h-14 shrink-0 items-center border-b px-3">
-        <span
-          className={cn(
-            "truncate text-sm font-semibold tracking-tight transition-opacity duration-150",
-            collapsed ? "opacity-0 pointer-events-none" : "opacity-100"
-          )}
-        >
-          Phenotyping
-        </span>
-        {collapsed && (
-          <span className="mx-auto text-base font-bold tracking-tight">P</span>
-        )}
-      </div>
-
-      {/* Nav items */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-        {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === "/"}
-            className={({ isActive }) =>
-              cn(
-                "relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-100",
-                "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-                "hover:bg-accent/50",
-                isActive
-                  ? "text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <motion.div
-                    layoutId="sidebar-active-pill"
-                    className="absolute inset-0 rounded-md bg-accent"
-                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                  />
-                )}
-                <span className="relative z-10 flex items-center gap-3">
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span
-                    className={cn(
-                      "truncate transition-opacity duration-150",
-                      collapsed ? "opacity-0 pointer-events-none w-0" : "opacity-100"
-                    )}
-                  >
-                    {label}
+    <SidebarRoot collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
+              <NavLink to="/">
+                <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                  <Microscope className="size-4" />
+                </div>
+                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-semibold">Phenotyping</span>
+                  <span className="truncate text-xs text-sidebar-foreground/70">
+                    Analysis workspace
                   </span>
-                </span>
-              </>
-            )}
-          </NavLink>
-        ))}
-      </nav>
+                </div>
+              </NavLink>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
 
-      {/* Global processing indicator */}
-      <div className="px-2 pb-2">
-        <ProcessingIndicator collapsed={collapsed} />
-      </div>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {NAV_ITEMS.map((item) => {
+                const isActive = item.end
+                  ? location.pathname === item.to
+                  : location.pathname.startsWith(item.to);
 
-      <Separator />
+                return (
+                  <SidebarMenuItem key={item.to}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      tooltip={item.label}
+                    >
+                      <NavLink to={item.to} end={item.end}>
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-      {/* Theme toggle */}
-      <div className="p-2">
-        {collapsed ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-center"
-                onClick={toggleTheme}
-                aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+        <SidebarGroup className="mt-auto">
+          <SidebarGroupContent>
+            <ProcessingIndicator collapsed={collapsed} />
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Support">
+              <a href="mailto:support@example.com">
+                <CircleHelp />
+                <span>Support</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Feedback">
+              <a href="mailto:feedback@example.com">
+                <Send />
+                <span>Feedback</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton
+                  size="lg"
+                  aria-label="Profile menu"
+                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                  tooltip="Profile"
+                >
+                  <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
+                    P
+                  </div>
+                  <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-semibold">Phenotyping</span>
+                    <span className="truncate text-xs text-sidebar-foreground/70">
+                      Workspace
+                    </span>
+                  </div>
+                  <ChevronsUpDown className="ml-auto size-4" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+                side={isMobile ? "bottom" : "right"}
+                align="end"
+                sideOffset={4}
               >
-                {theme === "light" ? (
-                  <Moon className="h-4 w-4" />
-                ) : (
-                  <Sun className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Theme</TooltipContent>
-          </Tooltip>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start"
-            onClick={toggleTheme}
-            aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-          >
-            {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-            <span className="ml-2 text-xs">Theme</span>
-          </Button>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* Collapse toggle + version */}
-      <div className="p-2 space-y-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn("w-full", collapsed ? "justify-center" : "justify-start")}
-          onClick={() => onCollapsedChange?.(!collapsed)}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? (
-            <ChevronRight className="h-4 w-4" />
-          ) : (
-            <ChevronLeft className="h-4 w-4" />
-          )}
-          {!collapsed && <span className="ml-2 text-xs">Collapse</span>}
-        </Button>
-        <div
-          className={cn(
-            "px-3 py-1 text-[10px] text-muted-foreground transition-opacity duration-150",
-            collapsed ? "opacity-0 pointer-events-none h-0 p-0" : "opacity-100"
-          )}
-        >
-          v0.1.0
-        </div>
-      </div>
-    </aside>
+                <DropdownMenuLabel className="p-0 font-normal">
+                  <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                    <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
+                      P
+                    </div>
+                    <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                      <span className="truncate font-semibold">Phenotyping</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        Workspace
+                      </span>
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem>
+                    <Sparkles />
+                    Upgrade to Pro
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem>
+                    <ShieldCheck />
+                    Account
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <CreditCard />
+                    Billing
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Bell />
+                    Notifications
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={toggleTheme}>
+                    <ThemeIcon />
+                    {theme === "light" ? "Dark mode" : "Light mode"}
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem>
+                  <LogOut />
+                  Log out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+      <SidebarRail />
+    </SidebarRoot>
   );
 }

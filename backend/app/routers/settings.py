@@ -8,6 +8,7 @@ reads and writes go through the AppSettingsService (DB-backed).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -15,7 +16,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import get_app_settings_service, get_settings
+from app.config import BACKEND_ENV_FILE
+from app.deps import get_app_settings_service
 from app.database import AsyncSession, get_session
 from app.services.app_settings_service import AppSettingsService
 from app.schemas.health import (
@@ -73,8 +75,7 @@ def _validate_storage_path(path: str) -> Path:
 
 def _persist_to_env(key: str, value: str) -> None:
     """Append or update a key=value line in backend/.env for persistence across restarts."""
-    import os
-    env_path = Path("backend/.env")
+    env_path = BACKEND_ENV_FILE
 
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -141,14 +142,8 @@ async def update_settings(
     Only image_storage_dir is currently supported for update.
     Changes are persisted to both the DB row and the .env file.
     """
-    resolved = _validate_storage_path(update.image_storage_dir)
-    _persist_to_env("IMAGE_STORAGE_DIR", str(resolved))
-
-    import os
-    os.environ["IMAGE_STORAGE_DIR"] = str(resolved)
-
-    from app.deps import get_settings as _gs
-    _gs.cache_clear()
+    resolved = await asyncio.to_thread(_validate_storage_path, update.image_storage_dir)
+    await asyncio.to_thread(_persist_to_env, "IMAGE_STORAGE_DIR", str(resolved))
 
     row = await svc.update_settings(
         db=db,
@@ -206,14 +201,8 @@ async def update_storage_settings(
 
     Note: existing overlays at the old path are NOT moved.
     """
-    resolved = _validate_storage_path(update.image_storage_dir)
-    _persist_to_env("IMAGE_STORAGE_DIR", str(resolved))
-
-    import os
-    os.environ["IMAGE_STORAGE_DIR"] = str(resolved)
-
-    from app.deps import get_settings as _gs
-    _gs.cache_clear()
+    resolved = await asyncio.to_thread(_validate_storage_path, update.image_storage_dir)
+    await asyncio.to_thread(_persist_to_env, "IMAGE_STORAGE_DIR", str(resolved))
 
     row = await svc.update_storage_dir(db=db, new_dir=str(resolved))
 

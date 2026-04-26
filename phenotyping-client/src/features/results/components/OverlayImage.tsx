@@ -5,7 +5,7 @@
 // and panning/zooming is handled by Konva's native transform (compositor-
 // accelerated canvas, no per-pixel React renders).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { CloudUpload, Minus, Plus } from 'lucide-react';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
@@ -13,13 +13,11 @@ import {
     Circle,
     Group,
     Image as KonvaImage,
-    Label as KonvaLabel,
     Layer,
     Line,
     Rect,
+    Shape,
     Stage,
-    Tag,
-    Text,
     Transformer,
 } from 'react-konva';
 
@@ -28,7 +26,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import type { BBox } from '@/types/api';
 import { clampBox, enforceMinSize, MIN_BOX_SIZE, normalizeBox } from '../lib/bboxMath';
-import { rasterizeBoxes } from '../lib/rasterizeBoxes';
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
@@ -116,23 +113,37 @@ const HANDLE_PX = 10;
 // with the exponent slightly above 1 — "softly inverse": at 200% zoom labels
 // are a touch smaller than baseline, at 50% zoom a touch larger.
 const LABEL_SCREEN_PX = 10;
-const LABEL_SCALE_EXPONENT = 0.75;
-const LABEL_FG = '#f59e0b'; // slate-900 — high contrast on yellow
-
-// Auto-hide thresholds. Above LABEL_DENSITY_CAP visible boxes OR below
-// LABEL_MIN_SCREEN_PX effective font size, labels become unreadable pixel
-// mush — dropping them preserves information and saves the per-label
-// Tag+Text layout cost (the single dominant term in dense scenes).
-const LABEL_DENSITY_CAP = 200;
-const LABEL_MIN_SCREEN_PX = 6;
+const LABEL_FG = '#f59e0b';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function loadImageEl(src: string): Promise<HTMLImageElement> {
+function loadImageEl(
+    src: string,
+    signal?: AbortSignal,
+): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = reject;
+        const onAbort = () => {
+            img.onload = null;
+            img.onerror = null;
+            img.src = '';
+            reject(new DOMException('aborted', 'AbortError'));
+        };
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+                return;
+            }
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+        img.onload = () => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve(img);
+        };
+        img.onerror = (err) => {
+            signal?.removeEventListener('abort', onAbort);
+            reject(err);
+        };
         img.src = src;
     });
 }
@@ -178,42 +189,71 @@ export function OverlayImage({
     const mode = editor?.mode ?? 'drag';
     const selectedIndex = editor?.selectedIndex ?? null;
     const confidenceThreshold = editor?.confidenceThreshold ?? 0;
+    // Defer the threshold for the expensive raster + box filter. The slider in
+    // the parent stays at 60 fps because React drops intermediate values that
+    // arrive before the previous raster finishes — only the latest surviving
+    // threshold rebuilds the canvas.
+    const deferredThreshold = useDeferredValue(confidenceThreshold);
 
     const renderBoxes = annotations;
+
+    // Latest onDimensions ref so reload only fires on src change.
+    const onDimensionsRef = useRef(onDimensions);
+    useEffect(() => {
+        onDimensionsRef.current = onDimensions;
+    }, [onDimensions]);
 
     // ── Load image ──────────────────────────────────────────────────────────
     useEffect(() => {
         let cancelled = false;
+        const controller = new AbortController();
         setImageEl(null);
         setImageError(false);
         setHoverIdx(null);
         if (!src) return;
-        loadImageEl(src)
+        loadImageEl(src, controller.signal)
             .then((img) => {
                 if (cancelled) return;
                 setImageEl(img);
-                onDimensions?.(img.naturalWidth, img.naturalHeight);
+                onDimensionsRef.current?.(img.naturalWidth, img.naturalHeight);
             })
-            .catch(() => {
+            .catch((err) => {
                 if (cancelled) return;
+                if (err instanceof DOMException && err.name === 'AbortError') return;
                 setImageError(true);
             });
         return () => {
             cancelled = true;
+            controller.abort();
         };
-    }, [src, onDimensions]);
+    }, [src]);
 
     // ── Track container size ────────────────────────────────────────────────
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
+        let rafId = 0;
         const measure = () => {
-            setStageSize({ width: el.clientWidth, height: el.clientHeight });
+            const w = el.clientWidth;
+            const h = el.clientHeight;
+            setStageSize((prev) =>
+                prev.width === w && prev.height === h ? prev : { width: w, height: h },
+            );
         };
         measure();
-        const ro = new ResizeObserver(measure);
+        const debounced = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                rafId = 0;
+                measure();
+            });
+        };
+        const ro = new ResizeObserver(debounced);
         ro.observe(el);
-        return () => ro.disconnect();
+        return () => {
+            ro.disconnect();
+            if (rafId) cancelAnimationFrame(rafId);
+        };
     }, []);
 
     // ── Fit-to-screen whenever image or container size changes ──────────────
@@ -605,22 +645,68 @@ export function OverlayImage({
     const visibleBoxesWithIdx = useMemo(() => {
         return renderBoxes
             .map((b, i) => ({ box: b, index: i }))
-            .filter(({ box }) => isVisible(box, confidenceThreshold));
-    }, [renderBoxes, confidenceThreshold]);
+            .filter(({ box }) => isVisible(box, deferredThreshold));
+    }, [renderBoxes, deferredThreshold]);
 
-    // Rasterize all non-selected boxes into a single canvas when useOffscreen
-    // is on. Rebuilds only when inputs actually change — NOT on zoom / pan /
-    // hover, so interaction stays free. The Stage transform scales the bitmap.
-    const rasterCanvas = useMemo(() => {
-        if (!useOffscreen || !imageEl) return null;
-        return rasterizeBoxes({
+    // Rasterize all non-selected boxes off the main thread via a Web Worker
+    // that writes into an OffscreenCanvas and transfers back an ImageBitmap.
+    // The main thread never allocates the full-resolution canvas or strokes
+    // thousands of rects, so the slider / zoom / pan stay at 60 fps no matter
+    // how many boxes there are. Stale responses are dropped by request id.
+    const [rasterBitmap, setRasterBitmap] = useState<ImageBitmap | null>(null);
+    const workerRef = useRef<Worker | null>(null);
+    const latestReqIdRef = useRef(0);
+
+    useEffect(() => {
+        const worker = new Worker(
+            new URL('../lib/rasterizeBoxes.worker.ts', import.meta.url),
+            { type: 'module' },
+        );
+        workerRef.current = worker;
+        worker.onmessage = (
+            e: MessageEvent<{ id: number; bitmap: ImageBitmap }>,
+        ) => {
+            if (e.data.id !== latestReqIdRef.current) {
+                // Stale — close the bitmap to free its GPU memory.
+                e.data.bitmap.close();
+                return;
+            }
+            setRasterBitmap((prev) => {
+                prev?.close();
+                return e.data.bitmap;
+            });
+        };
+        return () => {
+            worker.terminate();
+            workerRef.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!useOffscreen || !imageEl || !workerRef.current) {
+            setRasterBitmap((prev) => {
+                prev?.close();
+                return null;
+            });
+            return;
+        }
+        const id = ++latestReqIdRef.current;
+        workerRef.current.postMessage({
+            id,
             imageWidth: imageEl.naturalWidth,
             imageHeight: imageEl.naturalHeight,
             boxes: renderBoxes,
             excludeIndex: editing && mode === 'drag' ? selectedIndex : null,
-            confidenceThreshold,
+            confidenceThreshold: deferredThreshold,
+            strokeModel: STROKE_MODEL,
+            strokeUser: STROKE_USER,
+            strokeWidth: 1,
+            ssaa: 2,
+            // Labels are drawn separately in screen space via a single Konva
+            // Shape so they stay the same size on screen across zoom levels.
+            labelFontSize: 0,
         });
-    }, [useOffscreen, imageEl, renderBoxes, selectedIndex, editing, mode, confidenceThreshold]);
+    }, [useOffscreen, imageEl, renderBoxes, selectedIndex, editing, mode, deferredThreshold]);
 
     // Edit-mode click-to-select when non-selected boxes are inside the raster
     // (they have no individual Konva nodes to listen on). AABB test in reverse
@@ -668,15 +754,6 @@ export function OverlayImage({
               ({ index }) => editing && mode === 'drag' && index === selectedIndex,
           )
         : visibleBoxesWithIdx;
-
-    // Label sizing — see LABEL_SCALE_EXPONENT comment above. Clamp the font
-    // size so very-zoomed-out views don't produce a label that swallows the
-    // image, and very-zoomed-in views still render at least one usable pixel.
-    const labelFontSize = Math.min(
-        400,
-        Math.max(0.5, LABEL_SCREEN_PX / Math.pow(Math.max(scale, 0.001), LABEL_SCALE_EXPONENT)),
-    );
-    const labelPadding = labelFontSize * 0.1;
 
     return (
         <div className={cn('h-full', className)}>
@@ -808,11 +885,12 @@ export function OverlayImage({
                         }}
                     >
                         {/* Image layer */}
-                        <Layer listening={false}>
+                        <Layer listening={false} imageSmoothingEnabled={false}>
                             <KonvaImage
                                 image={imageEl}
                                 width={imageSize.width}
                                 height={imageSize.height}
+                                imageSmoothingEnabled={false}
                             />
                         </Layer>
 
@@ -894,9 +972,9 @@ export function OverlayImage({
                             {/* Rasterized non-selected boxes (useOffscreen path).
                   One KonvaImage node for thousands of strokes. Click is
                   routed to an AABB hit test so edit-mode selection works. */}
-                            {useOffscreen && rasterCanvas && (
+                            {useOffscreen && rasterBitmap && (
                                 <KonvaImage
-                                    image={rasterCanvas}
+                                    image={rasterBitmap as unknown as HTMLImageElement}
                                     width={imageSize.width}
                                     height={imageSize.height}
                                     listening={editing && mode === 'drag'}
@@ -1009,43 +1087,48 @@ export function OverlayImage({
                   skipped entirely when there are too many boxes to read or
                   the effective on-screen font size is sub-readable — this
                   drops the text-layout cost that dominates dense scenes. */}
-                            {labelsVisible &&
-                                visibleBoxesWithIdx.length <= LABEL_DENSITY_CAP &&
-                                labelFontSize * scale >= LABEL_MIN_SCREEN_PX &&
-                                visibleBoxesWithIdx.map(({ box, index }) => {
-                                    const [x1, y1, x2, y2] = box.bbox;
-                                    // Approximate label height in image-space so we can flip the
-                                    // label *inside* the box top edge when there isn't enough
-                                    // room above. Konva's Tag auto-sizes around the Text, so
-                                    // this estimate only drives placement, not layout.
-                                    const approxLabelH = labelFontSize * 1.2 + labelPadding * 2;
-                                    const flipInside = y1 - approxLabelH < 0;
-                                    const labelY = flipInside ? y1 : y1 - approxLabelH;
-                                    // Clamp x so the label doesn't run off the right edge of
-                                    // the image at very high zoom-out factors.
-                                    const labelX = Math.max(0, Math.min(x1, imageSize.width - 1));
-                                    // Suppress unused width var; left here for future right-edge
-                                    // clamping if labels grow text-measurement aware.
-                                    void x2;
-                                    void y2;
-                                    return (
-                                        <KonvaLabel
-                                            key={`label-${index}`}
-                                            x={labelX}
-                                            y={labelY}
-                                            listening={false}
-                                        >
-                                            <Tag cornerRadius={Math.max(1, labelPadding * 0.4)} />
-                                            <Text
-                                                text={box.label || 'object'}
-                                                fontSize={labelFontSize}
-                                                fontStyle="bold"
-                                                fill={LABEL_FG}
-                                                padding={labelPadding}
-                                            />
-                                        </KonvaLabel>
-                                    );
-                                })}
+                            {labelsVisible && (
+                                <Shape
+                                    listening={false}
+                                    perfectDrawEnabled={false}
+                                    // Scene cache key: force a re-draw when zoom or the
+                                    // visible set changes. The sceneFunc closure reads
+                                    // fresh refs each invocation anyway.
+                                    sceneFunc={(context) => {
+                                        const stage = stageRef.current;
+                                        if (!stage) return;
+                                        const ctx = context._context as CanvasRenderingContext2D;
+                                        const tx = stage.x();
+                                        const ty = stage.y();
+                                        const s = stage.scaleX();
+                                        ctx.save();
+                                        // Draw in SCREEN space so font size stays constant
+                                        // regardless of zoom.
+                                        ctx.setTransform(1, 0, 0, 1, 0, 0);
+                                        ctx.font = `bold ${LABEL_SCREEN_PX}px sans-serif`;
+                                        // Bottom baseline so `y` is the text's bottom
+                                        // edge — makes "sit on top of the box" trivial.
+                                        ctx.textBaseline = 'bottom';
+                                        ctx.fillStyle = LABEL_FG;
+                                        const LABEL_GAP = 2;
+                                        for (let i = 0; i < visibleBoxesWithIdx.length; i++) {
+                                            const { box } = visibleBoxesWithIdx[i];
+                                            const [x1, y1] = box.bbox;
+                                            const sx = x1 * s + tx;
+                                            const sy = y1 * s + ty;
+                                            // Sit the text's bottom LABEL_GAP pixels above
+                                            // the box top. Flip inside when the label would
+                                            // clip off the top of the viewport.
+                                            const yText =
+                                                sy - LABEL_GAP < LABEL_SCREEN_PX
+                                                    ? sy + LABEL_SCREEN_PX + LABEL_GAP
+                                                    : sy - LABEL_GAP;
+                                            ctx.fillText(box.label || 'object', sx, yText);
+                                        }
+                                        ctx.restore();
+                                    }}
+                                />
+                            )}
 
                             {/* Rubber-band while drawing */}
                             {editing &&

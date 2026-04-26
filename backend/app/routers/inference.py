@@ -30,6 +30,17 @@ router = APIRouter(prefix="/inference", tags=["inference"])
 # Allowed image extensions (case-insensitive)
 ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"})
 MAX_BATCH_SIZE = 50  # max number of files per batch request
+MAX_IMAGE_BYTES = 100 * 1024 * 1024  # 100 MB per image
+
+
+def _check_size(file: UploadFile) -> None:
+    """Reject uploads larger than MAX_IMAGE_BYTES based on Content-Length."""
+    size = getattr(file, "size", None)
+    if size is not None and size > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large (max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)",
+        )
 
 
 def _validate_extension(filename: str) -> str:
@@ -86,6 +97,7 @@ async def run_single_inference(
         )
 
     # Read upload bytes
+    _check_size(file)
     try:
         data = await file.read()
     except Exception as exc:
@@ -166,6 +178,7 @@ async def run_single_neonate_inference(
             detail="Neonate model not loaded. Check the 'neonate' section of config.yaml.",
         )
 
+    _check_size(file)
     try:
         data = await file.read()
     except Exception as exc:
@@ -330,8 +343,8 @@ async def run_batch_inference(
 
     # Validate all extensions before processing (fail-fast)
     validated: list[tuple[bytes, str]] = []
-    for file in files:
-        stem = _validate_extension(file.filename or f"file_{file.fileileno()}")
+    for i, file in enumerate(files):
+        stem = _validate_extension(file.filename or f"file_{i}")
 
         try:
             data = await file.read()

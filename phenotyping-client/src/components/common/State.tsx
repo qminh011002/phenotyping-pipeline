@@ -1,8 +1,7 @@
 // State — centered, fade-in feedback components: LoadingState, ErrorState, EmptyState.
 // All use <FadeIn> from FE-021 motion primitives.
 
-import { type LucideIcon } from "lucide-react";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, RefreshCw, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";

@@ -22,6 +22,7 @@ export function ResultNavigation({
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "ArrowLeft" && hasPrev) onNavigate(currentIndex - 1);
       if (e.key === "ArrowRight" && hasNext) onNavigate(currentIndex + 1);

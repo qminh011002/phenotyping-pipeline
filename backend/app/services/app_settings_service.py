@@ -39,7 +39,7 @@ class AppSettingsService:
                 seeded at startup by main.py).
         """
         result = await db.execute(
-            select(AppSettingsRow).where(AppSettingsRow.id == 1).with_for_update()
+            select(AppSettingsRow).where(AppSettingsRow.id == 1).limit(1)
         )
         row = result.scalar_one_or_none()
         if row is None:

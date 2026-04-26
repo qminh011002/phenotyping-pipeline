@@ -54,12 +54,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         extra={"context": {"version": "0.1.0"}},
     )
 
-    # Load YOLO model via ModelRegistry
+    # Resolve filesystem layout + load every organism's weights best-effort.
+    from app.deps import get_model_storage, get_model_upload_service
     from app.services.model_registry import ModelRegistry
+    from sqlalchemy.exc import SQLAlchemyError
 
     pipeline_config = _gpc()
-    registry = ModelRegistry()
-    await registry.startup(pipeline_config)
+    storage = get_model_storage()
+    storage.ensure_layout()
+
+    # Pull custom-model assignments from the DB so the registry can prefer them
+    # over defaults. Best-effort — if the DB is unreachable we just load defaults.
+    from app.database import get_db as _gdb
+
+    custom_assignments: dict[str, "object"] = {}
+    try:
+        db_for_assign = _gdb()
+        db_for_assign.init()
+        upload_svc = get_model_upload_service()
+        async with db_for_assign.session() as session:
+            # One-shot legacy migration before reading assignments.
+            await upload_svc.migrate_legacy_layout(session)
+            await session.commit()
+            for organism in ("egg", "larvae", "pupae", "neonate"):
+                p = await upload_svc.get_active_custom_path(session, organism)
+                if p is not None:
+                    custom_assignments[organism] = p
+    except (SQLAlchemyError, OSError, RuntimeError) as exc:
+        settings_logger.warning(
+            "Could not load custom model assignments at startup: %s",
+            exc,
+        )
+
+    registry = ModelRegistry(storage=storage)
+    await registry.startup(pipeline_config, custom_assignments=custom_assignments)
 
     from app.deps import _set_model_registry as _set_mr
 
@@ -115,7 +143,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             from app.models.app_settings import AppSettingsRow
             from sqlalchemy import select
 
-            result = await session.execute(select(AppSettingsRow).where(AppSettingsRow.id == 1))
+            result = await session.execute(
+                select(AppSettingsRow).where(AppSettingsRow.id == 1).limit(1)
+            )
             if result.scalar_one_or_none() is None:
                 session.add(AppSettingsRow(
                     id=1,
@@ -127,7 +157,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     "Seeded app_settings singleton row",
                     extra={"context": {"image_storage_dir": str(settings.image_storage_dir)}},
                 )
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 — database may be unreachable
         settings_logger.warning(
             "Could not seed app_settings row — database unavailable: %s",
             exc,
@@ -144,26 +174,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _get_stage_broker().bind_loop(_asyncio.get_running_loop())
 
-    yield
+    try:
+        yield
+    finally:
+        # Stop heartbeat task first
+        log_buffer.stop_heartbeat()
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
-    # Stop heartbeat task first
-    log_buffer.stop_heartbeat()
+        # Shutdown executor — stop accepting new tasks, wait for running ones
+        settings_logger.info("Shutting down ThreadPoolExecutor")
+        executor.shutdown(wait=True, cancel_futures=True)
 
-    # Shutdown executor — stop accepting new tasks, wait for running ones
-    settings_logger.info("Shutting down ThreadPoolExecutor")
-    executor.shutdown(wait=True)
+        # Release model resources
+        try:
+            await registry.shutdown()
+        except Exception as exc:  # noqa: BLE001
+            settings_logger.warning("registry.shutdown failed: %s", exc)
 
-    # Release model resources
-    await registry.shutdown()
+        try:
+            await get_db().close()
+        except Exception as exc:  # noqa: BLE001
+            settings_logger.warning("db.close failed: %s", exc)
 
-    # Close database connections (INF-003)
-    from app.database import get_db as _gd
-
-    db = _gd()
-    await db.close()
-
-    settings_logger.info("Application shutdown complete")
+        settings_logger.info("Application shutdown complete")
 
 
 app = FastAPI(

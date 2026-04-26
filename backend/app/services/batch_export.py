@@ -14,6 +14,7 @@ numbers the operator sees in the ResultViewer.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
@@ -248,50 +249,43 @@ async def build_batch_archive(
             "No completed images match the requested selection for this batch."
         )
 
-    zip_buf = io.BytesIO()
-    # ZIP_STORED — overlay PNGs are already compressed, and storing avoids a
-    # needless zlib pass on every write.
-    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
-        # Write images/*
-        seen_names: set[str] = set()
-        for img in images:
-            if not img.overlay_path:
-                continue
-            src = _resolve_overlay_path(img.overlay_path, storage_dir)
-            if not src.exists():
-                logger.warning(
-                    "Skipping missing overlay during export",
-                    extra={
-                        "context": {
-                            "batch_id": str(batch_id),
-                            "image_id": str(img.id),
-                            "path": str(src),
-                        }
-                    },
-                )
-                continue
+    def _build() -> bytes:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+            stem_counts: dict[str, int] = {}
+            for img in images:
+                if not img.overlay_path:
+                    continue
+                src = _resolve_overlay_path(img.overlay_path, storage_dir)
+                if not src.exists():
+                    logger.warning(
+                        "Skipping missing overlay during export",
+                        extra={
+                            "context": {
+                                "batch_id": str(batch_id),
+                                "image_id": str(img.id),
+                                "path": str(src),
+                            }
+                        },
+                    )
+                    continue
 
-            # Name the file after the uploaded original filename, swapping in
-            # the overlay's extension (PNG) so the archive makes sense to a
-            # human. Disambiguate duplicates with a numeric suffix.
-            stem = Path(img.original_filename).stem
-            candidate = f"{stem}{src.suffix.lower() or '.png'}"
-            n = 1
-            while candidate in seen_names:
-                candidate = f"{stem}_{n}{src.suffix.lower() or '.png'}"
-                n += 1
-            seen_names.add(candidate)
-            zf.write(src, arcname=f"images/{candidate}")
+                stem = Path(img.original_filename).stem
+                ext = src.suffix.lower() or ".png"
+                count = stem_counts.get(stem, 0)
+                candidate = f"{stem}{ext}" if count == 0 else f"{stem}_{count}{ext}"
+                stem_counts[stem] = count + 1
+                zf.write(src, arcname=f"images/{candidate}")
 
-        # Write summary.xlsx (compressed — xlsx is XML inside, benefits from
-        # deflate even though the container is already ZIP).
-        xlsx_bytes = _build_xlsx(batch, images)
-        xlsx_info = zipfile.ZipInfo("summary.xlsx")
-        xlsx_info.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(xlsx_info, xlsx_bytes)
+            xlsx_bytes = _build_xlsx(batch, images)
+            xlsx_info = zipfile.ZipInfo("summary.xlsx")
+            xlsx_info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(xlsx_info, xlsx_bytes)
+        return zip_buf.getvalue()
 
+    payload = await asyncio.to_thread(_build)
     filename = f"{_slugify(batch.name or 'batch')}.zip"
-    return filename, zip_buf.getvalue()
+    return filename, payload
 
 
 async def stream_batch_archive(
@@ -310,7 +304,8 @@ async def stream_batch_archive(
     filename, payload = built
 
     async def _iter() -> AsyncIterator[bytes]:
-        for start in range(0, len(payload), chunk_size):
-            yield payload[start : start + chunk_size]
+        view = memoryview(payload)
+        for start in range(0, len(view), chunk_size):
+            yield bytes(view[start : start + chunk_size])
 
     return filename, _iter()

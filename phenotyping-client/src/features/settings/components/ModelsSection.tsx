@@ -62,10 +62,6 @@ function formatDate(iso: string) {
   });
 }
 
-function getDefaultFilename(organism: Organism) {
-  return `${organism}_best.pt`;
-}
-
 interface ModelLibraryProps {
   assignment: OrganismAssignment;
   customModels: CustomModelResponse[];
@@ -91,12 +87,28 @@ function ModelLibrary({
   onRevertDefault,
   onUploadFile,
 }: ModelLibraryProps) {
-  const { organism, is_default, model_filename, custom_model } = assignment;
+  const {
+    organism,
+    is_default,
+    has_default,
+    model_filename,
+    default_filename,
+    custom_model,
+  } = assignment;
   const meta = ORGANISM_META[organism];
   const activeCustomId = custom_model?.id ?? null;
-  const defaultFilename = getDefaultFilename(organism);
   const isUploading = uploadingOrganism === organism;
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Active state for the slot header. "missing" means neither a default nor a
+  // custom-active model is installed — the inference path will 503 and the
+  // AnalyzePage card is disabled.
+  const slotState: "custom" | "default" | "missing" =
+    custom_model !== null
+      ? "custom"
+      : has_default
+        ? "default"
+        : "missing";
 
   return (
     <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
@@ -113,12 +125,18 @@ function ModelLibrary({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant={is_default ? "secondary" : "default"}>
-              {is_default ? "Using default" : "Custom active"}
-            </Badge>
-            <span className="rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 font-mono text-muted-foreground">
-              {model_filename}
-            </span>
+            {slotState === "missing" ? (
+              <Badge variant="destructive">No model installed</Badge>
+            ) : (
+              <Badge variant={is_default ? "secondary" : "default"}>
+                {is_default ? "Using default" : "Custom active"}
+              </Badge>
+            )}
+            {model_filename && (
+              <span className="rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 font-mono text-muted-foreground">
+                {model_filename}
+              </span>
+            )}
             <span className="text-muted-foreground">
               {customModels.length} custom model{customModels.length !== 1 ? "s" : ""}
             </span>
@@ -127,40 +145,53 @@ function ModelLibrary({
       </div>
 
       <div className="space-y-3 p-5">
-        <div
-          className={`flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between ${
-            is_default ? "border-primary/35 bg-primary/5" : "border-border/70 bg-muted/20"
-          }`}
-        >
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">{defaultFilename}</span>
-              <Badge variant="secondary">Default</Badge>
-              {is_default && (
-                <Badge variant="default" className="gap-1">
-                  <Check className="h-3 w-3" />
-                  Active
-                </Badge>
-              )}
+        {has_default && default_filename ? (
+          <div
+            className={`flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between ${
+              is_default ? "border-primary/35 bg-primary/5" : "border-border/70 bg-muted/20"
+            }`}
+          >
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm font-medium">{default_filename}</span>
+                <Badge variant="secondary">Default</Badge>
+                {is_default && (
+                  <Badge variant="default" className="gap-1">
+                    <Check className="h-3 w-3" />
+                    Active
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Loaded from <code className="font-mono">backend/data/models/{organism}/default/</code>.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Built-in fallback for {meta.label.toLowerCase()} mode.
+
+            {!is_default && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 self-start sm:self-center"
+                onClick={() => onRevertDefault(organism)}
+                disabled={revertKey === organism}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {revertKey === organism ? "Reverting..." : "Use Default"}
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+            <p className="font-medium text-amber-700 dark:text-amber-400">
+              No default model installed for {meta.label.toLowerCase()} mode.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Drop a <code className="font-mono">.pt</code> file into{" "}
+              <code className="font-mono">backend/data/models/{organism}/default/</code>{" "}
+              and restart the backend, or upload a custom model below.
             </p>
           </div>
-
-          {!is_default && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 self-start sm:self-center"
-              onClick={() => onRevertDefault(organism)}
-              disabled={revertKey === organism}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              {revertKey === organism ? "Reverting..." : "Use Default"}
-            </Button>
-          )}
-        </div>
+        )}
 
         {customModels.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border/80 bg-muted/15 px-4 py-5 text-sm text-muted-foreground">
@@ -263,24 +294,31 @@ export function ModelsSection() {
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [revertKey, setRevertKey] = useState<Organism | null>(null);
 
+  const mountedRef = useRef(true);
   const fetchData = useCallback(async () => {
     try {
       const [assignData, modelsData] = await Promise.all([
         getModelAssignments(),
         listCustomModels(),
       ]);
+      if (!mountedRef.current) return;
       setAssignments(assignData);
       setCustomModels(modelsData.models);
       setError(null);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(String(err));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     fetchData();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [fetchData]);
 
   const modelsByOrganism = useMemo(() => {

@@ -3,7 +3,7 @@
 
 import { useNavigate } from "react-router-dom";
 import { Microscope } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useProcessingStore } from "@/stores/processingStore";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
@@ -13,12 +13,32 @@ import { cn } from "@/lib/utils";
 
 export function ProcessingToast() {
   const navigate = useNavigate();
-  const { isProcessing, images, totalImages, setToastId, reset } = useProcessingStore();
+  const isProcessing = useProcessingStore((s) => s.isProcessing);
+  const images = useProcessingStore((s) => s.images);
+  const totalImages = useProcessingStore((s) => s.totalImages);
+  const setToastId = useProcessingStore((s) => s.setToastId);
+  const reset = useProcessingStore((s) => s.reset);
 
-  const doneCount = images.filter((img) => img.status === "done").length;
-  const errorCount = images.filter((img) => img.status === "error").length;
+  const { doneCount, errorCount, allDone } = useMemo(() => {
+    let done = 0;
+    let err = 0;
+    let resting = 0;
+    for (const img of images) {
+      if (img.status === "done") {
+        done += 1;
+        resting += 1;
+      } else if (img.status === "error") {
+        err += 1;
+        resting += 1;
+      }
+    }
+    return {
+      doneCount: done,
+      errorCount: err,
+      allDone: images.length > 0 && resting === images.length,
+    };
+  }, [images]);
   const hasErrors = errorCount > 0;
-  const allDone = images.length > 0 && images.every((img) => img.status !== "pending" && img.status !== "processing");
   const totalDone = doneCount + errorCount;
 
   // Show/update toast when processing starts
@@ -55,7 +75,7 @@ export function ProcessingToast() {
     if (totalDone < totalImages) return;
     if (!allDone) return;
 
-    setTimeout(() => {
+    const t = setTimeout(() => {
       const toastFn = hasErrors ? toast.warning : toast.success;
 
       toastFn("Analysis complete", {
@@ -76,6 +96,7 @@ export function ProcessingToast() {
     }, 300);
 
     setToastId(null);
+    return () => clearTimeout(t);
   }, [isProcessing, allDone, doneCount, errorCount, hasErrors, images.length, totalImages, totalDone, navigate, reset, setToastId]);
 
   return null;
@@ -92,11 +113,19 @@ function ProcessingToastContent({
   onViewDetails: () => void;
   onDismiss: () => void;
 }) {
-  const { images } = useProcessingStore();
+  const images = useProcessingStore((s) => s.images);
 
-  const doneCount = images.filter((img) => img.status === "done").length;
-  const errorCount = images.filter((img) => img.status === "error").length;
-  const processingCount = images.filter((img) => img.status === "processing").length;
+  const { doneCount, errorCount, processingCount } = useMemo(() => {
+    let done = 0;
+    let err = 0;
+    let proc = 0;
+    for (const img of images) {
+      if (img.status === "done") done += 1;
+      else if (img.status === "error") err += 1;
+      else if (img.status === "processing") proc += 1;
+    }
+    return { doneCount: done, errorCount: err, processingCount: proc };
+  }, [images]);
   const hasErrors = errorCount > 0;
   const totalProcessed = doneCount + errorCount;
   const progress = totalImages > 0 ? (totalProcessed / totalImages) * 100 : 0;
