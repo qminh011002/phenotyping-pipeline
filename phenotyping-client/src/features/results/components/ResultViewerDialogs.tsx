@@ -77,17 +77,22 @@ export function ResultViewerDialogs({
       <Dialog open={quitDialogOpen} onOpenChange={onQuitDialogOpenChange}>
         <DialogContent size="sm">
           <DialogHeader>
-            <DialogTitle>Save before quitting?</DialogTitle>
+            <DialogTitle>Save this batch to Records?</DialogTitle>
             <DialogDescription>
-              Leave the results viewer now, or save your latest annotation edits before you quit.
+              You're reviewing a draft. Quit to come back to it later, or save
+              now to add it to your Records.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={onQuitWithoutSaving}>
+            <Button
+              variant="outline"
+              onClick={onQuitWithoutSaving}
+              disabled={saveAndQuitDisabled}
+            >
               Quit
             </Button>
             <Button onClick={onSaveAndQuit} disabled={saveAndQuitDisabled}>
-              Save &amp; Quit
+              Quit &amp; Save
             </Button>
           </DialogFooter>
         </DialogContent>

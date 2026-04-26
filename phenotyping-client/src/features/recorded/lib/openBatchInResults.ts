@@ -130,6 +130,7 @@ export function openBatchInResults(
     avg_confidence: detail.avg_confidence,
     images: filteredImages.map(toStoredImageDetail),
     classes: detail.classes,
+    status: detail.status,
   };
 
   // There are no local File blobs when opening a saved batch; wipe any

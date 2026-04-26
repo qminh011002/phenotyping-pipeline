@@ -165,6 +165,14 @@ async def list_analyses(
         ),
     ),
     organism: str | None = Query(default=None, description="Filter by organism type"),
+    status: list[str] | None = Query(
+        default=None,
+        description=(
+            "Restrict to the given statuses. Accepts multiple values "
+            "(?status=draft&status=completed). Defaults to all statuses; the "
+            "Records page passes ``status=completed`` so drafts stay hidden."
+        ),
+    ),
 ) -> AnalysisListResponse:
     """Return a paginated list of analysis batches.
 
@@ -177,6 +185,7 @@ async def list_analyses(
         page_size=page_size,
         search=q,
         organism=organism,
+        statuses=status,
         db=db,
     )
 
@@ -475,9 +484,9 @@ async def add_image_result(
     "/{batch_id}/complete",
     response_model=AnalysisBatchDetail,
     status_code=status.HTTP_200_OK,
-    summary="Mark a batch as completed and compute aggregates",
+    summary="Finish processing — moves the batch to 'draft' for review",
     responses={
-        200: {"description": "Batch marked as completed"},
+        200: {"description": "Batch moved to draft"},
         404: {"description": "Batch not found"},
     },
 )
@@ -486,7 +495,9 @@ async def complete_analysis(
     db: Annotated[AsyncSession, Depends(get_session)],
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
-    """Mark a batch as completed and compute aggregate statistics.
+    """Finalize the processing phase. Computes aggregates and moves the batch
+    from ``processing`` to ``draft``. Drafts are visible to the ResultViewer
+    but hidden from the Records list until the operator clicks Finish.
 
     Call this after all images have been recorded via POST /analyses/{id}/images.
     """
@@ -507,6 +518,44 @@ async def complete_analysis(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to re-load batch after completion",
         )
+    return updated
+
+
+@router.post(
+    "/{batch_id}/finish",
+    response_model=AnalysisBatchDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Save a draft batch to Records (promote draft → completed)",
+    responses={
+        200: {"description": "Batch saved to records"},
+        404: {"description": "Batch not found"},
+        409: {"description": "Batch is not in draft state"},
+    },
+)
+async def finish_analysis(
+    batch_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisBatchDetail:
+    """Explicit save-to-records step. Recomputes aggregates to pick up any
+    annotation edits made in the reviewer, then marks the batch ``completed``
+    and stamps ``completed_at``.
+    """
+    try:
+        finished = await analysis_svc.finish_batch(batch_id=batch_id, db=db)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    if finished is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+    await db.commit()
+    updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    assert updated is not None
     return updated
 
 

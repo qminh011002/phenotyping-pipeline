@@ -1,8 +1,8 @@
 // ResultViewer — full page for viewing inference results.
 // Renders the RAW uploaded image (from the browser blob URL stored in
 // sessionStorage) with client-side bbox overlays drawn from
-// result.annotations. The backend-generated overlay PNG is only used
-// for the Download button — never displayed.
+// result.annotations. The backend-generated overlay PNG is never
+// displayed directly — ZIP export from /recorded uses it.
 //
 // Annotation Editor (FS-009):
 // - "Edit" toggle in header activates the AnnotationEditor slot.
@@ -14,13 +14,14 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Download } from "lucide-react";
+import { Inbox } from "lucide-react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { toast } from "sonner";
 
 import type { BBox, DetectionResult } from "@/types/api";
 import {
+  clearProcessingSession,
   loadBatchSummary,
   loadBatchDetail,
   loadProcessingFiles,
@@ -31,7 +32,7 @@ import {
 } from "@/features/upload/lib/processingSession";
 import { consumeStartIndex } from "@/features/recorded/lib/openBatchInResults";
 import {
-  getAnalysesOverlayUrl,
+  finishBatch,
   getAnalysesRawUrl,
   getAnalysisDetail,
   putEditedAnnotations,
@@ -94,6 +95,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [dirtyNavDialogOpen, setDirtyNavDialogOpen] = useState(false);
   const [quitDialogOpen, setQuitDialogOpen] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   /** Index the user wants to navigate to while dirty */
   const [pendingNavIdx, setPendingNavIdx] = useState<number | null>(null);
   /** Ctrl/Cmd held — in non-edit mode this temporarily hides the dim overlay. */
@@ -355,14 +357,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [editMode, selectedIdx, sessionBoxes, editorTool, isDirty, savingEdits, handleSaveEdits]);
 
-  // ── Overlay download URL ─────────────────────────────────────────────────
-  const overlayDownloadSrc = useMemo(() => {
-    if (!currentResult || !batchDetail) return "";
-    const imageRecord = currentImageRecord;
-    if (!imageRecord || !imageRecord.overlay_path) return "";
-    return getAnalysesOverlayUrl(batchDetail.id, imageRecord.id);
-  }, [currentResult, batchDetail, currentImageRecord]);
-
   // ── Raw image URL ───────────────────────────────────────────────────────
   const rawSrc = useMemo(() => {
     if (!currentResult) return "";
@@ -385,22 +379,58 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const undoAvailable = canUndo(history);
   const redoAvailable = canRedo(history);
 
+  // A batch that's already been saved to Records doesn't need a quit prompt —
+  // nothing's in-flight, back just goes back.
+  const isSaved = batchDetail?.status === "completed";
+
   const handleBack = useCallback(() => {
+    if (isSaved) {
+      navigate("/");
+      return;
+    }
     setQuitDialogOpen(true);
-  }, []);
+  }, [isSaved, navigate]);
 
   const handleQuitWithoutSaving = useCallback(() => {
     setQuitDialogOpen(false);
+    // Leave the batch in 'draft' — it stays discoverable via direct URL
+    // until the operator either finishes it or deletes it.
+    clearProcessingSession();
     navigate("/");
   }, [navigate]);
 
-  const handleSaveAndQuit = useCallback(async () => {
+  const finalizeBatchSave = useCallback(async (): Promise<boolean> => {
+    if (!batchDetail) return false;
     if (isDirty && !savingEdits) {
       await handleSaveEdits();
     }
+    setFinishing(true);
+    try {
+      await finishBatch(batchDetail.id);
+      clearProcessingSession();
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to save batch: ${msg}`);
+      return false;
+    } finally {
+      setFinishing(false);
+    }
+  }, [batchDetail, handleSaveEdits, isDirty, savingEdits]);
+
+  const handleSaveAndQuit = useCallback(async () => {
+    const ok = await finalizeBatchSave();
+    if (!ok) return;
     setQuitDialogOpen(false);
-    navigate("/");
-  }, [handleSaveEdits, isDirty, navigate, savingEdits]);
+    navigate(`/recorded?batch=${batchDetail?.id ?? ""}`);
+  }, [batchDetail, finalizeBatchSave, navigate]);
+
+  const handleFinish = useCallback(async () => {
+    const ok = await finalizeBatchSave();
+    if (!ok) return;
+    toast.success("Batch saved to Records");
+    navigate(`/recorded?batch=${batchDetail?.id ?? ""}`);
+  }, [batchDetail, finalizeBatchSave, navigate]);
 
   const handleRenameBatch = useCallback(
     async (next: string) => {
@@ -437,35 +467,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
     setLabelsVisible((v) => !v);
   }, []);
 
-  const handleSaveToRecords = useCallback(() => {
-    const detail = loadBatchDetail();
-    if (detail) {
-      navigate(`/recorded?batch=${detail.id}`);
-      return;
-    }
-
-    navigate("/recorded");
-  }, [navigate]);
-
-  const handleDownload = useCallback(() => {
-    if (!currentResult || !overlayDownloadSrc) return;
-
-    fetch(overlayDownloadSrc)
-      .then((response) => response.blob())
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${currentResult.filename.replace(/\.[^.]+$/, "")}_overlay.png`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        toast.success("Download started");
-      })
-      .catch(() => toast.error("Failed to download overlay image"));
-  }, [currentResult, overlayDownloadSrc]);
-
   const handleImageDimensions = useCallback(() => {
     // Image dimensions are tracked internally by OverlayImage (Konva).
   }, []);
@@ -487,7 +488,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
     return (
       <div className={cn("flex h-screen flex-col", className)}>
         <EmptyState
-          icon={Download}
+          icon={Inbox}
           title="No results found"
           description="The session data may have expired. Start a new analysis to see results."
           actionLabel="Start New Analysis"
@@ -508,11 +509,12 @@ export function ResultViewer({ className }: ResultViewerProps) {
         canEdit={Boolean(batchDetail && currentImageRecord)}
         editMode={editMode}
         isDirty={isDirty}
+        isSaved={isSaved}
+        finishing={finishing}
         onBack={handleBack}
         onNavigate={handleNavigate}
         onRename={handleRenameBatch}
-        onSaveToRecords={handleSaveToRecords}
-        onDownload={handleDownload}
+        onFinish={handleFinish}
       />
 
       <ResultViewerContent
@@ -565,7 +567,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         onSaveAndQuit={handleSaveAndQuit}
         onCancelReset={() => setResetDialogOpen(false)}
         onConfirmReset={handleResetToModel}
-        saveAndQuitDisabled={savingEdits}
+        saveAndQuitDisabled={savingEdits || finishing}
       />
     </div>
   );
