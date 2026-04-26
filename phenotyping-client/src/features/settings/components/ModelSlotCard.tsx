@@ -38,7 +38,8 @@ export function ModelSlotCard({
   onRevert,
   reverting,
 }: ModelSlotCardProps) {
-  const { organism, is_default, model_filename, custom_model } = assignment;
+  const { organism, is_default, has_default, model_filename, custom_model } = assignment;
+  const slotMissing = custom_model === null && !has_default;
 
   return (
     <div className="flex items-start justify-between rounded-lg border p-4">
@@ -48,13 +49,17 @@ export function ModelSlotCard({
           <span className="font-medium">
             {ORGANISM_LABELS[organism as Organism] ?? organism}
           </span>
-          <Badge variant={is_default ? "secondary" : "default"}>
-            {is_default ? "Default" : "Custom"}
-          </Badge>
+          {slotMissing ? (
+            <Badge variant="destructive">Not installed</Badge>
+          ) : (
+            <Badge variant={is_default ? "secondary" : "default"}>
+              {is_default ? "Default" : "Custom"}
+            </Badge>
+          )}
         </div>
 
         <p className="font-mono text-sm text-muted-foreground truncate">
-          {model_filename}
+          {model_filename ?? "—"}
         </p>
 
         {custom_model && (

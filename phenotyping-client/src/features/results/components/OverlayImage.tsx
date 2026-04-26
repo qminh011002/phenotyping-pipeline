@@ -117,11 +117,33 @@ const LABEL_FG = '#f59e0b';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function loadImageEl(src: string): Promise<HTMLImageElement> {
+function loadImageEl(
+    src: string,
+    signal?: AbortSignal,
+): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = reject;
+        const onAbort = () => {
+            img.onload = null;
+            img.onerror = null;
+            img.src = '';
+            reject(new DOMException('aborted', 'AbortError'));
+        };
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+                return;
+            }
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+        img.onload = () => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve(img);
+        };
+        img.onerror = (err) => {
+            signal?.removeEventListener('abort', onAbort);
+            reject(err);
+        };
         img.src = src;
     });
 }
@@ -175,39 +197,63 @@ export function OverlayImage({
 
     const renderBoxes = annotations;
 
+    // Latest onDimensions ref so reload only fires on src change.
+    const onDimensionsRef = useRef(onDimensions);
+    useEffect(() => {
+        onDimensionsRef.current = onDimensions;
+    }, [onDimensions]);
+
     // ── Load image ──────────────────────────────────────────────────────────
     useEffect(() => {
         let cancelled = false;
+        const controller = new AbortController();
         setImageEl(null);
         setImageError(false);
         setHoverIdx(null);
         if (!src) return;
-        loadImageEl(src)
+        loadImageEl(src, controller.signal)
             .then((img) => {
                 if (cancelled) return;
                 setImageEl(img);
-                onDimensions?.(img.naturalWidth, img.naturalHeight);
+                onDimensionsRef.current?.(img.naturalWidth, img.naturalHeight);
             })
-            .catch(() => {
+            .catch((err) => {
                 if (cancelled) return;
+                if (err instanceof DOMException && err.name === 'AbortError') return;
                 setImageError(true);
             });
         return () => {
             cancelled = true;
+            controller.abort();
         };
-    }, [src, onDimensions]);
+    }, [src]);
 
     // ── Track container size ────────────────────────────────────────────────
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
+        let rafId = 0;
         const measure = () => {
-            setStageSize({ width: el.clientWidth, height: el.clientHeight });
+            const w = el.clientWidth;
+            const h = el.clientHeight;
+            setStageSize((prev) =>
+                prev.width === w && prev.height === h ? prev : { width: w, height: h },
+            );
         };
         measure();
-        const ro = new ResizeObserver(measure);
+        const debounced = () => {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                rafId = 0;
+                measure();
+            });
+        };
+        const ro = new ResizeObserver(debounced);
         ro.observe(el);
-        return () => ro.disconnect();
+        return () => {
+            ro.disconnect();
+            if (rafId) cancelAnimationFrame(rafId);
+        };
     }, []);
 
     // ── Fit-to-screen whenever image or container size changes ──────────────

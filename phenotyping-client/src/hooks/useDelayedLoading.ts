@@ -20,8 +20,10 @@ export function useDelayedLoading(loading: boolean, delayMs = 250): boolean {
     const t = setTimeout(() => setShow(true), delayMs);
     timerRef.current = t;
     return () => {
-      clearTimeout(timerRef.current!);
-      timerRef.current = null;
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [loading, delayMs]);
 

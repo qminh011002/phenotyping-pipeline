@@ -1,7 +1,20 @@
-"""Service for uploading, validating, and assigning custom .pt model files."""
+"""Service for uploading, validating, and assigning custom .pt model files.
+
+Storage layout (single source of truth — no YAML writes):
+
+    data/models/<organism>/default/   ← operator-placed weights (treated as default)
+    data/models/<organism>/custom/    ← uploaded via POST /models/<organism>/upload
+
+Active-model resolution lives in :mod:`app.services.model_storage`. ``assign_model``
+only mutates the DB; the caller is responsible for asking ``ModelRegistry`` to
+reload the affected organism so the change takes effect immediately.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import logging
+import types
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,42 +24,33 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.custom_model import CustomModel, ModelAssignment
+from app.services.model_storage import VALID_ORGANISMS, ModelStorage
 
 logger = logging.getLogger(__name__)
-
-VALID_ORGANISMS = ("egg", "larvae", "pupae", "neonate")
-
-DEFAULT_MODELS: dict[str, str] = {
-    "egg": "models/egg_best.pt",
-    "larvae": "models/larvae_best.pt",
-    "pupae": "models/pupae_best.pt",
-    "neonate": "models/neonate_best.pt",
-}
 
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 class ModelUploadService:
-    """Handles custom model file storage, YOLO validation, and config.yaml updates."""
+    """Handles custom model file storage, YOLO validation, and DB assignment."""
 
-    def __init__(self, data_dir: Path, pipeline_root: Path) -> None:
-        self._custom_dir = data_dir / "models" / "custom"
-        self._pipeline_root = pipeline_root
-        self._config_path = pipeline_root / "config.yaml"
+    def __init__(self, storage: ModelStorage) -> None:
+        self._storage = storage
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _validate_organism(self, organism: str) -> None:
         if organism not in VALID_ORGANISMS:
             msg = f"Invalid organism. Must be one of: {', '.join(VALID_ORGANISMS)}"
             raise InvalidOrganismError(msg)
 
-    def _organism_dir(self, organism: str) -> Path:
-        return self._custom_dir / organism
-
     def _ensure_custom_dir(self, organism: str) -> Path:
         self._validate_organism(organism)
-        path = self._organism_dir(organism)
+        path = self._storage.custom_dir(organism)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    # ── Upload ────────────────────────────────────────────────────────────────
 
     async def save_uploaded_file(
         self,
@@ -62,11 +66,11 @@ class ModelUploadService:
         stored_name = f"{model_id}_{filename}"
         stored_path = custom_dir / stored_name
 
-        stored_path.write_bytes(content)
+        await asyncio.to_thread(stored_path.write_bytes, content)
 
-        is_valid = self._validate_yolo(stored_path)
+        is_valid = await asyncio.to_thread(self._validate_yolo, stored_path)
         if not is_valid:
-            stored_path.unlink(missing_ok=True)
+            await asyncio.to_thread(lambda: stored_path.unlink(missing_ok=True))
             raise InvalidModelError(
                 "Invalid model file: not a YOLO detection model or file is corrupt"
             )
@@ -90,6 +94,7 @@ class ModelUploadService:
                     "model_id": str(model_id),
                     "organism": organism,
                     "filename": filename,
+                    "stored_path": str(stored_path),
                     "size_bytes": len(content),
                 }
             },
@@ -106,17 +111,14 @@ class ModelUploadService:
             del model
             return valid
         except Exception as exc:
-            logger.warning(
-                "YOLO validation failed for %s: %s",
-                path.name,
-                exc,
-            )
+            logger.warning("YOLO validation failed for %s: %s", path.name, exc)
             return False
+
+    # ── Listing / lookup / deletion ────────────────────────────────────────────
 
     async def list_custom_models(
         self, db: AsyncSession, organism: str | None = None
     ) -> list[CustomModel]:
-        """Return uploaded custom models, optionally filtered by organism."""
         stmt = select(CustomModel)
         if organism is not None:
             self._validate_organism(organism)
@@ -129,7 +131,6 @@ class ModelUploadService:
     async def get_custom_model(
         self, db: AsyncSession, model_id: uuid.UUID
     ) -> CustomModel | None:
-        """Return a single custom model by ID."""
         result = await db.execute(
             select(CustomModel).where(CustomModel.id == model_id)
         )
@@ -155,9 +156,7 @@ class ModelUploadService:
         stored_path = Path(record.stored_path)
         stored_path.unlink(missing_ok=True)
 
-        await db.execute(
-            delete(CustomModel).where(CustomModel.id == model_id)
-        )
+        await db.execute(delete(CustomModel).where(CustomModel.id == model_id))
         await db.flush()
 
         logger.info(
@@ -166,34 +165,58 @@ class ModelUploadService:
         )
         return None
 
+    # ── Assignments ────────────────────────────────────────────────────────────
+
     async def get_assignments(
         self, db: AsyncSession
     ) -> dict[str, dict[str, Any]]:
-        """Return current model assignments for all organisms."""
+        """Return current model assignments for every organism.
+
+        For each organism the response includes the active filename derived from
+        either the assigned custom model or the first ``.pt`` in the default
+        folder, plus a ``has_default`` flag the frontend uses to decide between
+        "Model not installed" and "Default available".
+        """
         result = await db.execute(select(ModelAssignment))
         assignments_map: dict[str, ModelAssignment] = {
             row.organism: row for row in result.scalars().all()
         }
 
+        custom_ids = [
+            a.custom_model_id for a in assignments_map.values() if a.custom_model_id
+        ]
+        customs_map: dict[uuid.UUID, CustomModel] = {}
+        if custom_ids:
+            cresult = await db.execute(
+                select(CustomModel).where(CustomModel.id.in_(custom_ids))
+            )
+            customs_map = {c.id: c for c in cresult.scalars().all()}
+
         out: dict[str, dict[str, Any]] = {}
         for organism in VALID_ORGANISMS:
+            default_path = self._storage.find_default_model(organism)
+            has_default = default_path is not None
+
             assignment = assignments_map.get(organism)
             if assignment and assignment.custom_model_id:
-                custom = await self.get_custom_model(db, assignment.custom_model_id)
+                custom = customs_map.get(assignment.custom_model_id)
                 if custom:
                     out[organism] = {
                         "organism": organism,
                         "is_default": False,
+                        "has_default": has_default,
                         "model_filename": custom.original_filename,
+                        "default_filename": default_path.name if default_path else None,
                         "custom_model": custom,
                     }
                     continue
 
-            default_rel = DEFAULT_MODELS[organism]
             out[organism] = {
                 "organism": organism,
                 "is_default": True,
-                "model_filename": Path(default_rel).name,
+                "has_default": has_default,
+                "model_filename": default_path.name if default_path else None,
+                "default_filename": default_path.name if default_path else None,
                 "custom_model": None,
             }
 
@@ -205,7 +228,12 @@ class ModelUploadService:
         organism: str,
         custom_model_id: uuid.UUID | None,
     ) -> dict[str, Any]:
-        """Assign a custom model to an organism slot, or revert to default."""
+        """Assign a custom model to an organism slot, or revert to default.
+
+        Mutates the DB only — the caller (router) is responsible for asking
+        :class:`ModelRegistry` to reload the organism's weights so the change
+        takes effect on the next inference call without a restart.
+        """
         self._validate_organism(organism)
 
         if custom_model_id is not None:
@@ -214,7 +242,7 @@ class ModelUploadService:
                 raise ModelNotFoundError("Custom model not found")
             if custom.organism != organism:
                 raise ModelOrganismMismatchError(
-                    f"Model belongs to '{custom.organism}' and cannot be assigned to '{organism}'"
+                    f"Model belongs to {custom.organism!r} and cannot be assigned to {organism!r}"
                 )
 
         result = await db.execute(
@@ -237,22 +265,20 @@ class ModelUploadService:
 
         if custom_model_id is not None:
             custom = await self.get_custom_model(db, custom_model_id)
-            assert custom is not None
-            new_model_path = custom.stored_path
+            if custom is None:
+                raise ModelNotFoundError("Custom model not found after assignment")
             model_filename = custom.original_filename
         else:
-            new_model_path = DEFAULT_MODELS[organism]
-            model_filename = Path(new_model_path).name
-
-        self._update_config_yaml(organism, new_model_path)
+            default_path = self._storage.find_default_model(organism)
+            model_filename = default_path.name if default_path else None
 
         logger.info(
             "Model assignment updated",
             extra={
                 "context": {
                     "organism": organism,
-                    "custom_model_id": str(custom_model_id),
-                    "model_path": new_model_path,
+                    "custom_model_id": str(custom_model_id) if custom_model_id else None,
+                    "model_filename": model_filename,
                 }
             },
         )
@@ -263,33 +289,47 @@ class ModelUploadService:
             "model_filename": model_filename,
         }
 
-    def _update_config_yaml(self, organism: str, model_path: str) -> None:
-        """Update the model path for an organism in config.yaml."""
-        import yaml
+    async def get_active_custom_path(
+        self, db: AsyncSession, organism: str
+    ) -> Path | None:
+        """Return the on-disk path of the assigned custom model, if any."""
+        result = await db.execute(
+            select(ModelAssignment).where(ModelAssignment.organism == organism)
+        )
+        assignment = result.scalar_one_or_none()
+        if assignment is None or assignment.custom_model_id is None:
+            return None
+        custom = await self.get_custom_model(db, assignment.custom_model_id)
+        if custom is None:
+            return None
+        return Path(custom.stored_path)
 
-        with open(self._config_path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+    # ── One-shot legacy migration helper ───────────────────────────────────────
 
-        if organism not in data:
-            data[organism] = {}
+    async def migrate_legacy_layout(self, db: AsyncSession) -> int:
+        """Move files from ``data/models/custom/<organism>/`` to the new layout
+        and rewrite ``custom_model.stored_path`` to match. Idempotent.
+        """
+        moved = await asyncio.to_thread(self._storage.migrate_legacy_custom_layout)
+        if not moved:
+            return 0
 
-        data[organism]["model"] = model_path
-
-        tmp_path = self._config_path.with_suffix(".tmp")
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                yaml.safe_dump(
-                    data,
-                    fh,
-                    default_flow_style=False,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
-            tmp_path.replace(self._config_path)
-        except Exception:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
+        old_to_new = {str(old): str(new) for old, new in moved}
+        records = (await db.execute(select(CustomModel))).scalars().all()
+        rewritten = 0
+        for record in records:
+            new_path = old_to_new.get(record.stored_path)
+            if new_path is None:
+                continue
+            record.stored_path = new_path
+            rewritten += 1
+        if rewritten:
+            await db.flush()
+            logger.info(
+                "Rewrote %d custom_model.stored_path values to the new layout",
+                rewritten,
+            )
+        return rewritten
 
 
 class InvalidModelError(Exception):
@@ -306,3 +346,15 @@ class InvalidOrganismError(Exception):
 
 class ModelOrganismMismatchError(Exception):
     """Raised when a model is assigned to the wrong organism slot."""
+
+
+# Public re-export for the existing routers / deps that import these names.
+__all__ = [
+    "MAX_FILE_SIZE",
+    "VALID_ORGANISMS",
+    "ModelUploadService",
+    "InvalidModelError",
+    "ModelNotFoundError",
+    "InvalidOrganismError",
+    "ModelOrganismMismatchError",
+]

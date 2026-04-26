@@ -12,10 +12,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database import AsyncSession, get_session
-from app.deps import get_analysis_service, get_settings
+from app.deps import get_analysis_service, get_cached_storage_dir, get_settings
 from app.schemas.analysis import (
     ActiveBatchResponse,
     AnalysisBatchCreate,
@@ -70,7 +70,11 @@ async def create_analysis(
     batch = await analysis_svc.create_batch(data=data, db=db)
     await db.commit()
     detail = await analysis_svc.get_batch_detail(batch_id=batch.id, db=db)
-    assert detail is not None
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load freshly created batch",
+        )
     return detail
 
 
@@ -128,7 +132,11 @@ async def fail_analysis(
         )
     failed = await analysis_svc.fail_batch(batch_id=batch_id, error=data.reason, db=db)
     await db.commit()
-    assert failed is not None
+    if failed is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="fail_batch returned no row after commit",
+        )
     return {
         "id": str(failed.id),
         "status": failed.status,
@@ -248,8 +256,7 @@ async def delete_analysis(
     Removes the database rows and deletes overlay PNG files from disk.
     Returns 204 No Content on success.
     """
-    settings = get_settings()
-    storage_dir = Path(settings.image_storage_dir)
+    storage_dir = Path(get_cached_storage_dir())
     deleted = await analysis_svc.delete_batch(
         batch_id=batch_id,
         db=db,
@@ -275,12 +282,8 @@ async def get_overlay(
     image_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
     analysis_svc: AnalysisService = Depends(get_analysis_service),
-) -> StreamingResponse:
-    """Stream the overlay PNG image for a processed image.
-
-    The overlay is read from disk at the path stored in the database.
-    Returns 404 if the batch, image, or overlay file does not exist.
-    """
+) -> FileResponse:
+    """Serve the overlay PNG image for a processed image."""
     from sqlalchemy import select
 
     from app.models.analysis import AnalysisBatch, AnalysisImage
@@ -306,10 +309,9 @@ async def get_overlay(
             detail=f"Image {image_id} has no completed overlay.",
         )
 
-    settings = get_settings()
     overlay_path = Path(image.overlay_path)
     if not overlay_path.is_absolute():
-        overlay_path = Path(settings.image_storage_dir) / overlay_path
+        overlay_path = Path(get_cached_storage_dir()) / overlay_path
 
     if not overlay_path.exists():
         raise HTTPException(
@@ -317,13 +319,8 @@ async def get_overlay(
             detail=f"Overlay file not found on disk: {overlay_path}",
         )
 
-    async def file_iterator(path: Path):
-        with open(path, "rb") as f:
-            while chunk := f.read(8192):
-                yield chunk
-
-    return StreamingResponse(
-        file_iterator(overlay_path),
+    return FileResponse(
+        overlay_path,
         media_type="image/png",
         headers={"Content-Disposition": f'inline; filename="{overlay_path.name}"'},
     )
@@ -341,14 +338,8 @@ async def get_raw(
     batch_id: UUID,
     image_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> StreamingResponse:
-    """Stream the raw source image the operator uploaded.
-
-    The raw PNG is saved alongside the overlay by the inference service.
-    We derive its path from the overlay path instead of adding a new DB
-    column: both live in the same batch directory, differing only by the
-    ``_overlay.png`` → ``_raw.png`` suffix.
-    """
+) -> FileResponse:
+    """Serve the raw source image the operator uploaded."""
     from sqlalchemy import select
 
     from app.models.analysis import AnalysisBatch, AnalysisImage
@@ -374,10 +365,9 @@ async def get_raw(
             detail=f"Image {image_id} has no completed result.",
         )
 
-    settings = get_settings()
     overlay_path = Path(image.overlay_path)
     if not overlay_path.is_absolute():
-        overlay_path = Path(settings.image_storage_dir) / overlay_path
+        overlay_path = Path(get_cached_storage_dir()) / overlay_path
 
     raw_path = overlay_path.with_name(
         overlay_path.name.replace("_overlay.png", "_raw.png"),
@@ -389,13 +379,8 @@ async def get_raw(
             detail=f"Raw file not found on disk: {raw_path}",
         )
 
-    async def file_iterator(path: Path):
-        with open(path, "rb") as f:
-            while chunk := f.read(8192):
-                yield chunk
-
-    return StreamingResponse(
-        file_iterator(raw_path),
+    return FileResponse(
+        raw_path,
         media_type="image/png",
         headers={"Content-Disposition": f'inline; filename="{raw_path.name}"'},
     )
@@ -423,8 +408,7 @@ async def download_analysis(
     If `image_ids` is omitted the whole batch is included. Only completed
     images are ever exported.
     """
-    settings = get_settings()
-    storage_dir = Path(settings.image_storage_dir)
+    storage_dir = Path(get_cached_storage_dir())
     try:
         result = await stream_batch_archive(
             batch_id=batch_id,
@@ -518,7 +502,11 @@ async def complete_analysis(
 
     # Re-fetch updated detail
     updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
-    assert updated is not None
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to re-load batch after completion",
+        )
     return updated
 
 

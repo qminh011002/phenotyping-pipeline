@@ -35,15 +35,16 @@ async def get_health() -> HealthResponse:
     """
     try:
         registry = get_model_registry()
-        model_loaded = registry.model_loaded
-        status: str = "ok" if model_loaded else "degraded"
+        models_status = registry.models_status
+        any_loaded = any(s == "loaded" for s in models_status.values())
         return HealthResponse(
-            status=status,
-            model_loaded=model_loaded,
+            status="ok" if any_loaded else "degraded",
+            model_loaded=registry.model_loaded,
             device=registry.device,
             cuda_available=registry.cuda_available,
             uptime_seconds=registry.uptime_seconds,
             version="0.1.0",
+            models_status=models_status,
         )
     except Exception as exc:
         logger.exception("GET /health failed: %s", exc)
@@ -54,6 +55,7 @@ async def get_health() -> HealthResponse:
             cuda_available=False,
             uptime_seconds=0.0,
             version="0.1.0",
+            models_status={},
         )
 
 

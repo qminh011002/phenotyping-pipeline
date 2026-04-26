@@ -52,13 +52,18 @@ export interface LogEntry {
   context: Record<string, unknown>;
 }
 
+export type ModelStatus = "loaded" | "missing" | "error";
+
 export interface HealthResponse {
   status: "ok" | "degraded";
+  /** Egg-only legacy flag retained for older callers; prefer `models_status.egg`. */
   model_loaded: boolean;
   device: Device;
   cuda_available: boolean;
   uptime_seconds: number;
   version: string;
+  /** Per-organism load state. Frontend uses this to gate the Project Type cards. */
+  models_status: Partial<Record<Organism, ModelStatus>>;
 }
 
 // ── App Settings ─────────────────────────────────────────────────────────────
@@ -159,8 +164,14 @@ export interface CustomModelListResponse {
 
 export interface OrganismAssignment {
   organism: Organism;
+  /** True if the active model is the default-folder file (no custom assigned). */
   is_default: boolean;
-  model_filename: string;
+  /** True if at least one .pt exists in `data/models/<organism>/default/`. */
+  has_default: boolean;
+  /** Filename of the active model (custom > default). `null` when neither is installed. */
+  model_filename: string | null;
+  /** Filename of the default-folder model, if any. */
+  default_filename: string | null;
   custom_model: CustomModelResponse | null;
 }
 
@@ -171,7 +182,7 @@ export interface AssignmentsResponse {
 export interface AssignResultResponse {
   organism: Organism;
   custom_model_id: string | null;
-  model_filename: string;
+  model_filename: string | null;
 }
 
 // ── Log streaming ─────────────────────────────────────────────────────────────

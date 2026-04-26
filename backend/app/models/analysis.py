@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import ForeignKey, Index, String, Text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import JSONB
@@ -11,10 +11,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
 class AnalysisBatch(Base):
     """A batch of images processed together as a single analysis run."""
 
     __tablename__ = "analysis_batch"
+    __table_args__ = (
+        Index("idx_batch_created_at", "created_at"),
+        Index("idx_batch_status", "status"),
+        Index("idx_batch_organism", "organism_type"),
+        Index("idx_batch_org_created", "organism_type", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, default=uuid.uuid4
@@ -34,7 +44,7 @@ class AnalysisBatch(Base):
     total_elapsed_secs: Mapped[float | None] = mapped_column(nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow
+        TIMESTAMP(timezone=True), default=_now_utc
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
@@ -58,7 +68,7 @@ class AnalysisImage(Base):
 
     __tablename__ = "analysis_image"
     __table_args__ = (
-        Index("ix_analysis_image_batch_id", "batch_id"),
+        Index("idx_image_batch_id", "batch_id"),
         Index("ix_analysis_image_original_filename", "original_filename"),
     )
 
@@ -76,16 +86,15 @@ class AnalysisImage(Base):
     overlay_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), default=datetime.utcnow
+        TIMESTAMP(timezone=True), default=_now_utc
     )
     # Model-produced bounding boxes at inference time (read-only baseline).
-    # Needed so saved batches can be reopened in the result viewer with the
-    # same model boxes the user saw on first processing.
     annotations: Mapped[list | None] = mapped_column(
         JSONB, nullable=True
     )
-    # FS-009: operator-corrected bounding boxes — supersedes model annotations when set
-    edited_annotations: Mapped[dict | None] = mapped_column(
+    # FS-009: operator-corrected bounding boxes — supersedes model annotations when set.
+    # List of bbox dicts (matches schema BatchDetail / EditedAnnotationsUpdate).
+    edited_annotations: Mapped[list | None] = mapped_column(
         JSONB, nullable=True
     )
 

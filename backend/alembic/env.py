@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import AppSettings
-from app.database import Base
+from app.db.base import Base
 from app.models import AnalysisBatch, AnalysisImage  # noqa: F401 — imported for Base.metadata
 from app.models.app_settings import AppSettingsRow  # noqa: F401
 from app.models.custom_model import CustomModel, ModelAssignment  # noqa: F401
@@ -31,7 +31,17 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """Build the async database URL from environment variables."""
-    settings = AppSettings()
+    try:
+        settings = AppSettings()
+    except Exception as exc:  # noqa: BLE001
+        import os
+
+        url = os.environ.get("DATABASE_URL")
+        if not url:
+            raise RuntimeError(
+                f"Could not load AppSettings and DATABASE_URL is unset: {exc}"
+            ) from exc
+        return url
     return settings.database_url
 
 

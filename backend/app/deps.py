@@ -11,6 +11,7 @@ from app.config import AppSettings, PipelineConfigManager
 if TYPE_CHECKING:
     from app.services.log_buffer import LogBuffer
     from app.services.model_registry import ModelRegistry
+    from app.services.model_storage import ModelStorage
 
 # Import at runtime (not inside TYPE_CHECKING) so that TypeAliasType below can
 # resolve EggInferenceService at module-load time.
@@ -84,7 +85,27 @@ def get_pipeline_config() -> PipelineConfigManager:
     Thread-safe via PipelineConfigManager's internal lock.
     """
     settings = get_settings()
-    return PipelineConfigManager(pipeline_root=settings.pipeline_root)
+    return PipelineConfigManager(
+        data_dir=settings.data_dir,
+        pipeline_root=settings.pipeline_root,
+    )
+
+
+@lru_cache
+def get_model_storage() -> "ModelStorage":
+    """Return the ModelStorage singleton, layout pinned at ``data_dir/models``."""
+    from app.services.model_storage import ModelStorage
+
+    settings = get_settings()
+    return ModelStorage(data_dir=settings.data_dir)
+
+
+@lru_cache
+def get_model_upload_service() -> "ModelUploadService":  # type: ignore[name-defined]
+    """Return the ModelUploadService singleton."""
+    from app.services.model_upload_service import ModelUploadService
+
+    return ModelUploadService(storage=get_model_storage())
 
 
 def get_model_registry() -> ModelRegistry:
@@ -183,7 +204,6 @@ def get_app_settings_service() -> AppSettingsService:
 # ── Cached storage_dir ( invalidated on PUT /settings/storage ) ─────────────────
 
 _storage_dir_cache: str | None = None
-_storage_dir_cache_etag: int = 0  # bumped on every invalidation
 
 
 def get_cached_storage_dir() -> str:
@@ -192,7 +212,7 @@ def get_cached_storage_dir() -> str:
     The cache is invalidated whenever PUT /settings/storage successfully updates
     the DB row (see invalidate_storage_dir_cache below).
     """
-    global _storage_dir_cache, _storage_dir_cache_etag
+    global _storage_dir_cache
     if _storage_dir_cache is None:
         from app.config import AppSettings
         _storage_dir_cache = str(AppSettings().image_storage_dir)
@@ -200,10 +220,9 @@ def get_cached_storage_dir() -> str:
 
 
 def invalidate_storage_dir_cache() -> None:
-    """Bump the cache generation counter so the next call re-reads from the DB.
+    """Drop the cached value so the next call re-reads from the DB.
 
     Called by PUT /settings/storage after a successful DB update.
     """
-    global _storage_dir_cache, _storage_dir_cache_etag
+    global _storage_dir_cache
     _storage_dir_cache = None
-    _storage_dir_cache_etag += 1

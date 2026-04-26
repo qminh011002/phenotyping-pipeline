@@ -59,7 +59,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
   const [batchDetail, setBatchDetail] = useState<ReturnType<typeof loadBatchDetail>>(null);
   const [processingConfig, setProcessingConfig] = useState<Record<string, unknown> | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [batchSummary] = useState(() => loadBatchSummary());
+  const batchSummary = useMemo(() => loadBatchSummary(), []);
   const [loading, setLoading] = useState(true);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0);
 
@@ -158,14 +158,20 @@ export function ResultViewer({ className }: ResultViewerProps) {
   }, [baselineBoxes, confidenceThreshold]);
 
   // ── Sync session boxes when image changes ───────────────────────────────
+  // Reset history only when the image id changes — not on baselineBoxes
+  // identity changes, which can fire after auto-save and clobber in-flight edits.
+  const baselineBoxesRef = useRef(baselineBoxes);
+  useEffect(() => {
+    baselineBoxesRef.current = baselineBoxes;
+  }, [baselineBoxes]);
   useEffect(() => {
     const imageId = currentImageRecord?.id ?? null;
     if (previousImageIdRef.current === imageId) return;
     previousImageIdRef.current = imageId;
     setSelectedIdx(null);
     setEditorTool("drag");
-    dispatchHistory({ type: "reset", boxes: baselineBoxes });
-  }, [baselineBoxes, currentImageRecord?.id]);
+    dispatchHistory({ type: "reset", boxes: baselineBoxesRef.current });
+  }, [currentImageRecord?.id]);
 
   // ── isDirty ─────────────────────────────────────────────────────────────
   const isDirty = useMemo(
@@ -199,29 +205,36 @@ export function ResultViewer({ className }: ResultViewerProps) {
     setPendingNavIdx(null);
   }, []);
 
-  // ── Save edits ──────────────────────────────────────────────────────────
+  // ── Save edits (debounced + sequence-guarded) ──────────────────────────
+  const saveSeqRef = useRef(0);
   const handleSaveEdits = useCallback(async () => {
     if (!batchDetail || !currentImageRecord || !isDirty) return;
     const batchId = batchDetail.id;
     const imageId = currentImageRecord.id;
     const boxesToSave = sessionBoxes;
+    const seq = ++saveSeqRef.current;
     setSavingEdits(true);
     try {
       await putEditedAnnotations(batchId, imageId, boxesToSave);
+      if (seq !== saveSeqRef.current) return; // newer save in flight
       const updated = await getAnalysisDetail(batchId);
+      if (seq !== saveSeqRef.current) return;
       setBatchDetail(updated);
       storeBatchDetail(updated);
     } catch {
-      toast.error("Failed to auto-save edits");
+      if (seq === saveSeqRef.current) toast.error("Failed to auto-save edits");
     } finally {
-      setSavingEdits(false);
+      if (seq === saveSeqRef.current) setSavingEdits(false);
     }
   }, [batchDetail, currentImageRecord, isDirty, sessionBoxes]);
 
   useEffect(() => {
-    if (!editMode || savingEdits || !isDirty) return;
-    void handleSaveEdits();
-  }, [editMode, handleSaveEdits, isDirty, savingEdits]);
+    if (!editMode || !isDirty) return;
+    const t = setTimeout(() => {
+      void handleSaveEdits();
+    }, 500);
+    return () => clearTimeout(t);
+  }, [editMode, handleSaveEdits, isDirty]);
 
   // ── Reset to model ──────────────────────────────────────────────────────
   const handleResetToModel = useCallback(async () => {
@@ -254,13 +267,18 @@ export function ResultViewer({ className }: ResultViewerProps) {
   useEffect(() => {
     const update = (e: KeyboardEvent) => setCtrlHeld(e.ctrlKey || e.metaKey);
     const clear = () => setCtrlHeld(false);
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") setCtrlHeld(false);
+    };
     window.addEventListener("keydown", update);
     window.addEventListener("keyup", update);
     window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("keydown", update);
       window.removeEventListener("keyup", update);
       window.removeEventListener("blur", clear);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, []);
 
@@ -273,7 +291,10 @@ export function ResultViewer({ className }: ResultViewerProps) {
         e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       if (inputFocused) return;
 
-      const isMac = navigator.platform.toUpperCase().includes("MAC");
+      const platform =
+        (navigator as Navigator & { userAgentData?: { platform?: string } })
+          .userAgentData?.platform ?? navigator.platform ?? "";
+      const isMac = platform.toUpperCase().includes("MAC");
       const mod = isMac ? e.metaKey : e.ctrlKey;
 
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -286,7 +307,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         return;
       }
 
-      if (mod && e.shiftKey && e.key === ("z" as unknown as KeyboardEvent["key"])) {
+      if (mod && e.shiftKey && e.key === "z") {
         e.preventDefault();
         dispatchHistory({ type: "redo" });
         setSelectedIdx(null);

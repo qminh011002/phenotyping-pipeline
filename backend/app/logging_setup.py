@@ -11,6 +11,8 @@ import logging
 import sys
 from datetime import datetime, timezone
 from functools import wraps
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -218,7 +220,7 @@ def configure_logging(log_buffer: LogBuffer | None = None) -> None:
 
     # Remove any pre-existing handlers (e.g., uvicorn default)
     for handler in root.handlers[:]:
-        root.remove_handler(handler)
+        root.removeHandler(handler)
 
     json_formatter = JsonFormatter()
 
@@ -235,9 +237,13 @@ def configure_logging(log_buffer: LogBuffer | None = None) -> None:
     console_handler.setFormatter(json_formatter)
     root.addHandler(console_handler)
 
-    # File handler — human-readable plain text
+    # File handler — human-readable plain text, with rotation
     try:
-        file_handler = logging.FileHandler("app.log", encoding="utf-8")
+        log_path = Path(settings.data_dir) / "app.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_path, maxBytes=10_000_000, backupCount=5, encoding="utf-8"
+        )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(
             logging.Formatter(
@@ -261,6 +267,9 @@ def _patch_logger_make_record() -> None:
     LogRecord attribute names. This patch intercepts those keys, stores them in
     _safe_extra on the record, and lets JsonFormatter include them in context.
     """
+    if getattr(logging.Logger.makeRecord, "_patched", False):
+        return
+
     _original_make_record = logging.Logger.makeRecord
 
     @wraps(_original_make_record)
@@ -278,6 +287,7 @@ def _patch_logger_make_record() -> None:
         sinfo: str | None = None,
     ) -> logging.LogRecord:
         if extra:
+            extra = dict(extra)
             safe_extra: dict[str, Any] = {}
             for key in list(extra.keys()):
                 if key in _RESERVED_LOGRECORD_KEYS:
@@ -292,4 +302,5 @@ def _patch_logger_make_record() -> None:
             self, name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
         )
 
+    _safe_make_record._patched = True  # type: ignore[attr-defined]
     logging.Logger.makeRecord = _safe_make_record  # type: ignore[method-assign]

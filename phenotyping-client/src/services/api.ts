@@ -19,6 +19,7 @@ import type {
   DetectionResult,
   EggConfig,
   FailBatchResponse,
+  HealthResponse,
   LogEntry,
   Organism,
   StorageSettingsResponse,
@@ -28,8 +29,8 @@ import type {
 // ── Health ─────────────────────────────────────────────────────────────────
 
 /** GET /health — liveness check */
-export async function getHealth() {
-  return http.get<{ status: "ok" | "degraded"; model_loaded: boolean; device: string; cuda_available: boolean; uptime_seconds: number; version: string }>("health");
+export async function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return http.get<HealthResponse>("health", signal);
 }
 
 /** GET /ping — lightweight latency check */
@@ -107,8 +108,8 @@ export function getOverlayUrl(batchId: string, filename: string): string {
 // ── Config ──────────────────────────────────────────────────────────────────
 
 /** GET /config — return current egg inference config */
-export async function getConfig(): Promise<EggConfig> {
-  return http.get<EggConfig>("config");
+export async function getConfig(signal?: AbortSignal): Promise<EggConfig> {
+  return http.get<EggConfig>("config", signal);
 }
 
 /** PUT /config — update egg inference config */
@@ -215,8 +216,11 @@ export async function listAnalyses(params: {
 }
 
 /** GET /analyses/{batch_id} — return full batch detail with all images */
-export async function getAnalysisDetail(batchId: string): Promise<AnalysisBatchDetail> {
-  return http.get<AnalysisBatchDetail>(`analyses/${batchId}`);
+export async function getAnalysisDetail(
+  batchId: string,
+  signal?: AbortSignal,
+): Promise<AnalysisBatchDetail> {
+  return http.get<AnalysisBatchDetail>(`analyses/${batchId}`, signal);
 }
 
 /** DELETE /analyses/{batch_id} — delete a batch and its overlay files */
@@ -259,8 +263,8 @@ export async function downloadBatchArchive(
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 /** GET /dashboard/stats — return aggregate statistics for the home page */
-export async function getDashboardStats(): Promise<DashboardStats> {
-  return http.get<DashboardStats>("dashboard/stats");
+export async function getDashboardStats(signal?: AbortSignal): Promise<DashboardStats> {
+  return http.get<DashboardStats>("dashboard/stats", signal);
 }
 
 // ── Edited annotations ─────────────────────────────────────────────────────

@@ -50,10 +50,11 @@ export function AnimatedNumber({
       },
     });
 
-    return () => controls.stop();
-    // Only re-animate when `value` changes — intentionally exclude duration/decimals
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, shouldReduce]);
+    return () => {
+      controls.stop();
+      prevValue.current = value;
+    };
+  }, [value, shouldReduce, decimals, duration]);
 
   return (
     <span

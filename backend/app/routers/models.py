@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.deps import get_settings
+from app.deps import (
+    get_model_registry,
+    get_model_upload_service as _get_model_upload_service,
+    get_pipeline_config,
+)
 from app.schemas.model import (
     AssignmentsResponse,
     AssignModelRequest,
@@ -27,14 +31,6 @@ from app.services.model_upload_service import (
 )
 
 router = APIRouter(prefix="/models", tags=["models"])
-
-
-def _get_model_upload_service() -> ModelUploadService:
-    settings = get_settings()
-    return ModelUploadService(
-        data_dir=settings.data_dir,
-        pipeline_root=settings.pipeline_root,
-    )
 
 
 @router.post(
@@ -65,6 +61,13 @@ async def upload_model(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only .pt files are accepted",
+        )
+
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)}MB)",
         )
 
     content = await file.read()
@@ -125,7 +128,9 @@ async def get_assignments(
         assignments[organism] = OrganismAssignment(
             organism=data["organism"],
             is_default=data["is_default"],
-            model_filename=data["model_filename"],
+            has_default=data.get("has_default", False),
+            model_filename=data.get("model_filename"),
+            default_filename=data.get("default_filename"),
             custom_model=custom_model,
         )
     return AssignmentsResponse(assignments=assignments)
@@ -164,6 +169,24 @@ async def assign_model(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+
+    # Reload the registry so the change takes effect on the next inference call
+    # without a restart. Best-effort — failures don't unwind the assignment.
+    try:
+        registry = get_model_registry()
+        custom_path = await svc.get_active_custom_path(db, organism)
+        await registry.reload(
+            organism=organism,
+            pipeline_config=get_pipeline_config(),
+            custom_path=custom_path,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Logged but not raised — DB assignment is persisted regardless.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Registry reload failed after assigning %s: %s", organism, exc
+        )
 
     return AssignResultResponse(**result)
 

@@ -29,6 +29,14 @@ from typing import Any
 _QUEUE_MAXSIZE = 500
 _RING_MAXLEN = 1000
 
+_logger = logging.getLogger(__name__)
+
+
+def _log_task_exception(task: "asyncio.Task[Any]") -> None:
+    exc = task.exception()
+    if exc is not None:
+        _logger.debug("log push task failed: %s", exc)
+
 
 class LogBuffer:
     """Manages the in-memory ring buffer and per-client WebSocket subscriber queues.
@@ -106,6 +114,11 @@ class LogBuffer:
 
         return dropped
 
+    @property
+    def subscriber_count(self) -> int:
+        """Current number of WS subscribers (best-effort, lock-free read)."""
+        return len(self._subscribers)
+
     # ── Buffer access ────────────────────────────────────────────────────────
 
     def get_recent(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -142,9 +155,10 @@ class LogBuffer:
                 return
 
         def _schedule() -> None:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._push_async(formatted_json, level, message, context)
             )
+            task.add_done_callback(_log_task_exception)
 
         loop.call_soon_threadsafe(_schedule)
 
@@ -157,31 +171,24 @@ class LogBuffer:
         # Append to ring buffer
         self._ring.append(entry)
 
-        # Fan out to all subscriber queues
         async with self._lock:
-            client_ids = list(self._subscribers.keys())
-
-        for client_id in client_ids:
-            queue = self._subscribers.get(client_id)
-            if queue is None:
-                continue
-
-            frame = {"type": "log", "data": entry}
-
-            try:
-                queue.put_nowait(frame)
-            except asyncio.QueueFull:
-                # Drop oldest entry to make room, increment dropped counter
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+            subs = list(self._subscribers.items())
+            for client_id, queue in subs:
+                frame = {"type": "log", "data": entry}
                 try:
                     queue.put_nowait(frame)
                 except asyncio.QueueFull:
-                    # Queue is stuck; this shouldn't happen but guard against it
-                    pass
-                self._dropped_counts[client_id] = self._dropped_counts.get(client_id, 0) + 1
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        queue.put_nowait(frame)
+                    except asyncio.QueueFull:
+                        pass
+                    self._dropped_counts[client_id] = (
+                        self._dropped_counts.get(client_id, 0) + 1
+                    )
 
     # ── Heartbeat ───────────────────────────────────────────────────────────
 
@@ -209,15 +216,8 @@ class LogBuffer:
                 try:
                     queue.put_nowait(heartbeat_frame)
                 except asyncio.QueueFull:
-                    # Heartbeats are low-priority; if queue is full, skip this frame
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
-                        queue.put_nowait(heartbeat_frame)
-                    except asyncio.QueueFull:
-                        pass
+                    # Heartbeats are low-priority; never evict real logs
+                    pass
 
     def start_heartbeat(self) -> None:
         """Start the 1-second heartbeat task. Idempotent."""

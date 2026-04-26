@@ -38,7 +38,12 @@ export interface UseRecordedReturn {
   deleteBatch: (batchId: string) => Promise<void>;
 }
 
-export function useRecorded(): UseRecordedReturn {
+export interface UseRecordedOptions {
+  enabled?: boolean;
+}
+
+export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn {
+  const enabled = options.enabled ?? true;
   const [batches, setBatches] = useState<AnalysisBatchSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -96,9 +101,10 @@ export function useRecorded(): UseRecordedReturn {
 
   // Re-fetch whenever page or filters change
   useEffect(() => {
+    if (!enabled) return;
     fetchBatches(page, filters);
     return () => { abortRef.current?.abort(); };
-  }, [page, filters, fetchBatches]);
+  }, [enabled, page, filters, fetchBatches]);
 
   const setFilters = useCallback((updates: Partial<RecordedFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...updates }));

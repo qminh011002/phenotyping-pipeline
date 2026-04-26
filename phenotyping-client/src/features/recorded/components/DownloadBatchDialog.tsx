@@ -5,7 +5,7 @@
 // - Download streams from POST /analyses/:id/download; we pipe the Blob into
 //   an invisible <a download> to trigger the browser save dialog.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,11 +42,15 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
     );
     const [downloading, setDownloading] = useState(false);
 
-    // Re-prime selection when the dialog re-opens (e.g. user downloaded, closed,
-    // opened again) so new completions are picked up too.
+    // Re-prime selection only on the false→true open transition so that a
+    // batch update (new completion) mid-dialog doesn't wipe the user's choices.
+    const prevOpenRef = useRef(open);
     useEffect(() => {
-        if (!open) return;
-        setSelected(new Set(images.map((img) => img.id)));
+        const wasOpen = prevOpenRef.current;
+        prevOpenRef.current = open;
+        if (open && !wasOpen) {
+            setSelected(new Set(images.map((img) => img.id)));
+        }
     }, [open, images]);
 
     const allSelected = selected.size === images.length && images.length > 0;
@@ -85,7 +89,8 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+            // Defer the revoke so Chromium has time to start the download.
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
 
             toast.success('Download started');
             onOpenChange(false);

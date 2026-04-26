@@ -1,8 +1,9 @@
+import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { fadeVariants, slideUpVariants, zoomVariants } from "@/lib/motion";
 
 interface FadeInProps {
-  children: React.ReactNode;
+  children: ReactNode;
   delay?: number;
   className?: string;
 }
@@ -23,7 +24,7 @@ export function FadeIn({ children, delay = 0, className }: FadeInProps) {
 }
 
 interface SlideUpProps {
-  children: React.ReactNode;
+  children: ReactNode;
   delay?: number;
   className?: string;
 }
@@ -44,7 +45,7 @@ export function SlideUp({ children, delay = 0, className }: SlideUpProps) {
 }
 
 interface ZoomInProps {
-  children: React.ReactNode;
+  children: ReactNode;
   delay?: number;
   className?: string;
 }

@@ -1,7 +1,8 @@
+import type { ReactNode } from "react";
 import { AnimatePresence } from "framer-motion";
 
 interface MotionPresenceProps {
-  children: React.ReactNode;
+  children: ReactNode;
   mode?: "wait" | "popLayout" | "sync";
 }
 

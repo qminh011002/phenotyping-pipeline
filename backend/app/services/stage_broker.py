@@ -39,12 +39,14 @@ class StageBroker:
     async def _broadcast(self, payload: dict[str, Any]) -> None:
         async with self._lock:
             clients = list(self._clients)
-        dead: list[WebSocket] = []
-        for ws in clients:
-            try:
-                await ws.send_json(payload)
-            except Exception:
-                dead.append(ws)
+        results = await asyncio.gather(
+            *(ws.send_json(payload) for ws in clients),
+            return_exceptions=True,
+        )
+        dead = [ws for ws, r in zip(clients, results) if isinstance(r, Exception)]
+        for ws, r in zip(clients, results):
+            if isinstance(r, Exception):
+                logger.debug("stage broadcast failed: %s", r)
         if dead:
             async with self._lock:
                 for ws in dead:
@@ -64,18 +66,18 @@ class StageBroker:
         if loop is None or loop.is_closed():
             return
         try:
-            asyncio.run_coroutine_threadsafe(self._broadcast(payload), loop)
+            fut = asyncio.run_coroutine_threadsafe(self._broadcast(payload), loop)
+            fut.add_done_callback(
+                lambda f: f.exception() and logger.debug("stage emit failed: %s", f.exception())
+            )
         except RuntimeError:
             pass
 
 
-_broker: StageBroker | None = None
+_broker: StageBroker = StageBroker()
 
 
 def get_broker() -> StageBroker:
-    global _broker
-    if _broker is None:
-        _broker = StageBroker()
     return _broker
 
 

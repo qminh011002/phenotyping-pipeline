@@ -22,6 +22,15 @@ def get_cors_middleware() -> tuple[type[CORSMiddleware], dict]:
             ],
             "allow_credentials": False,
             "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-            "allow_headers": ["*"],
+            "allow_headers": [
+                "Accept",
+                "Accept-Encoding",
+                "Authorization",
+                "Content-Type",
+                "Content-Length",
+                "Origin",
+                "User-Agent",
+                "X-Requested-With",
+            ],
         },
     )

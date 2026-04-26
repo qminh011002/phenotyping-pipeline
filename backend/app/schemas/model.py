@@ -40,7 +40,18 @@ class OrganismAssignment(BaseModel):
 
     organism: str
     is_default: bool
-    model_filename: str
+    has_default: bool = Field(
+        default=False,
+        description="True if at least one .pt file exists in <organism>/default/.",
+    )
+    model_filename: str | None = Field(
+        default=None,
+        description="Filename of the active model. None when neither default nor custom is installed.",
+    )
+    default_filename: str | None = Field(
+        default=None,
+        description="Filename of the default-folder model, if any.",
+    )
     custom_model: CustomModelResponse | None = None
 
 
@@ -55,4 +66,4 @@ class AssignResultResponse(BaseModel):
 
     organism: str
     custom_model_id: UUID | None
-    model_filename: str
+    model_filename: str | None = None

@@ -37,25 +37,29 @@ export function ConnectionSection() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Auto-check on mount
-  useEffect(() => {
-    testConnection();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const testConnection = useCallback(async () => {
+  const testConnection = useCallback(async (signal?: AbortSignal) => {
     setStatus("checking");
     setErrorMsg(null);
     try {
-      const data = await getHealth() as HealthResponse;
+      const data = (await getHealth(signal)) as HealthResponse;
+      if (signal?.aborted) return;
       setHealth(data);
       setStatus("connected");
     } catch (err) {
+      if (signal?.aborted) return;
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setHealth(null);
       setStatus("error");
       setErrorMsg(String(err));
     }
   }, []);
+
+  // Auto-check on mount
+  useEffect(() => {
+    const controller = new AbortController();
+    void testConnection(controller.signal);
+    return () => controller.abort();
+  }, [testConnection]);
 
   const applyUrl = useCallback(() => {
     const trimmed = url.trim();
@@ -105,7 +109,7 @@ export function ConnectionSection() {
         {/* Test + status row */}
         <div className="flex items-center gap-4">
           <Button
-            onClick={testConnection}
+            onClick={() => void testConnection()}
             variant="default"
             size="sm"
             disabled={status === "checking"}

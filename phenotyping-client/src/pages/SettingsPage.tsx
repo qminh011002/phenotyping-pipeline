@@ -12,10 +12,6 @@ import { Separator } from "@/components/ui/separator";
 export default function SettingsPage() {
   return (
     <div className="flex flex-col h-full">
-      <header className="border-b px-6 py-4">
-        <h1 className="text-lg font-semibold">Settings</h1>
-      </header>
-
       <div className="flex-1 overflow-y-auto p-6">
         <div className="w-full max-w-5xl space-y-6">
           <ThemeSection />

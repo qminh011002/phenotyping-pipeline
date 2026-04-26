@@ -12,9 +12,18 @@ Device = Literal["cpu"] | str  # "cpu", "cuda", "cuda:0", "cuda:1", ...
 
 
 class EggConfig(BaseModel):
-    """Full egg inference configuration, validated against config.yaml shape."""
+    """Full egg inference configuration, validated against config.yaml shape.
 
-    model: str = Field(description="Path to the YOLO model weights")
+    ``model`` is retained for backwards-compatibility with legacy YAML files
+    that still carry ``egg.model: models/egg_best.pt``. The runtime no longer
+    consults this field — the active weight file is resolved by ``ModelStorage``
+    from ``data/models/<organism>/{default,custom}/``.
+    """
+
+    model: str | None = Field(
+        default=None,
+        description="Legacy YAML field, no longer used. Source of truth is data/models/<organism>/.",
+    )
     device: Device = "cpu"
     tile_size: int = Field(gt=0, description="Must be a multiple of 32")
     overlap: float = Field(ge=0.0, le=1.0)
@@ -47,7 +56,10 @@ class EggConfig(BaseModel):
 class NeonateConfig(BaseModel):
     """Full neonate inference configuration, validated against config.yaml shape."""
 
-    model: str = Field(description="Path to the YOLO model weights")
+    model: str | None = Field(
+        default=None,
+        description="Legacy YAML field, no longer used. See EggConfig.model.",
+    )
     device: Device = "cpu"
     tile_size: int = Field(gt=0, description="Must be a multiple of 32")
     overlap: float = Field(ge=0.0, le=1.0)

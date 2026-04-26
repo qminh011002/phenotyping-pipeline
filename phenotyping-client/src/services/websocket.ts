@@ -60,6 +60,7 @@ export class LogStreamClient {
     try {
       this._ws = new WebSocket(wsUrl);
     } catch (err) {
+      this._callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
       this._scheduleReconnect(baseUrl);
       return;
     }
@@ -115,9 +116,13 @@ export class LogStreamClient {
 
   private _closeWebSocket(reason: string): void {
     if (this._ws !== null) {
+      this._ws.onopen = null;
+      this._ws.onmessage = null;
+      this._ws.onerror = null;
       this._ws.onclose = null;
       this._ws.close(1000, reason);
       this._ws = null;
     }
+    this._closed = true;
   }
 }

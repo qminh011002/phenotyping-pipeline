@@ -1,11 +1,11 @@
 import "./index.css";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 
 import { AppShell } from "@/components/layout/AppShell";
-import { LoadingScreen } from "@/components/LoadingScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BootProvider } from "@/providers/BootProvider";
 import { startStageTracker, stopStageTracker } from "@/services/stageTracker";
 import HomePage from "@/pages/HomePage";
 import AnalyzePage from "@/pages/AnalyzePage";
@@ -14,6 +14,8 @@ import ProcessingPage from "@/pages/ProcessingPage";
 import ResultPage from "@/pages/ResultPage";
 import RecordedPage from "@/pages/RecordedPage";
 import SettingsPage from "@/pages/SettingsPage";
+import LoginPage from "@/pages/LoginPage";
+import RegisterPage from "@/pages/RegisterPage";
 
 // Root layout — wraps every page so ProcessingToast is always in router context
 function RootLayout() {
@@ -41,20 +43,20 @@ const router = createBrowserRouter([
       { path: "analyze", element: <AnalyzePage /> },
       { path: "analyze/upload", element: <UploadPage /> },
       { path: "analyze/results", element: <ResultPage /> },
+      { path: "login", element: <LoginPage /> },
+      { path: "register", element: <RegisterPage /> },
     ],
   },
 ]);
 
 export default function App() {
-  const [booting, setBooting] = useState(true);
-  useEffect(() => {
-    const t = window.setTimeout(() => setBooting(false), 600);
-    return () => window.clearTimeout(t);
-  }, []);
   useEffect(() => {
     startStageTracker();
     return () => stopStageTracker();
   }, []);
-  if (booting) return <LoadingScreen />;
-  return <RouterProvider router={router} />;
+  return (
+    <BootProvider>
+      <RouterProvider router={router} />
+    </BootProvider>
+  );
 }

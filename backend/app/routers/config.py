@@ -6,6 +6,7 @@ PUT /config  — merges a partial update, validates, persists, and returns the f
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -34,7 +35,7 @@ async def get_config() -> EggConfig:
     """
     try:
         cfg = get_pipeline_config()
-        return cfg.get_egg_config()
+        return await asyncio.to_thread(cfg.get_egg_config)
     except Exception as exc:
         logger.exception("GET /config failed")
         raise HTTPException(
@@ -68,10 +69,12 @@ async def update_config(update: ConfigUpdateRequest) -> EggConfig:
     cfg_mgr = get_pipeline_config()
 
     # Capture old config for diff logging
-    old_config = cfg_mgr.get_egg_config()
+    old_config = await asyncio.to_thread(cfg_mgr.get_egg_config)
 
     try:
-        merged = cfg_mgr.update_egg_config(update.model_dump(exclude_none=True))
+        merged = await asyncio.to_thread(
+            cfg_mgr.update_egg_config, update.model_dump(exclude_none=True)
+        )
     except Exception as exc:
         logger.exception("PUT /config failed")
         raise HTTPException(
@@ -94,7 +97,7 @@ async def update_config(update: ConfigUpdateRequest) -> EggConfig:
         logger.info(
             "Config updated: %s",
             diff_parts,
-            extra={"context": {"old": dict(old_config), "new": dict(merged), "changed": list(changed_fields.keys())}},
+            extra={"context": {"old": old_config.model_dump(), "new": merged.model_dump(), "changed": list(changed_fields.keys())}},
         )
 
     return merged

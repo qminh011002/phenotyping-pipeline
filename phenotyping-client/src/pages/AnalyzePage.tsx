@@ -9,6 +9,7 @@ import { ProjectTypeCard } from '@/features/analyze/components/ProjectTypeCard';
 import { MODES, PROJECT_TYPES, type Mode, type Organism } from '@/features/analyze/constants';
 import { storeProjectClasses } from '@/features/upload/lib/processingSession';
 import { Camera, Upload as UploadIcon } from 'lucide-react';
+import { useBoot } from '@/providers/BootProvider';
 
 export default function AnalyzePage() {
     const navigate = useNavigate();
@@ -21,9 +22,7 @@ export default function AnalyzePage() {
     const [organism, setOrganism] = useState<Organism | null>(null);
     const [showNameError, setShowNameError] = useState(false);
     const [className, setClassName] = useState('');
-    // Tracks whether the user manually edited the class name — if they did,
-    // stop auto-syncing it to the selected organism label.
-    const [classNameEdited, setClassNameEdited] = useState(false);
+    const { modelsStatus } = useBoot();
 
     useEffect(() => {
         if (isProcessing) {
@@ -31,20 +30,29 @@ export default function AnalyzePage() {
         }
     }, [isProcessing, navigate]);
 
-    // Auto-suggest class name from the selected organism label unless the user
-    // has typed their own value.
+    // If the user had picked an organism that just became unavailable
+    // (e.g. boot health refreshed), clear the selection so they can't submit.
     useEffect(() => {
-        if (classNameEdited) return;
         if (!organism) return;
-        const suggested = PROJECT_TYPES.find((p) => p.id === organism)?.label ?? '';
-        setClassName(suggested);
-    }, [organism, classNameEdited]);
+        const status = modelsStatus[organism];
+        if (status !== undefined && status !== 'loaded') {
+            setOrganism(null);
+        }
+    }, [organism, modelsStatus]);
+
+    // Class name is intentionally not pre-filled from the project-type label —
+    // the project-type label ("Egg", "Neonate", …) is *not* the same thing as
+    // the class predicted by the model. The user names the class they want
+    // surfaced in their report; the model can later predict multiple classes
+    // and the per-detection labels come from the model itself.
 
     const nameTrimmed = projectName.trim();
     const classNameTrimmed = className.trim();
     const modeOk = mode !== null && MODES.find((m) => m.id === mode)?.available === true;
     const organismOk =
-        organism !== null && PROJECT_TYPES.find((p) => p.id === organism)?.available === true;
+        organism !== null
+        && PROJECT_TYPES.find((p) => p.id === organism)?.available === true
+        && (modelsStatus[organism] === 'loaded' || modelsStatus[organism] === undefined);
     const canSubmit = nameTrimmed.length > 0 && modeOk && organismOk && classNameTrimmed.length > 0;
 
     function handleSubmit() {
@@ -110,21 +118,14 @@ export default function AnalyzePage() {
                             <Label htmlFor="class-name">Class Name</Label>
                             <Input
                                 id="class-name"
-                                placeholder={
-                                    organism
-                                        ? `E.g., '${PROJECT_TYPES.find((p) => p.id === organism)?.label ?? ''}'`
-                                        : 'Pick a project type for a suggestion'
-                                }
+                                placeholder="Type a label for your detections"
                                 value={className}
                                 className="w-72"
-                                onChange={(e) => {
-                                    setClassName(e.target.value);
-                                    setClassNameEdited(true);
-                                }}
+                                onChange={(e) => setClassName(e.target.value)}
                             />
                             <span className="text-xs text-muted-foreground">
-                                Each project has a single class. We'll suggest one based on your
-                                project type.
+                                Used as the title of the class column in your report. The
+                                per-detection label comes from the model itself.
                             </span>
                         </div>
                     </div>
@@ -134,14 +135,13 @@ export default function AnalyzePage() {
                         <div className="flex flex-col">
                             <Label className="text-base">Project Type</Label>
                             <div className="mt-3 flex-1 divide-y divide-border overflow-hidden rounded-lg border border-border">
-                                {PROJECT_TYPES.map((t, i) => (
+                                {PROJECT_TYPES.map((t) => (
                                     <ProjectTypeCard
                                         key={t.id}
                                         type={t}
                                         selected={organism === t.id}
                                         onSelect={() => setOrganism(t.id)}
-                                        isFirst={i === 0}
-                                        isLast={i === PROJECT_TYPES.length - 1}
+                                        modelStatus={modelsStatus[t.id]}
                                     />
                                 ))}
                             </div>

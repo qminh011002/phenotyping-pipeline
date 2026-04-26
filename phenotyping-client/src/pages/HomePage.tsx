@@ -1,35 +1,60 @@
-// Home page — dashboard with metric cards, quick-entry CTA, and recent analyses.
-//
-// The wireframe from ui-ux-design.mdc:
-//
-//   ┌──────────────────────────────────────────────────┐
-//   │ [metric] [metric] [metric] [metric] │
-//   │ │
-//   │ ┌─────────────────┐ ┌────────────────────────┐ │
-//   │ │ │ │ Recent Analyses │ │
-//   │ │ Start New │ │ ┌──────────────────┐ │ │
-//   │ │ Analysis │ │ │ IMG_001 · 142 eggs│ │ │
-//   │ │ [large button] │ │ │ 2 min ago │ │ │
-//   │ │ │ │ └──────────────────┘ │ │
-//   │ └─────────────────┘ │ ┌──────────────────┐ │ │
-//   │ │ │ IMG_002 · 89 eggs │ │ │
-//   │ │ │ 15 min ago │ │ │
-//   │ │ └──────────────────┘ │ │
-//   │ ���────────────────────────┘ │
-//   └──────────────────────────────────────────────────┘
-//
-
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FlaskConical, Microscope, Clock, CheckCircle2, ChevronRight } from "lucide-react";
+import {
+  Activity,
+  ArrowRight,
+  CheckCircle2,
+  Clock,
+  FlaskConical,
+  Images,
+  Microscope,
+  Sparkles,
+  TrendingUp,
+} from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+import { AnimatedNumber } from "@/components/common/AnimatedNumber";
+import { ErrorState } from "@/components/common/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ErrorState } from "@/components/common/ErrorState";
-import { AnimatedNumber } from "@/components/common/AnimatedNumber";
 import { cn } from "@/lib/utils";
 import { getDashboardStats } from "@/services/api";
 import type { AnalysisBatchSummary, DashboardStats } from "@/types/api";
+
+const chartConfig = {
+  images: {
+    label: "Images",
+    color: "var(--chart-1)",
+  },
+  detections: {
+    label: "Detections",
+    color: "var(--chart-2)",
+  },
+  confidence: {
+    label: "Confidence",
+    color: "var(--chart-3)",
+  },
+} satisfies ChartConfig;
+
+function formatCompact(value: number | null | undefined) {
+  if (value == null) return "0";
+  return Intl.NumberFormat(undefined, { notation: "compact" }).format(value);
+}
 
 function timeAgo(isoString: string): string {
   const diff = Date.now() - new Date(isoString).getTime();
@@ -41,6 +66,25 @@ function timeAgo(isoString: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function formatDay(isoString: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(isoString));
+}
+
+function buildActivityData(recent: AnalysisBatchSummary[]) {
+  return [...recent]
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .slice(-8)
+    .map((batch) => ({
+      label: formatDay(batch.created_at),
+      images: batch.total_image_count,
+      detections: batch.total_count ?? 0,
+      confidence: batch.avg_confidence != null ? Math.round(batch.avg_confidence * 100) : 0,
+    }));
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -57,50 +101,49 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-interface MetricCardProps {
+interface KpiCardProps {
   label: string;
   value: number | null | undefined;
   decimals?: number;
-  subtitle?: string;
-  icon: React.ElementType;
-  loading?: boolean;
   suffix?: string;
+  detail: string;
+  icon: React.ElementType;
+  loading: boolean;
 }
 
-function MetricCard({ label, value, decimals = 0, subtitle, icon: Icon, loading, suffix }: MetricCardProps) {
-  if (loading) {
-    return (
-      <Card className="transition-colors duration-150 hover:bg-accent/30">
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-4 w-4" />
-        </CardHeader>
-        <CardContent>
-          <Skeleton className="h-8 w-16" />
-          <Skeleton className="mt-1 h-3 w-28" />
-        </CardContent>
-      </Card>
-    );
-  }
-
+function KpiCard({
+  label,
+  value,
+  decimals = 0,
+  suffix,
+  detail,
+  icon: Icon,
+  loading,
+}: KpiCardProps) {
   return (
-    <Card className="transition-colors duration-150 hover:bg-accent/30">
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {label}
-        </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold tabular-nums">
-          {value !== null && value !== undefined
-            ? <AnimatedNumber value={value} decimals={decimals} />
-            : "—"}
-          {suffix && <span className="text-lg">{suffix}</span>}
+    <Card className="border-0 bg-card/70 shadow-sm">
+      <CardContent className="flex items-center gap-4 px-4 py-4">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Icon className="size-5" />
         </div>
-        {subtitle && (
-          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
-        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium text-muted-foreground">
+            {label}
+          </p>
+          {loading ? (
+            <Skeleton className="mt-2 h-7 w-20" />
+          ) : (
+            <div className="mt-1 text-2xl font-semibold tabular-nums">
+              {value != null ? (
+                <AnimatedNumber value={value} decimals={decimals} />
+              ) : (
+                "0"
+              )}
+              {suffix && <span className="text-base text-muted-foreground">{suffix}</span>}
+            </div>
+          )}
+          <p className="mt-1 truncate text-xs text-muted-foreground">{detail}</p>
+        </div>
       </CardContent>
     </Card>
   );
@@ -113,29 +156,27 @@ interface RecentItemProps {
 
 function RecentItem({ batch, onClick }: RecentItemProps) {
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <button
+      type="button"
       onClick={() => onClick(batch.id)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(batch.id); } }}
-      className="group flex items-center gap-4 rounded-md border px-3 py-2 transition-colors duration-100 hover:bg-accent/50 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 cursor-pointer active:scale-[0.99]"
+      className="group flex w-full items-center gap-3 rounded-md bg-muted/40 px-3 py-2.5 text-left transition-colors duration-100 hover:bg-muted focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <StatusDot status={batch.status} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">
-          {batch.organism_type} · {batch.mode}
+          {batch.name || `${batch.organism_type} ${batch.mode}`}
         </div>
         <div className="truncate text-xs text-muted-foreground">
           {batch.total_image_count} image{batch.total_image_count !== 1 ? "s" : ""}
-          {batch.total_count !== null && ` · ${batch.total_count} eggs`}
-          {batch.avg_confidence !== null && ` · avg ${(batch.avg_confidence * 100).toFixed(0)}%`}
+          {batch.total_count !== null && ` · ${batch.total_count} detections`}
+          {batch.avg_confidence !== null && ` · ${(batch.avg_confidence * 100).toFixed(0)}% avg`}
         </div>
       </div>
-      <div className="shrink-0 text-xs text-muted-foreground">
+      <span className="shrink-0 text-xs text-muted-foreground">
         {timeAgo(batch.created_at)}
-      </div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-all duration-150 group-hover:translate-x-0.5 group-hover:text-foreground group-hover:opacity-100 opacity-0 -translate-x-1" />
-    </div>
+      </span>
+      <ArrowRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-all duration-150 group-hover:translate-x-0.5 group-hover:opacity-100" />
+    </button>
   );
 }
 
@@ -145,128 +186,302 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  function fetchStats() {
+  const activityData = useMemo(
+    () => buildActivityData(stats?.recent_analyses ?? []),
+    [stats?.recent_analyses],
+  );
+
+  const bestRecent = useMemo(() => {
+    const recent = stats?.recent_analyses ?? [];
+    return recent.reduce<AnalysisBatchSummary | null>((best, batch) => {
+      if (!best) return batch;
+      return (batch.total_count ?? 0) > (best.total_count ?? 0) ? batch : best;
+    }, null);
+  }, [stats?.recent_analyses]);
+
+  const handleRecentClick = useCallback(
+    (id: string) => navigate(`/recorded?batch=${id}`),
+    [navigate],
+  );
+
+  const fetchStats = useCallback((signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
-    getDashboardStats()
-      .then((data) => setStats(data))
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
-  }
-
-  useEffect(() => {
-    fetchStats();
+    getDashboardStats(signal)
+      .then((data) => {
+        if (!signal?.aborted) setStats(data);
+      })
+      .catch((err) => {
+        if (signal?.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(String(err));
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }, []);
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Page header */}
-      <header className="flex items-center justify-between border-b px-6 py-4">
-        <h1 className="text-lg font-semibold">Dashboard</h1>
-      </header>
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchStats(controller.signal);
+    return () => controller.abort();
+  }, [fetchStats]);
 
+  return (
+    <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto p-6">
-        {/* Metric cards row */}
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-6">
-          <MetricCard
-            label="Total Analyses"
-            value={loading ? undefined : (stats?.total_analyses ?? null)}
-            subtitle={loading ? "" : `${stats?.total_images_processed} images processed`}
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            label="Analyses"
+            value={stats?.total_analyses}
+            detail={`${formatCompact(stats?.total_images_processed)} images processed`}
             icon={Microscope}
             loading={loading}
           />
-          <MetricCard
-            label="Total Eggs Counted"
-            value={loading ? undefined : (stats?.total_eggs_counted ?? null)}
-            subtitle={loading ? "" : `${stats?.total_images_processed} images`}
+          <KpiCard
+            label="Detections"
+            value={stats?.total_eggs_counted}
+            detail="Total objects counted"
             icon={CheckCircle2}
             loading={loading}
           />
-          <MetricCard
-            label="Avg Confidence"
-            value={loading ? undefined : (stats?.avg_confidence != null ? stats.avg_confidence * 100 : null)}
+          <KpiCard
+            label="Confidence"
+            value={stats?.avg_confidence != null ? stats.avg_confidence * 100 : null}
             decimals={1}
             suffix="%"
-            subtitle={loading ? "" : "Across all images"}
-            icon={FlaskConical}
+            detail="Average model confidence"
+            icon={TrendingUp}
             loading={loading}
           />
-          <MetricCard
-            label="Avg Processing Time"
-            value={loading ? undefined : (stats?.avg_processing_time ?? null)}
+          <KpiCard
+            label="Speed"
+            value={stats?.avg_processing_time}
             decimals={1}
             suffix="s"
-            subtitle={loading ? "" : "Per image"}
+            detail="Average per image"
             icon={Clock}
             loading={loading}
           />
         </div>
 
-        {/* Bottom section: CTA + recent analyses */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Start Analysis CTA */}
-          <Card className="flex flex-col items-center justify-center py-10 lg:col-span-1">
-            <CardContent className="flex flex-col items-center gap-4">
-              <div className="rounded-full bg-primary/10 p-4">
-                <Microscope className="h-8 w-8 text-primary" />
-              </div>
-              <div className="text-center">
-                <p className="font-medium">Ready to analyze?</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Upload images and detect eggs in seconds.
-                </p>
-              </div>
-              <Button
-                size="lg"
-                onClick={() => navigate("/analyze")}
-              >
-                <FlaskConical className="mr-2 h-4 w-4" />
-                Start Analysis
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Recent analyses */}
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Recent Analyses
-                </CardTitle>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigate("/recorded")}
-                >
-                  View all
+        <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
+          <Card className="border-0 bg-card/70 shadow-sm">
+            <CardHeader className="gap-0 pb-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Activity className="size-4 text-primary" />
+                    Analysis activity
+                  </CardTitle>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Recent image volume and detection counts from saved batches.
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate("/recorded")}>
+                  Recorded
+                  <ArrowRight className="size-4" />
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="space-y-2">
-              {error !== null && !loading ? (
+            <CardContent className="pt-2">
+              {loading ? (
+                <Skeleton className="h-[310px] w-full rounded-lg" />
+              ) : error ? (
                 <ErrorState
                   message={error}
                   title="Failed to load dashboard"
-                  onRetry={fetchStats}
+                  onRetry={() => fetchStats()}
                 />
-              ) : loading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
-                  <Skeleton className="h-10 w-full" />
-                </div>
-              ) : stats?.recent_analyses.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <Microscope className="mb-2 h-6 w-6 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    No analyses yet. Run your first analysis to see results here.
+              ) : activityData.length > 0 ? (
+                <ChartContainer config={chartConfig} className="h-[310px] w-full">
+                  <BarChart accessibilityLayer data={activityData}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={10}
+                    />
+                    <YAxis hide />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Bar
+                      dataKey="images"
+                      fill="var(--color-images)"
+                      radius={[4, 4, 0, 0]}
+                    />
+                    <Bar
+                      dataKey="detections"
+                      fill="var(--color-detections)"
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ChartContainer>
+              ) : (
+                <div className="flex h-[310px] flex-col items-center justify-center rounded-lg bg-muted/40 text-center">
+                  <Sparkles className="mb-3 size-8 text-primary" />
+                  <p className="text-sm font-medium">No activity yet</p>
+                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                    Run an analysis and this panel will become a live dashboard.
                   </p>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-6">
+            <Card className="border-0 bg-primary text-primary-foreground shadow-sm">
+              <CardContent className="px-5 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium opacity-80">Next run</p>
+                    <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                      Start a fresh analysis
+                    </h2>
+                    <p className="mt-2 text-sm opacity-80">
+                      Upload a batch, choose the organism, and let the detector do the counting.
+                    </p>
+                  </div>
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary-foreground/15">
+                    <FlaskConical className="size-5" />
+                  </div>
+                </div>
+                <Button
+                  className="mt-5 w-full bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+                  onClick={() => navigate("/analyze")}
+                >
+                  Start Analysis
+                  <ArrowRight className="size-4" />
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 bg-card/70 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Images className="size-4 text-primary" />
+                  Recent activity
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {loading ? (
+                  <>
+                    <Skeleton className="h-12 w-full rounded-md" />
+                    <Skeleton className="h-12 w-full rounded-md" />
+                    <Skeleton className="h-12 w-full rounded-md" />
+                  </>
+                ) : error ? (
+                  <p className="text-sm text-muted-foreground">
+                    Recent activity is unavailable.
+                  </p>
+                ) : stats?.recent_analyses.length === 0 ? (
+                  <p className="rounded-md bg-muted/40 px-3 py-8 text-center text-sm text-muted-foreground">
+                    No analyses yet.
+                  </p>
+                ) : (
+                  stats?.recent_analyses.slice(0, 5).map((batch) => (
+                    <RecentItem
+                      key={batch.id}
+                      batch={batch}
+                      onClick={handleRecentClick}
+                    />
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
+          <Card className="border-0 bg-card/70 shadow-sm lg:col-span-2">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Confidence pulse</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Average confidence across the latest saved batches.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <Skeleton className="h-[180px] w-full rounded-lg" />
+              ) : activityData.length > 0 ? (
+                <ChartContainer config={chartConfig} className="h-[180px] w-full">
+                  <AreaChart accessibilityLayer data={activityData}>
+                    <CartesianGrid vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={10}
+                    />
+                    <YAxis hide domain={[0, 100]} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Area
+                      dataKey="confidence"
+                      type="monotone"
+                      fill="var(--color-confidence)"
+                      fillOpacity={0.18}
+                      stroke="var(--color-confidence)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ChartContainer>
               ) : (
-                <div className="space-y-2">
-                  {stats?.recent_analyses.map((batch) => (
-                    <RecentItem key={batch.id} batch={batch} onClick={(id) => navigate(`/recorded?batch=${id}`)} />
-                  ))}
+                <div className="flex h-[180px] items-center justify-center rounded-lg bg-muted/40 text-sm text-muted-foreground">
+                  Confidence trend appears after completed analyses.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 bg-card/70 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Top recent batch</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-7 w-3/4" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-9 w-full" />
+                </div>
+              ) : bestRecent ? (
+                <div className="space-y-4">
+                  <div>
+                    <p className="truncate text-lg font-semibold">
+                      {bestRecent.name || bestRecent.organism_type}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {bestRecent.total_image_count} images · {timeAgo(bestRecent.created_at)}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-md bg-muted/40 p-3">
+                      <p className="text-xs text-muted-foreground">Detections</p>
+                      <p className="mt-1 text-xl font-semibold tabular-nums">
+                        {formatCompact(bestRecent.total_count)}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-muted/40 p-3">
+                      <p className="text-xs text-muted-foreground">Confidence</p>
+                      <p className="mt-1 text-xl font-semibold tabular-nums">
+                        {bestRecent.avg_confidence != null
+                          ? `${Math.round(bestRecent.avg_confidence * 100)}%`
+                          : "0%"}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => handleRecentClick(bestRecent.id)}
+                  >
+                    Open batch
+                    <ArrowRight className="size-4" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-md bg-muted/40 px-3 py-8 text-center text-sm text-muted-foreground">
+                  Run a batch to highlight your strongest recent result.
                 </div>
               )}
             </CardContent>

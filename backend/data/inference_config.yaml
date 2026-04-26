@@ -1,0 +1,57 @@
+larvae:
+  input_folders:
+  - C:/path/to/GxE Images/Batch 1
+  - C:/path/to/GxE Images/Batch 2
+  - C:/path/to/GxE Images/Batch 3
+  - C:/path/to/GxE Images/Batch 4
+  - C:/path/to/GxE Images/Batch 5
+  model: models/larvae_best.pt
+  tile_size: 512
+  overlap: 0.4
+  confidence_threshold: 0.3
+  overlap_threshold: 0.5
+  min_mask_size: 500
+  batch_size: 24
+  num_workers: 6
+  output_suffix: results_larvae
+  processed_output_dir: C:/path/to/GxE Images/processed_results_larvae
+  phenotype_csv: C:/path/to/GxE Images/larvae_phenotyping_sample_data.csv
+pupae:
+  input_folders:
+  - C:/path/to/GxE Images/GE05_Pupae Phenotype
+  model: models/pupae_best.pt
+  tile_size: 1024
+  overlap: 0.5
+  confidence_threshold: 0.7
+  overlap_threshold: 0.5
+  min_mask_size: 1500
+  batch_size: 24
+  num_workers: 6
+  output_suffix: results_pupae
+  processed_output_dir: C:/path/to/GxE Images/processed_results_pupae
+  phenotype_csv: C:/path/to/GxE Images/pupae_phenotyping_sample_data.csv
+egg:
+  model: models/egg_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.41
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24
+neonate:
+  input_folders:
+  - /mnt/c/Users/TranQuangMinh/OneDrive - Entobel/Documents/Phenotyping Pipeline/Neonate/Inference
+  model: models/neonate_best.pt
+  device: cpu
+  tile_size: 512
+  overlap: 0.5
+  confidence_threshold: 0.41
+  min_box_area: 100
+  dedup_mode: center_zone
+  edge_margin: 3
+  nms_iou_threshold: 0.4
+  batch_size: 24
+  output_suffix: results_neonate

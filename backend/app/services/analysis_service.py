@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import logging
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
@@ -32,9 +31,6 @@ from app.schemas.analysis import (
     EditedAnnotationsUpdate,
 )
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 # Number of recent analyses to include in dashboard stats
@@ -44,6 +40,9 @@ _RECENT_COUNT = 5
 # add_image_result know a batch still has its auto-name and can be upgraded to
 # a file-stem-based name once the first (and only) image lands.
 _DEFAULT_NAME_PREFIX = "Batch of "
+
+# Zombie-batch auto-fail threshold
+_ZOMBIE_TIMEOUT = timedelta(hours=24)
 
 
 def _default_batch_name_for_count(total_image_count: int, created_at: datetime) -> str:
@@ -194,11 +193,16 @@ class AnalysisService:
         status='completed'. Images with status='failed' are excluded from
         aggregates but counted in total_image_count.
         """
+        # Global mean over all detected boxes:
+        #   sum(avg_confidence_i * count_i) / sum(count_i)
+        # The previous "avg of avg" understated/overstated batches with skew.
         stmt = (
             select(
                 func.count(AnalysisImage.id).label("n"),
                 func.coalesce(func.sum(AnalysisImage.count), 0).label("total_count"),
-                func.coalesce(func.avg(AnalysisImage.avg_confidence), 0).label("avg_conf"),
+                func.coalesce(
+                    func.sum(AnalysisImage.avg_confidence * AnalysisImage.count), 0
+                ).label("conf_weighted"),
                 func.coalesce(func.sum(AnalysisImage.elapsed_secs), 0).label("total_elapsed"),
             )
             .where(AnalysisImage.batch_id == batch_id)
@@ -211,10 +215,13 @@ class AnalysisService:
         batch_result = await db.execute(stmt_batch)
         batch = batch_result.scalar_one()
 
+        total_count = int(row.total_count)
         batch.status = "completed"
         batch.completed_at = datetime.now(timezone.utc)
-        batch.total_count = int(row.total_count)
-        batch.avg_confidence = float(row.avg_conf) if row.n > 0 else None
+        batch.total_count = total_count
+        batch.avg_confidence = (
+            float(row.conf_weighted) / total_count if total_count > 0 else None
+        )
         batch.total_elapsed_secs = float(row.total_elapsed)
 
         await db.flush()
@@ -292,8 +299,6 @@ class AnalysisService:
         Zombie cleanup: if the active batch is older than 24 hours, auto-mark
         it as failed so it doesn't block new batches forever.
         """
-        from datetime import timedelta
-
         stmt = (
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
@@ -308,7 +313,10 @@ class AnalysisService:
             return ActiveBatchResponse(active=False, batch=None)
 
         now = datetime.now(timezone.utc)
-        if now - batch.created_at > timedelta(hours=24):
+        created_at = batch.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if now - created_at > _ZOMBIE_TIMEOUT:
             batch.status = "failed"
             batch.failed_at = now
             batch.failure_reason = "Timed out — no progress for 24 hours"
@@ -429,7 +437,7 @@ class AnalysisService:
                 created_at=img.created_at,
                 edited_annotations=img.edited_annotations,
             )
-            for img in sorted(batch.images, key=lambda i: i.created_at)
+            for img in batch.images
         ]
 
         return AnalysisBatchDetail(
