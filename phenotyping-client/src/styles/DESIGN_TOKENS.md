@@ -11,11 +11,11 @@ hardcode colors, border radii, or z-index values.
 
 | Token | Value | Tailwind | When to use |
 |-------|-------|----------|-------------|
-| `--radius` | `0.5rem` (8px) | base | Reference only — do not apply directly |
-| `--radius-sm` | `calc(0.5rem - 4px)` = 4px | `rounded-sm` | Badges, small chips |
-| `--radius-md` | `calc(0.5rem - 2px)` = 6px | `rounded-md` | **Buttons**, inputs, selects, textareas |
-| `--radius-lg` | `0.5rem` = 8px | `rounded-lg` | Dialogs, popovers, dropdown menus |
-| `--radius-xl` | `calc(0.5rem + 4px)` = 12px | `rounded-xl` | **Cards**, sheets on mobile |
+| `--radius` | `0.625rem` (10px) | base | Reference only — do not apply directly |
+| `--radius-sm` | `calc(0.625rem - 4px)` = 6px | `rounded-sm` | Badges, small chips |
+| `--radius-md` | `calc(0.625rem - 2px)` = 8px | `rounded-md` | **Buttons**, inputs, selects, textareas |
+| `--radius-lg` | `0.625rem` = 10px | `rounded-lg` | Dialogs, popovers, dropdown menus |
+| `--radius-xl` | `calc(0.625rem + 4px)` = 14px | `rounded-xl` | **Cards**, sheets on mobile |
 | `--radius-full` | `9999px` | `rounded-full` | Pills, avatars, status dots |
 
 ### Radius Rules

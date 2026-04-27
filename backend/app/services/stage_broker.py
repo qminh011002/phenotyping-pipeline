@@ -16,6 +16,15 @@ from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
+_STAGE_MESSAGES = {
+    "image.decode": "decode image",
+    "image.tile": "tile image",
+    "image.detect": "run detector",
+    "image.dedup": "deduplicate detections",
+    "image.draw": "draw overlay",
+    "image.save": "save results",
+}
+
 
 class StageBroker:
     def __init__(self) -> None:
@@ -62,6 +71,20 @@ class StageBroker:
             "filename": filename,
             "organism": organism,
         }
+        logger.info(
+            "%s for %s",
+            _STAGE_MESSAGES.get(stage, stage),
+            filename,
+            extra={
+                "context": {
+                    "event": "inference.stage",
+                    "stage": stage,
+                    "batch_id": batch_id,
+                    "filename": filename,
+                    "organism": organism,
+                }
+            },
+        )
         loop = self._loop
         if loop is None or loop.is_closed():
             return

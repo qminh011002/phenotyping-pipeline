@@ -134,6 +134,7 @@ class AnalysisBatchSummary(BaseModel):
     """Summary of a batch returned in list and dashboard views."""
 
     id: UUID
+    user_id: UUID | None = None
     name: str
     created_at: datetime
     completed_at: datetime | None = None

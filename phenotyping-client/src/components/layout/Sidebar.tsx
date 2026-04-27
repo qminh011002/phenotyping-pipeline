@@ -1,218 +1,255 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation } from 'react-router-dom';
 import {
-  Bell,
-  ChevronsUpDown,
-  CircleHelp,
-  CreditCard,
-  History,
-  Home,
-  LogOut,
-  Microscope,
-  Moon,
-  Send,
-  Settings,
-  ShieldCheck,
-  Sparkles,
-  Sun,
-} from "lucide-react";
+    Bell,
+    ChevronsUpDown,
+    CircleHelp,
+    CreditCard,
+    History,
+    Home,
+    LogOut,
+    Microscope,
+    Moon,
+    PlusCircle,
+    Send,
+    Settings,
+    ShieldCheck,
+    Sparkles,
+    Sun,
+} from 'lucide-react';
 
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuGroup,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
-  Sidebar as SidebarRoot,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarRail,
-  useSidebar,
-} from "@/components/ui/sidebar";
-import { useTheme } from "@/hooks/useTheme";
-import { ProcessingIndicator } from "./ProcessingIndicator";
+    Sidebar as SidebarRoot,
+    SidebarContent,
+    SidebarFooter,
+    SidebarGroup,
+    SidebarGroupContent,
+    SidebarGroupLabel,
+    SidebarHeader,
+    SidebarMenu,
+    SidebarMenuButton,
+    SidebarMenuItem,
+    SidebarRail,
+    useSidebar,
+} from '@/components/ui/sidebar';
+import { useTheme } from '@/hooks/useTheme';
+import { useAuthStore } from '@/stores/authStore';
+import { logout } from '@/services/auth';
+import { useNavigate } from 'react-router-dom';
+import { ProcessingIndicator } from './ProcessingIndicator';
 
 const NAV_ITEMS = [
-  { to: "/", icon: Home, label: "Dashboard", end: true },
-  { to: "/recorded", icon: History, label: "Recorded", end: false },
-  { to: "/settings", icon: Settings, label: "Settings", end: false },
+    { to: '/', icon: Home, label: 'Dashboard', end: true },
+    { to: '/recorded', icon: History, label: 'Recorded', end: false },
+    { to: '/settings', icon: Settings, label: 'Settings', end: false },
 ] as const;
 
 interface SidebarProps {
-  collapsed?: boolean;
-  onCollapsedChange?: (collapsed: boolean) => void;
+    collapsed?: boolean;
+    onCollapsedChange?: (collapsed: boolean) => void;
 }
 
 export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
-  const location = useLocation();
-  const { isMobile, state } = useSidebar();
-  const { theme, toggleTheme } = useTheme();
-  const collapsed = collapsedProp ?? state === "collapsed";
-  const ThemeIcon = theme === "light" ? Moon : Sun;
+    const location = useLocation();
+    const navigate = useNavigate();
+    const { isMobile, state } = useSidebar();
+    const { theme, toggleTheme } = useTheme();
+    const collapsed = collapsedProp ?? state === 'collapsed';
+    const ThemeIcon = theme === 'light' ? Moon : Sun;
+    const user = useAuthStore((s) => s.user);
+    const displayName = user?.name?.trim() || user?.email?.split('@')[0] || 'User';
+    const initial = (user?.name?.trim()?.[0] || user?.email?.[0] || 'U').toUpperCase();
+    const subtitle = user?.email ?? 'Workspace';
 
-  return (
-    <SidebarRoot collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
-              <NavLink to="/">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                  <Microscope className="size-4" />
-                </div>
-                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">Phenotyping</span>
-                  <span className="truncate text-xs text-sidebar-foreground/70">
-                    Analysis workspace
-                  </span>
-                </div>
-              </NavLink>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
+    async function handleLogout() {
+        await logout();
+        navigate('/login', { replace: true });
+    }
 
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {NAV_ITEMS.map((item) => {
-                const isActive = item.end
-                  ? location.pathname === item.to
-                  : location.pathname.startsWith(item.to);
+    return (
+        <SidebarRoot collapsible="icon" variant="inset">
+            <SidebarHeader>
+                <SidebarMenu>
+                    <SidebarMenuItem>
+                        <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
+                            <NavLink to="/">
+                                <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                                    <Microscope className="size-4" />
+                                </div>
+                                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                                    <span className="truncate font-semibold">Phenotyping</span>
+                                    <span className="truncate text-xs text-sidebar-foreground/70">
+                                        Analysis workspace
+                                    </span>
+                                </div>
+                            </NavLink>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                </SidebarMenu>
+            </SidebarHeader>
 
-                return (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={isActive}
-                      tooltip={item.label}
-                    >
-                      <NavLink to={item.to} end={item.end}>
-                        <item.icon />
-                        <span>{item.label}</span>
-                      </NavLink>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+            <SidebarContent>
+                <SidebarGroup className="pb-0">
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            <SidebarMenuItem>
+                                <SidebarMenuButton
+                                    asChild
+                                    tooltip="Create Analyze"
+                                    className="h-10 justify-start gap-2 bg-sidebar-foreground font-semibold text-sidebar shadow-xs hover:bg-sidebar-foreground/90 hover:text-sidebar focus-visible:ring-sidebar-ring data-[active=true]:bg-sidebar-foreground data-[active=true]:text-sidebar dark:bg-emerald-950 dark:text-emerald-400 dark:hover:bg-emerald-900 dark:hover:text-emerald-300"
+                                >
+                                    <NavLink to="/analyze" className="px-3">
+                                        <PlusCircle />
+                                        <span>Create Analyze</span>
+                                    </NavLink>
+                                </SidebarMenuButton>
+                            </SidebarMenuItem>
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
 
-        <SidebarGroup className="mt-auto">
-          <SidebarGroupContent>
-            <ProcessingIndicator collapsed={collapsed} />
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
+                <SidebarGroup>
+                    <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            {NAV_ITEMS.map((item) => {
+                                const isActive = item.end
+                                    ? location.pathname === item.to
+                                    : location.pathname.startsWith(item.to);
 
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Support">
-              <a href="mailto:support@example.com">
-                <CircleHelp />
-                <span>Support</span>
-              </a>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Feedback">
-              <a href="mailto:feedback@example.com">
-                <Send />
-                <span>Feedback</span>
-              </a>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size="lg"
-                  aria-label="Profile menu"
-                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                  tooltip="Profile"
-                >
-                  <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
-                    P
-                  </div>
-                  <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-semibold">Phenotyping</span>
-                    <span className="truncate text-xs text-sidebar-foreground/70">
-                      Workspace
-                    </span>
-                  </div>
-                  <ChevronsUpDown className="ml-auto size-4" />
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
-                side={isMobile ? "bottom" : "right"}
-                align="end"
-                sideOffset={4}
-              >
-                <DropdownMenuLabel className="p-0 font-normal">
-                  <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                    <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
-                      P
-                    </div>
-                    <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">Phenotyping</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        Workspace
-                      </span>
-                    </div>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem>
-                    <Sparkles />
-                    Upgrade to Pro
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem>
-                    <ShieldCheck />
-                    Account
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <CreditCard />
-                    Billing
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Bell />
-                    Notifications
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={toggleTheme}>
-                    <ThemeIcon />
-                    {theme === "light" ? "Dark mode" : "Light mode"}
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <LogOut />
-                  Log out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-      <SidebarRail />
-    </SidebarRoot>
-  );
+                                return (
+                                    <SidebarMenuItem key={item.to}>
+                                        <SidebarMenuButton
+                                            asChild
+                                            isActive={isActive}
+                                            tooltip={item.label}
+                                        >
+                                            <NavLink to={item.to} end={item.end}>
+                                                <item.icon />
+                                                <span>{item.label}</span>
+                                            </NavLink>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                );
+                            })}
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
+
+                <SidebarGroup className="mt-auto">
+                    <SidebarGroupContent>
+                        <ProcessingIndicator collapsed={collapsed} />
+                    </SidebarGroupContent>
+                </SidebarGroup>
+            </SidebarContent>
+
+            <SidebarFooter>
+                <SidebarMenu>
+                    <SidebarMenuItem>
+                        <SidebarMenuButton asChild tooltip="Support">
+                            <a href="mailto:support@example.com">
+                                <CircleHelp />
+                                <span>Support</span>
+                            </a>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                        <SidebarMenuButton asChild tooltip="Feedback">
+                            <a href="mailto:feedback@example.com">
+                                <Send />
+                                <span>Feedback</span>
+                            </a>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <SidebarMenuButton
+                                    size="lg"
+                                    aria-label="Profile menu"
+                                    className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                                    tooltip={displayName}
+                                >
+                                    <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
+                                        {initial}
+                                    </div>
+                                    <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                                        <span className="truncate font-semibold">
+                                            {displayName}
+                                        </span>
+                                        <span className="truncate text-xs text-sidebar-foreground/70">
+                                            {subtitle}
+                                        </span>
+                                    </div>
+                                    <ChevronsUpDown className="ml-auto size-4" />
+                                </SidebarMenuButton>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                                className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+                                side={isMobile ? 'bottom' : 'right'}
+                                align="end"
+                                sideOffset={4}
+                            >
+                                <DropdownMenuLabel className="p-0 font-normal">
+                                    <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                                        <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-sm font-semibold">
+                                            {initial}
+                                        </div>
+                                        <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                                            <span className="truncate font-semibold">
+                                                {displayName}
+                                            </span>
+                                            <span className="truncate text-xs text-muted-foreground">
+                                                {subtitle}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuGroup>
+                                    <DropdownMenuItem>
+                                        <Sparkles />
+                                        Upgrade to Pro
+                                    </DropdownMenuItem>
+                                </DropdownMenuGroup>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuGroup>
+                                    <DropdownMenuItem>
+                                        <ShieldCheck />
+                                        Account
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem>
+                                        <CreditCard />
+                                        Billing
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem>
+                                        <Bell />
+                                        Notifications
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onSelect={toggleTheme}>
+                                        <ThemeIcon />
+                                        {theme === 'light' ? 'Dark mode' : 'Light mode'}
+                                    </DropdownMenuItem>
+                                </DropdownMenuGroup>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onSelect={() => void handleLogout()}>
+                                    <LogOut />
+                                    Log out
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </SidebarMenuItem>
+                </SidebarMenu>
+            </SidebarFooter>
+            <SidebarRail />
+        </SidebarRoot>
+    );
 }

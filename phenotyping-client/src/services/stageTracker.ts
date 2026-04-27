@@ -15,6 +15,15 @@ const STAGE_LABELS: Record<string, string> = {
     "image.save": "Saving overlay",
 };
 
+const STAGE_LOG_MESSAGES: Record<string, (filename: string, index: number, total: number) => string> = {
+    "image.decode": (filename) => `decode image for ${filename}`,
+    "image.tile": (filename, index, total) => `tile ${index}/${total} for ${filename}`,
+    "image.detect": (filename) => `run detector for ${filename}`,
+    "image.dedup": (filename) => `deduplicate detections for ${filename}`,
+    "image.draw": (filename) => `draw overlay boxes for ${filename}`,
+    "image.save": (filename) => `save result assets for ${filename}`,
+};
+
 interface StageEvent {
     stage: string;
     batch_id: string;
@@ -30,6 +39,29 @@ function composeStageText(code: string, filename?: string): string {
     const indexPart = total > 0 ? ` (${Math.min(index, total)}/${total})` : "";
     const filePart = filename ? ` — ${filename}` : "";
     return `${base}${filePart}${indexPart}…`;
+}
+
+function currentImagePosition(filename?: string): { index: number; total: number } {
+    const state = useProcessingStore.getState();
+    const total = state.totalImages;
+    if (filename) {
+        const idx = state.images.findIndex((img) => {
+            const stem = img.filename.replace(/\.[^.]+$/, "");
+            return img.filename === filename || stem === filename;
+        });
+        if (idx >= 0) return { index: idx + 1, total };
+    }
+    const fallback =
+        state.processedCount + state.images.filter((i) => i.status === "error").length + 1;
+    return { index: Math.min(Math.max(fallback, 1), Math.max(total, 1)), total };
+}
+
+function appendStageLog(code: string, filename?: string): void {
+    const { index, total } = currentImagePosition(filename);
+    const safeName = filename ?? "current image";
+    const message =
+        STAGE_LOG_MESSAGES[code]?.(safeName, index, total) ?? `${code} for ${safeName}`;
+    useProcessingStore.getState().addLiveLog({ level: "INFO", message });
 }
 
 function toWsUrl(base: string): string {
@@ -109,6 +141,7 @@ function openSocket(): void {
         if (evt.batch_id !== active) return;
         if (DEV) console.debug("[stageTracker] 📥", evt.stage, "—", evt.filename);
         useProcessingStore.getState().setStage(composeStageText(evt.stage, evt.filename));
+        appendStageLog(evt.stage, evt.filename);
     };
     sock.onerror = (e) => {
         if (DEV) console.warn("[stageTracker] ws error:", e);

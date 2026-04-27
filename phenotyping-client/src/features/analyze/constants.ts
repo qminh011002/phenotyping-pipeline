@@ -53,7 +53,7 @@ export const PROJECT_TYPES: ProjectTypeDef[] = [
   {
     id: "neonate",
     label: "Neonate",
-    description: "Detect newly hatched neonates and count them per image.",
+    description: "Detect newly hatched neonates — tiled inference with bounding boxes.",
     badges: [BOUNDING_BOXES, COUNTS],
     available: true,
     icon: Sprout,
@@ -61,7 +61,7 @@ export const PROJECT_TYPES: ProjectTypeDef[] = [
   {
     id: "egg",
     label: "Egg",
-    description: "Detect eggs with tiled inference and produce per-image counts.",
+    description: "Per-image egg detection with NMS deduplication across tiles.",
     badges: [BOUNDING_BOXES, COUNTS],
     available: true,
     icon: Microscope,

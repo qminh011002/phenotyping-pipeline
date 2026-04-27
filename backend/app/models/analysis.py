@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import ForeignKey, Index, String, Text, TIMESTAMP
+from sqlalchemy import TIMESTAMP, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,10 +24,15 @@ class AnalysisBatch(Base):
         Index("idx_batch_status", "status"),
         Index("idx_batch_organism", "organism_type"),
         Index("idx_batch_org_created", "organism_type", "created_at"),
+        Index("idx_batch_user_created", "user_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, default=uuid.uuid4
+    )
+    # Nullable for legacy rows (BE-021). New batches always set this.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_account.id", ondelete="RESTRICT"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(20), default="processing")

@@ -184,6 +184,12 @@ class NeonateInferenceService:
 
     # ── Synchronous inference ────────────────────────────────────────────────
 
+    def _stage(self, code: str, filename: str, batch_id: str) -> None:
+        """Emit a stage event to the /ws/stages broker from any worker thread."""
+        from app.services.stage_broker import emit_stage
+
+        emit_stage(code, batch_id, filename, organism="neonate")
+
     def _run_inference(
         self, image: np.ndarray, filename: str, batch_id: str
     ) -> DetectionResult:
@@ -198,8 +204,10 @@ class NeonateInferenceService:
             image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
 
         h, w = image.shape[:2]
+        self._stage("image.tile", filename, batch_id)
         tiles, coords = self._tile_image(image)
 
+        self._stage("image.detect", filename, batch_id)
         all_boxes: list[np.ndarray] = []
         all_scores: list[np.ndarray] = []
         all_cls_ids: list[np.ndarray] = []
@@ -274,6 +282,7 @@ class NeonateInferenceService:
                 all_scores.append(confs[mask].astype(np.float32, copy=False))
                 all_cls_ids.append(cls_ids[mask])
 
+        self._stage("image.dedup", filename, batch_id)
         if all_boxes:
             boxes_arr = np.concatenate(all_boxes, axis=0)
             scores_arr = np.concatenate(all_scores, axis=0)
@@ -300,6 +309,7 @@ class NeonateInferenceService:
 
         neonate_count = len(boxes_arr)
 
+        self._stage("image.draw", filename, batch_id)
         overlay = image.copy()
         annotations: list[BBox] = []
 
@@ -356,6 +366,7 @@ class NeonateInferenceService:
         ]
         self._draw_board(overlay, result_lines, board_x, bottom + 10)
 
+        self._stage("image.save", filename, batch_id)
         batch_dir = self._get_storage_dir() / batch_id
         batch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -383,6 +394,8 @@ class NeonateInferenceService:
     async def process_single(
         self, image_data: bytes, filename: str, batch_id: str
     ) -> DetectionResult:
+        self._stage("image.decode", filename, batch_id)
+
         def _decode() -> np.ndarray:
             arr = np.frombuffer(image_data, np.uint8)
             image = cv2.imdecode(arr, cv2.IMREAD_COLOR)

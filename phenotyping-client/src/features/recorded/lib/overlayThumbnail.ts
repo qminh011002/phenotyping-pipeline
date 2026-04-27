@@ -22,6 +22,7 @@
 //   batch doesn't kick off 200 simultaneous fetches.
 
 import { useEffect, useRef, useState } from "react";
+import { http } from "@/services/http";
 
 const THUMB_MAX_EDGE = 300;
 const THUMB_QUALITY = 0.4;
@@ -76,14 +77,14 @@ function release(): void {
   if (next) next();
 }
 
-async function buildThumbnail(srcUrl: string, signal?: AbortSignal): Promise<CacheEntry> {
+async function buildThumbnail(srcUrl: string): Promise<CacheEntry> {
   await acquire();
   try {
-    const resp = await fetch(srcUrl, { credentials: "same-origin", signal });
-    if (!resp.ok) {
-      throw new Error(`overlay fetch failed: ${resp.status}`);
-    }
-    const blob = await resp.blob();
+    // No per-caller AbortSignal here on purpose: the cache is shared across all
+    // consumers of this URL, so a single caller's unmount must not abort the
+    // underlying fetch (and poison the cached promise for everyone else). The
+    // hook short-circuits its own state via a `cancelled` flag instead.
+    const blob = await http.getBlob(srcUrl);
     let objectUrl: string;
     try {
       const bitmap = await createImageBitmap(blob);
@@ -116,14 +117,19 @@ async function buildThumbnail(srcUrl: string, signal?: AbortSignal): Promise<Cac
   }
 }
 
-function getOrCreate(srcUrl: string, signal?: AbortSignal): Promise<CacheEntry> {
+function getOrCreate(srcUrl: string): Promise<CacheEntry> {
   const existing = cache.get(srcUrl);
   if (existing) {
     touch(srcUrl, existing);
     return existing;
   }
-  const fresh = buildThumbnail(srcUrl, signal);
+  const fresh = buildThumbnail(srcUrl);
   cache.set(srcUrl, fresh);
+  // Drop rejected promises so the next consumer can retry — otherwise an
+  // aborted first mount (common under StrictMode) poisons the cache forever.
+  fresh.catch(() => {
+    if (cache.get(srcUrl) === fresh) cache.delete(srcUrl);
+  });
   void evictIfNeeded();
   return fresh;
 }
@@ -150,10 +156,9 @@ export function useOverlayThumbnail(
       return;
     }
     let cancelled = false;
-    const controller = new AbortController();
     lastSrcRef.current = srcUrl;
     setError(false);
-    getOrCreate(srcUrl, controller.signal)
+    getOrCreate(srcUrl)
       .then((entry) => {
         if (cancelled || lastSrcRef.current !== srcUrl) return;
         entry.refCount++;
@@ -166,16 +171,17 @@ export function useOverlayThumbnail(
       });
     return () => {
       cancelled = true;
-      controller.abort();
       // Decrement on unmount — when refCount hits 0 we *could* revoke the
       // object URL and drop the cache entry, but navigating back to the
       // same batch is common so we keep thumbnails around for the page
       // lifetime. They're tiny JPEGs and the tab discards them on close.
       const settled = cache.get(srcUrl);
       if (!settled) return;
-      settled.then((entry) => {
-        entry.refCount = Math.max(0, entry.refCount - 1);
-      });
+      settled
+        .then((entry) => {
+          entry.refCount = Math.max(0, entry.refCount - 1);
+        })
+        .catch(() => {});
     };
   }, [srcUrl, enabled]);
 

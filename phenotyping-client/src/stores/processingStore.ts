@@ -26,6 +26,15 @@ export interface InterruptedBatchInfo {
   totalImages: number;
 }
 
+export type ProcessingLogLevel = "INFO" | "WARN" | "ERROR";
+
+export interface ProcessingLogEntry {
+  id: string;
+  timestamp: string;
+  level: ProcessingLogLevel;
+  message: string;
+}
+
 interface ProcessingStore {
   isProcessing: boolean;
   totalImages: number;
@@ -57,6 +66,7 @@ interface ProcessingStore {
   // the backend logs WS via stageTracker (or set directly by the manager for
   // client-side phases).
   stage: string | null;
+  liveLogs: ProcessingLogEntry[];
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -80,6 +90,8 @@ interface ProcessingStore {
   setError: (msg: string | null) => void;
   setInterruptedBatch: (info: InterruptedBatchInfo | null) => void;
   setStage: (stage: string | null) => void;
+  addLiveLog: (entry: Omit<ProcessingLogEntry, "id" | "timestamp">) => void;
+  clearLiveLogs: () => void;
 
   setProjectName: (name: string | null) => void;
   setClasses: (classes: string[]) => void;
@@ -100,6 +112,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
   error: null,
   interruptedBatch: null,
   stage: null,
+  liveLogs: [],
   projectName: null,
   classes: [],
 
@@ -116,6 +129,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       totalElapsedSeconds: 0,
       processedCount: 0,
       stage: null,
+      liveLogs: [],
     }),
 
   setImages: (images) => set({ images }),
@@ -143,6 +157,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
       error: null,
       interruptedBatch: null,
       stage: null,
+      liveLogs: [],
       projectName: null,
       classes: [],
     }),
@@ -178,6 +193,22 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     set({ interruptedBatch: info, isProcessing: false }),
 
   setStage: (stage) => set({ stage }),
+
+  addLiveLog: (entry) =>
+    set((state) => {
+      const next: ProcessingLogEntry = {
+        ...entry,
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        timestamp: new Date().toISOString(),
+      };
+      const liveLogs = [...state.liveLogs, next];
+      return { liveLogs: liveLogs.length > 300 ? liveLogs.slice(-300) : liveLogs };
+    }),
+
+  clearLiveLogs: () => set({ liveLogs: [] }),
 
   setProjectName: (projectName) => set({ projectName }),
 

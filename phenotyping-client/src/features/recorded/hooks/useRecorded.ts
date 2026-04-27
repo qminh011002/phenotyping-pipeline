@@ -2,8 +2,13 @@
 // Handles search, filter, sort, pagination, and data fetching.
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listAnalyses, deleteAnalysis } from "@/services/api";
-import type { AnalysisBatchSummary, AnalysisListResponse, Organism } from "@/types/api";
+import { listAnalyses, deleteAnalysis, getAnalysisDetail } from "@/services/api";
+import type {
+  AnalysisBatchSummary,
+  AnalysisImageSummary,
+  AnalysisListResponse,
+  Organism,
+} from "@/types/api";
 
 export type SortKey = "created_at" | "total_count";
 export type SortDir = "asc" | "desc";
@@ -24,8 +29,12 @@ const DEFAULT_FILTERS: RecordedFilters = {
 
 const PAGE_SIZE = 12;
 
+export interface RecordedBatchSummary extends AnalysisBatchSummary {
+  firstImage: AnalysisImageSummary | null;
+}
+
 export interface UseRecordedReturn {
-  batches: AnalysisBatchSummary[];
+  batches: RecordedBatchSummary[];
   total: number;
   page: number;
   pageSize: number;
@@ -44,7 +53,7 @@ export interface UseRecordedOptions {
 
 export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn {
   const enabled = options.enabled ?? true;
-  const [batches, setBatches] = useState<AnalysisBatchSummary[]>([]);
+  const [batches, setBatches] = useState<RecordedBatchSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [filters, setFiltersState] = useState<RecordedFilters>(DEFAULT_FILTERS);
@@ -56,7 +65,8 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
   const fetchBatches = useCallback(
     async (currentPage: number, currentFilters: RecordedFilters) => {
       if (abortRef.current) abortRef.current.abort();
-      abortRef.current = new AbortController();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       setLoading(true);
       setError(null);
@@ -88,7 +98,25 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
           });
         }
 
-        setBatches(items);
+        const enrichedItems = await Promise.all(
+          items.map(async (batch) => {
+            try {
+              const detail = await getAnalysisDetail(batch.id, controller.signal);
+              return {
+                ...batch,
+                firstImage: detail.images[0] ?? null,
+              };
+            } catch (err) {
+              if ((err as Error).name === "AbortError") throw err;
+              return {
+                ...batch,
+                firstImage: null,
+              };
+            }
+          }),
+        );
+
+        setBatches(enrichedItems);
         setTotal(data.total);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PauseCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
 import { loadProcessingFiles, loadBatchId } from '@/features/upload/lib/processingSession';
 import { useProcessingStore } from '@/stores/processingStore';
+import type { ProcessingLogEntry } from '@/stores/processingStore';
 import {
     cancelProcessing,
     discardInterruptedBatch,
@@ -13,6 +14,71 @@ import {
     isManagerRunning,
     resumeActiveBatchIfAny,
 } from '@/services/processingManager';
+
+function formatLogTime(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '--:--:--';
+    return d.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    });
+}
+
+function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        el.scrollTop = el.scrollHeight;
+    }, [logs]);
+
+    return (
+        <section className="mt-8 w-[min(48rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-card text-left shadow-sm">
+            <div className="flex h-14 items-center gap-3 border-b bg-muted/20 px-6">
+                <span className="relative flex items-center h-3.5 w-3.5" aria-hidden>
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-40" />
+                    <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-green-500" />
+                </span>
+                <span className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Live Log
+                </span>
+            </div>
+            <div
+                ref={scrollRef}
+                className="max-h-52 overflow-y-auto bg-black px-6 py-4 font-mono text-sm leading-7 text-slate-300"
+            >
+                {logs.length === 0 ? (
+                    <div className="text-slate-500">Waiting for processing events...</div>
+                ) : (
+                    logs.map((log) => (
+                        <div key={log.id} className="flex min-w-0 gap-3 whitespace-pre-wrap">
+                            <span
+                                className={
+                                    log.level === 'ERROR'
+                                        ? 'w-12 shrink-0 font-bold text-red-400'
+                                        : log.level === 'WARN'
+                                          ? 'w-12 shrink-0 font-bold text-yellow-400'
+                                          : 'w-12 shrink-0 font-bold text-green-400'
+                                }
+                            >
+                                {log.level}
+                            </span>
+                            <span className="shrink-0 text-slate-500 tabular-nums">
+                                {formatLogTime(log.timestamp)}
+                            </span>
+                            <span className="min-w-0 break-words text-slate-300">
+                                {log.message}
+                            </span>
+                        </div>
+                    ))
+                )}
+            </div>
+        </section>
+    );
+}
 
 function InterruptedBatch({
     batchName,
@@ -64,6 +130,7 @@ export default function ProcessingPage() {
     const interruptedBatch = useProcessingStore((s) => s.interruptedBatch);
     const completedBatchId = useProcessingStore((s) => s.completedBatchId);
     const activeBatchId = useProcessingStore((s) => s.activeBatchId);
+    const liveLogs = useProcessingStore((s) => s.liveLogs);
 
     useEffect(() => {
         let cancelled = false;
@@ -192,6 +259,8 @@ export default function ProcessingPage() {
                     </Button>
                 ) : undefined
             }
-        />
+        >
+            <LiveProcessingLog logs={liveLogs} />
+        </LoadingScreen>
     );
 }

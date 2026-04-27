@@ -58,6 +58,17 @@ class AppSettings(BaseSettings):
     log_level: str = "INFO"
     version: str = "0.1.0"
 
+    # ── Auth (BE-020) ──────────────────────────────────────────────────────────
+    # Secrets MUST be set in .env in any non-trivial deployment. The defaults
+    # below exist only so dev startup doesn't crash for someone who hasn't
+    # touched the env yet — main.py refuses to start in production-like mode
+    # without explicit values. Treat both as credentials.
+    jwt_access_secret: str = "dev-only-access-secret-change-me"
+    jwt_refresh_secret: str = "dev-only-refresh-secret-change-me"
+    jwt_algorithm: str = "HS256"
+    jwt_access_ttl_min: float = 15.0
+    jwt_refresh_ttl_days: float = 30.0
+
     def model_post_init(self, __context: Any) -> None:
         if not self.pipeline_root.is_absolute():
             self.pipeline_root = (Path.cwd() / self.pipeline_root).resolve()

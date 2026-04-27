@@ -2,6 +2,22 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    Keyframes
    ═══════════════════════════════════════════════════════════════════════ */
@@ -104,11 +120,11 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Radius scale (shadcn Maia — inputs/buttons match cards at 8px) */
-  --radius-sm:   calc(var(--radius) - 2px);  /* 6px  — badges, small chips */
-  --radius-md:   var(--radius);              /* 8px  — buttons, inputs, selects */
-  --radius-lg:   var(--radius);              /* 8px  — cards, dialogs, popovers */
-  --radius-xl:   calc(var(--radius) + 4px);  /* 12px — large cards, sheets on mobile */
+  /* Radius scale */
+  --radius-sm:   calc(var(--radius) - 4px);  /* 6px  — badges, small chips */
+  --radius-md:   calc(var(--radius) - 2px);  /* 8px  — buttons, inputs, selects */
+  --radius-lg:   var(--radius);              /* 10px — dialogs, popovers */
+  --radius-xl:   calc(var(--radius) + 4px);  /* 14px — cards, sheets on mobile */
   --radius-full: 9999px;                     /* 9999px — pills, avatars, status dots */
 
   /* Elevation / shadow ramp */
@@ -119,9 +135,9 @@
   --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
 
   /* Typography */
-  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
 
   /* Z-index scale */
   --z-base:     0;
@@ -212,8 +228,8 @@
    Design tokens
    ═══════════════════════════════════════════════════════════════════════ */
 :root {
-  /* Radius: Medium (shadcn default) */
-  --radius: 0.5rem;
+  /* Radius: base 10px scale */
+  --radius: 0.625rem;
 
   /* Neutral base + Green primary (shadcn Maia) */
   --background: oklch(1 0 0);
@@ -253,13 +269,13 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.723 0.219 149.579);
 
-  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
 }
 
 .dark {
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -296,9 +312,9 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.527 0.154 150.069);
 
-  --font-sans: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "InterVariable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains MonoVariable", ui-monospace, monospace;
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
 }
 
 *,

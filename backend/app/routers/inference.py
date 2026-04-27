@@ -11,12 +11,22 @@ import uuid
 from pathlib import PurePath
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from sqlalchemy import select as _select
 
+from app.database import AsyncSession, get_session
 from app.deps import (
     AnnotatedEggInferenceService,
     AnnotatedNeonateInferenceService,
+    CurrentUser,
     get_model_registry,
 )
 from app.schemas.detection import BatchDetectionResult, DetectionResult
@@ -40,6 +50,36 @@ def _check_size(file: UploadFile) -> None:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large (max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)",
+        )
+
+
+async def _verify_batch_ownership(
+    batch_id_str: str | None, db: AsyncSession, user_id
+) -> None:
+    """If a batch_id is supplied, confirm it belongs to ``user_id``.
+
+    404 (not 403) so we don't leak whether a batch exists for another user.
+    """
+    if not batch_id_str:
+        return
+    try:
+        bid = uuid.UUID(batch_id_str)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid batch_id",
+        ) from exc
+    from app.models.analysis import AnalysisBatch
+
+    stmt = (
+        _select(AnalysisBatch.id)
+        .where(AnalysisBatch.id == bid)
+        .where(AnalysisBatch.user_id == user_id)
+    )
+    if (await db.execute(stmt)).scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {bid} not found.",
         )
 
 
@@ -76,6 +116,8 @@ def _validate_extension(filename: str) -> str:
 )
 async def run_single_inference(
     inference_svc: AnnotatedEggInferenceService,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
     file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
     batch_id: Annotated[str | None, Query(description="Optional batch ID for overlay path")] = None,
 ) -> DetectionResult:
@@ -87,6 +129,9 @@ async def run_single_inference(
     """
     # Validate extension
     stem = _validate_extension(file.filename or "unknown")
+
+    # Verify ownership of the supplied batch (if any) before doing any work.
+    await _verify_batch_ownership(batch_id, db, user.id)
 
     # Check model is ready
     registry = get_model_registry()
@@ -165,11 +210,14 @@ async def run_single_inference(
 )
 async def run_single_neonate_inference(
     inference_svc: AnnotatedNeonateInferenceService,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
     file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
     batch_id: Annotated[str | None, Query(description="Optional batch ID for overlay path")] = None,
 ) -> DetectionResult:
     """Run neonate detection on a single uploaded image."""
     stem = _validate_extension(file.filename or "unknown")
+    await _verify_batch_ownership(batch_id, db, user.id)
 
     registry = get_model_registry()
     if not registry.neonate_model_loaded:
@@ -239,6 +287,7 @@ async def run_batch_neonate_inference(
         File(description="Image files to analyze (JPG, PNG, TIFF, BMP). Max 50 files."),
     ],
     inference_svc: AnnotatedNeonateInferenceService,
+    user: CurrentUser,
 ) -> BatchDetectionResult:
     """Run neonate detection on multiple uploaded images sequentially."""
     if not files:
@@ -323,6 +372,7 @@ async def run_batch_inference(
         File(description="Image files to analyze (JPG, PNG, TIFF, BMP). Max 50 files."),
     ],
     inference_svc: AnnotatedEggInferenceService,
+    user: CurrentUser,
 ) -> BatchDetectionResult:
     """Run egg detection on multiple uploaded images sequentially.
 
