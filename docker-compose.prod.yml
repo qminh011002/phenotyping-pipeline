@@ -1,0 +1,19 @@
+services:
+  backend:
+    image: ghcr.io/qminh01102002/phenotyping-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - /etc/phenotyping/.env.production
+    environment:
+      BACKEND_HOST: "127.0.0.1"
+      BACKEND_PORT: "8000"
+      GUNICORN_WORKERS: "2"
+    volumes:
+      - /var/lib/phenotyping/overlays:/data/overlays
+
+  frontend:
+    image: ghcr.io/qminh01102002/phenotyping-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
