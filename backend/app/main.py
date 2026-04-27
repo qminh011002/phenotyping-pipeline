@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.errors.handlers import register_exception_handlers
 from app.middleware.cors import get_cors_middleware
 from app.middleware.logging import RequestLoggingMiddleware
-from app.errors.handlers import register_exception_handlers
 
 
 @asynccontextmanager
@@ -76,9 +76,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     # Resolve filesystem layout + load every organism's weights best-effort.
+    from sqlalchemy.exc import SQLAlchemyError
+
     from app.deps import get_model_storage, get_model_upload_service
     from app.services.model_registry import ModelRegistry
-    from sqlalchemy.exc import SQLAlchemyError
 
     pipeline_config = _gpc()
     storage = get_model_storage()
@@ -117,7 +118,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Create ThreadPoolExecutor sized by device
     device = registry.device
     n_workers = 1 if device == "cpu" else 2
-    executor = ThreadPoolExecutor(max_workers=n_workers, thread_name_prefix="inference_worker")
+    executor = ThreadPoolExecutor(
+        max_workers=n_workers, thread_name_prefix="inference_worker"
+    )
     _set_executor(executor)
     settings_logger.info(
         "Created inference ThreadPoolExecutor",
@@ -136,8 +139,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _set_inference_service(inference_svc)
 
     # Create NeonateInferenceService (uses the same executor/log buffer)
-    from app.services.inference.neonate import NeonateInferenceService
     from app.deps import _set_neonate_inference_service
+    from app.services.inference.neonate import NeonateInferenceService
 
     neonate_svc = NeonateInferenceService(
         model_registry=registry,
@@ -161,22 +164,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = AppSettings()
     try:
         async with db.session() as session:
-            from app.models.app_settings import AppSettingsRow
             from sqlalchemy import select
+
+            from app.models.app_settings import AppSettingsRow
 
             result = await session.execute(
                 select(AppSettingsRow).where(AppSettingsRow.id == 1).limit(1)
             )
             if result.scalar_one_or_none() is None:
-                session.add(AppSettingsRow(
-                    id=1,
-                    image_storage_dir=str(settings.image_storage_dir),
-                    data_dir=str(settings.data_dir),
-                ))
+                session.add(
+                    AppSettingsRow(
+                        id=1,
+                        image_storage_dir=str(settings.image_storage_dir),
+                        data_dir=str(settings.data_dir),
+                    )
+                )
                 await session.commit()
                 settings_logger.info(
                     "Seeded app_settings singleton row",
-                    extra={"context": {"image_storage_dir": str(settings.image_storage_dir)}},
+                    extra={
+                        "context": {
+                            "image_storage_dir": str(settings.image_storage_dir)
+                        }
+                    },
                 )
     except Exception as exc:  # noqa: BLE001 — database may be unreachable
         settings_logger.warning(
@@ -191,6 +201,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Bind the running loop to the stage broker so inference worker threads
     # can emit stage events safely via run_coroutine_threadsafe.
     import asyncio as _asyncio
+
     from app.services.stage_broker import get_broker as _get_stage_broker
 
     _get_stage_broker().bind_loop(_asyncio.get_running_loop())
@@ -231,14 +242,15 @@ app.add_middleware(cors_cls, **cors_kwargs)
 app.add_middleware(RequestLoggingMiddleware)
 register_exception_handlers(app)
 
-# Import and include routers — use direct module paths to avoid circular __init__.py
-from app.routers import health, logs, config, inference, stages
-from app.routers.analyses import router as analysis_router
-from app.routers.auth import router as auth_router
-from app.routers.dashboard import router as dashboard_router
-from app.routers.models import router as models_router
-from app.routers.overlay import router as overlay_router
-from app.routers.settings import router as settings_router
+# Import and include routers — use direct module paths to avoid circular __init__.py.
+# These imports must run after `app` is constructed above; E402 is intentional.
+from app.routers import config, health, inference, logs, stages  # noqa: E402
+from app.routers.analyses import router as analysis_router  # noqa: E402
+from app.routers.auth import router as auth_router  # noqa: E402
+from app.routers.dashboard import router as dashboard_router  # noqa: E402
+from app.routers.models import router as models_router  # noqa: E402
+from app.routers.overlay import router as overlay_router  # noqa: E402
+from app.routers.settings import router as settings_router  # noqa: E402
 
 app.include_router(health.router)
 app.include_router(logs.router)

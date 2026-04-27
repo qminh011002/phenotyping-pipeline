@@ -2,18 +2,8 @@
 
 from __future__ import annotations
 
-from app.schemas.config import (
-    ConfigUpdateRequest,
-    DedupMode,
-    Device,
-    EggConfig,
-)
-from app.schemas.detection import (
-    BatchDetectionResult,
-    BBox,
-    DetectionResult,
-    Organism,
-)
+from app.schemas.config import ConfigUpdateRequest, DedupMode, Device, EggConfig
+from app.schemas.detection import BatchDetectionResult, BBox, DetectionResult, Organism
 from app.schemas.health import (
     AppSettingsResponse,
     AppSettingsUpdate,

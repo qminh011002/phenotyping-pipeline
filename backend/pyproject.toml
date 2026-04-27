@@ -57,3 +57,5 @@ dev = [
 where = ["."]
 include = ["app*"]
 exclude = ["alembic*", "data*", "scripts*", "tests*"]
+[tool.isort]
+profile = "black"

@@ -23,7 +23,6 @@ import json
 import logging
 import uuid
 from collections import deque
-from datetime import datetime, timezone
 from typing import Any
 
 _QUEUE_MAXSIZE = 500
@@ -76,7 +75,12 @@ class LogBuffer:
 
         logging.getLogger(__name__).debug(
             "WS client connected",
-            extra={"context": {"client_id": client_id, "total_clients": len(self._subscribers)}},
+            extra={
+                "context": {
+                    "client_id": client_id,
+                    "total_clients": len(self._subscribers),
+                }
+            },
         )
 
         return client_id, queue
@@ -99,7 +103,9 @@ class LogBuffer:
                     "Log queue overflow — dropped %d messages for client %s",
                     dropped,
                     client_id,
-                    extra={"context": {"client_id": client_id, "dropped_count": dropped}},
+                    extra={
+                        "context": {"client_id": client_id, "dropped_count": dropped}
+                    },
                 )
             logger.debug(
                 "WS client disconnected",

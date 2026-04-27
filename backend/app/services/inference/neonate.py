@@ -112,9 +112,7 @@ class NeonateInferenceService:
 
         return valid_x_min <= cx < valid_x_max and valid_y_min <= cy < valid_y_max
 
-    def _is_box_touching_edge(
-        self, x1: float, y1: float, x2: float, y2: float
-    ) -> bool:
+    def _is_box_touching_edge(self, x1: float, y1: float, x2: float, y2: float) -> bool:
         cfg = self._neonate_config
         tile_size = cfg.tile_size
         edge_margin = cfg.edge_margin
@@ -160,7 +158,9 @@ class NeonateInferenceService:
         pad = 14
         line_gap = 10
 
-        sizes = [cv2.getTextSize(l, font, font_scale, thickness)[0] for l in lines]
+        sizes = [
+            cv2.getTextSize(line, font, font_scale, thickness)[0] for line in lines
+        ]
         board_w = max(w for w, _ in sizes) + pad * 2
         board_h = sum(h for _, h in sizes) + line_gap * (len(lines) - 1) + pad * 2
 
@@ -215,7 +215,9 @@ class NeonateInferenceService:
 
         # Class-name lookup driven by the loaded checkpoint, not a hardcoded literal.
         names_map = getattr(model, "names", None) or {}
-        default_label = next(iter(names_map.values()), "neonate") if names_map else "neonate"
+        default_label = (
+            next(iter(names_map.values()), "neonate") if names_map else "neonate"
+        )
 
         stride = self._computed_stride
         half = stride // 2
@@ -255,9 +257,13 @@ class NeonateInferenceService:
                     cx = (g[:, 0] + g[:, 2]) * 0.5
                     cy = (g[:, 1] + g[:, 3]) * 0.5
                     valid_x_min = x_off + (half if x_off > 0 else 0)
-                    valid_x_max = (x_off + half + stride) if (x_off + tile_size < w) else w
+                    valid_x_max = (
+                        (x_off + half + stride) if (x_off + tile_size < w) else w
+                    )
                     valid_y_min = y_off + (half if y_off > 0 else 0)
-                    valid_y_max = (y_off + half + stride) if (y_off + tile_size < h) else h
+                    valid_y_max = (
+                        (y_off + half + stride) if (y_off + tile_size < h) else h
+                    )
                     mask = (
                         (cx >= valid_x_min)
                         & (cx < valid_x_max)
@@ -451,9 +457,7 @@ class NeonateInferenceService:
                 on_progress(completed, total)
             return r
 
-        results = await asyncio.gather(
-            *(_one(b, f) for b, f in images)
-        )
+        results = await asyncio.gather(*(_one(b, f) for b, f in images))
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)
@@ -466,4 +470,5 @@ class NeonateInferenceService:
 
     def _get_storage_dir(self) -> Path:
         from app.deps import get_cached_storage_dir
+
         return Path(get_cached_storage_dir())

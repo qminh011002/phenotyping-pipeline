@@ -7,7 +7,11 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.errors.exceptions import InvalidImageError, InferenceFailedError, ModelNotLoadedError
+from app.errors.exceptions import (
+    InferenceFailedError,
+    InvalidImageError,
+    ModelNotLoadedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +58,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 content={"detail": exc.detail},
                 headers=exc.headers,
             )
-        logger.exception(
-            "Unhandled error on %s %s", request.method, request.url.path
-        )
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error", "code": "INTERNAL_ERROR"},

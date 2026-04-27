@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.app_settings import AppSettingsRow
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +85,7 @@ class AppSettingsService:
             values["data_dir"] = data_dir
 
         await db.execute(
-            update(AppSettingsRow)
-            .where(AppSettingsRow.id == 1)
-            .values(**values)
+            update(AppSettingsRow).where(AppSettingsRow.id == 1).values(**values)
         )
         await db.flush()
         logger.info(

@@ -91,7 +91,8 @@ class StageBroker:
         try:
             fut = asyncio.run_coroutine_threadsafe(self._broadcast(payload), loop)
             fut.add_done_callback(
-                lambda f: f.exception() and logger.debug("stage emit failed: %s", f.exception())
+                lambda f: f.exception()
+                and logger.debug("stage emit failed: %s", f.exception())
             )
         except RuntimeError:
             pass

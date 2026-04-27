@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import types
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,9 +130,7 @@ class ModelUploadService:
     async def get_custom_model(
         self, db: AsyncSession, model_id: uuid.UUID
     ) -> CustomModel | None:
-        result = await db.execute(
-            select(CustomModel).where(CustomModel.id == model_id)
-        )
+        result = await db.execute(select(CustomModel).where(CustomModel.id == model_id))
         return result.scalar_one_or_none()
 
     async def delete_custom_model(
@@ -141,9 +138,7 @@ class ModelUploadService:
     ) -> str | None:
         """Delete a custom model. Returns organism name if currently assigned (cannot delete)."""
         assignment = await db.execute(
-            select(ModelAssignment).where(
-                ModelAssignment.custom_model_id == model_id
-            )
+            select(ModelAssignment).where(ModelAssignment.custom_model_id == model_id)
         )
         row = assignment.scalar_one_or_none()
         if row is not None:
@@ -167,9 +162,7 @@ class ModelUploadService:
 
     # ── Assignments ────────────────────────────────────────────────────────────
 
-    async def get_assignments(
-        self, db: AsyncSession
-    ) -> dict[str, dict[str, Any]]:
+    async def get_assignments(self, db: AsyncSession) -> dict[str, dict[str, Any]]:
         """Return current model assignments for every organism.
 
         For each organism the response includes the active filename derived from
@@ -277,7 +270,9 @@ class ModelUploadService:
             extra={
                 "context": {
                     "organism": organism,
-                    "custom_model_id": str(custom_model_id) if custom_model_id else None,
+                    "custom_model_id": (
+                        str(custom_model_id) if custom_model_id else None
+                    ),
                     "model_filename": model_filename,
                 }
             },

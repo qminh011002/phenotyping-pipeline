@@ -29,6 +29,4 @@ class AppSettingsRow(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (
-        CheckConstraint("id = 1", name="ck_app_settings_singleton"),
-    )
+    __table_args__ = (CheckConstraint("id = 1", name="ck_app_settings_singleton"),)

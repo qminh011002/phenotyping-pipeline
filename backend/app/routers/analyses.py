@@ -15,11 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.database import AsyncSession, get_session
-from app.deps import (
-    CurrentUser,
-    get_analysis_service,
-    get_cached_storage_dir,
-)
+from app.deps import CurrentUser, get_analysis_service, get_cached_storage_dir
 from app.schemas.analysis import (
     ActiveBatchResponse,
     AnalysisBatchCreate,

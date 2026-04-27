@@ -1,4 +1,5 @@
 """SQLAlchemy models for analysis batches and images."""
+
 from __future__ import annotations
 
 import uuid
@@ -27,9 +28,7 @@ class AnalysisBatch(Base):
         Index("idx_batch_user_created", "user_id", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     # Nullable for legacy rows (BE-021). New batches always set this.
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("user_account.id", ondelete="RESTRICT"), nullable=True
@@ -77,9 +76,7 @@ class AnalysisImage(Base):
         Index("ix_analysis_image_original_filename", "original_filename"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     batch_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("analysis_batch.id", ondelete="CASCADE")
     )
@@ -94,14 +91,10 @@ class AnalysisImage(Base):
         TIMESTAMP(timezone=True), default=_now_utc
     )
     # Model-produced bounding boxes at inference time (read-only baseline).
-    annotations: Mapped[list | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    annotations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # FS-009: operator-corrected bounding boxes — supersedes model annotations when set.
     # List of bbox dicts (matches schema BatchDetail / EditedAnnotationsUpdate).
-    edited_annotations: Mapped[list | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    edited_annotations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     batch: Mapped["AnalysisBatch"] = relationship(
         "AnalysisBatch", back_populates="images"

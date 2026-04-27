@@ -12,6 +12,7 @@ Summary columns reflect the *edited* count/average confidence when the
 operator has saved edits, otherwise the model's output. This matches the
 numbers the operator sees in the ResultViewer.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,13 +25,7 @@ from pathlib import Path
 from uuid import UUID
 
 from openpyxl import Workbook
-from openpyxl.styles import (
-    Alignment,
-    Border,
-    Font,
-    PatternFill,
-    Side,
-)
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,9 +57,9 @@ _SUMMARY_HEADERS = [
 ]
 # Columns are typed so numeric formats render correctly in Excel.
 _NUMERIC_FORMATS = {
-    3: "#,##0",          # Count
-    4: "0.0%",           # Avg confidence
-    5: "0.00",           # Elapsed seconds
+    3: "#,##0",  # Count
+    4: "0.0%",  # Avg confidence
+    5: "0.00",  # Elapsed seconds
 }
 
 
@@ -113,7 +108,9 @@ def _style_summary_sheet(
     # Title row
     ws["A1"] = batch.name or "Untitled batch"
     ws["A1"].font = _TITLE_FONT
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_SUMMARY_HEADERS))
+    ws.merge_cells(
+        start_row=1, start_column=1, end_row=1, end_column=len(_SUMMARY_HEADERS)
+    )
     ws.row_dimensions[1].height = 24
 
     # Meta rows (organism / device / mode / totals)
@@ -125,9 +122,11 @@ def _style_summary_sheet(
         ("Total count", batch.total_count if batch.total_count is not None else "—"),
         (
             "Avg confidence",
-            f"{batch.avg_confidence * 100:.1f}%"
-            if batch.avg_confidence is not None
-            else "—",
+            (
+                f"{batch.avg_confidence * 100:.1f}%"
+                if batch.avg_confidence is not None
+                else "—"
+            ),
         ),
     ]
     for i, (label, value) in enumerate(meta_pairs, start=2):
@@ -157,7 +156,7 @@ def _style_summary_sheet(
             filename,
             count,
             avg_conf,  # may be None
-            elapsed,   # may be None
+            elapsed,  # may be None
             "Yes" if edited else "No",
         ]
         for col, value in enumerate(values, start=1):
@@ -185,9 +184,7 @@ def _style_summary_sheet(
     ws.freeze_panes = ws.cell(row=data_start, column=1)
 
 
-def _build_xlsx(
-    batch: AnalysisBatch, images: Iterable[AnalysisImage]
-) -> bytes:
+def _build_xlsx(batch: AnalysisBatch, images: Iterable[AnalysisImage]) -> bytes:
     """Render the styled summary workbook to an in-memory bytes buffer."""
     wb = Workbook()
     ws = wb.active

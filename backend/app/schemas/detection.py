@@ -25,9 +25,7 @@ class BBox(BaseModel):
         # so user-drawn rubber-bands at click-without-drag don't 422 mid-edit.
         x1, y1, x2, y2 = self.bbox
         if x2 < x1 or y2 < y1:
-            raise ValueError(
-                f"bbox must satisfy x1<=x2 and y1<=y2; got {self.bbox!r}"
-            )
+            raise ValueError(f"bbox must satisfy x1<=x2 and y1<=y2; got {self.bbox!r}")
         return self
 
 

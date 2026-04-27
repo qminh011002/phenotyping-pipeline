@@ -4,27 +4,27 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from typing import TYPE_CHECKING
-
-from app.config import AppSettings, PipelineConfigManager
-
-if TYPE_CHECKING:
-    from app.services.log_buffer import LogBuffer
-    from app.services.model_registry import ModelRegistry
-    from app.services.model_storage import ModelStorage
-
-# Import at runtime (not inside TYPE_CHECKING) so that TypeAliasType below can
-# resolve EggInferenceService at module-load time.
-from app.services.inference.egg import EggInferenceService  # noqa: E402
-from app.services.inference.neonate import NeonateInferenceService  # noqa: E402
-from app.services.analysis_service import AnalysisService  # noqa: E402
-from app.services.app_settings_service import AppSettingsService  # noqa: E402
-
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+
+from app.config import AppSettings, PipelineConfigManager
+from app.services.analysis_service import AnalysisService
+from app.services.app_settings_service import AppSettingsService
+
+# Imported at runtime (not in TYPE_CHECKING) because the Annotated aliases
+# below need to resolve these classes at module-load time.
+from app.services.inference.egg import EggInferenceService
+from app.services.inference.neonate import NeonateInferenceService
+
+if TYPE_CHECKING:
+    from app.models.user import User
+    from app.services.log_buffer import LogBuffer
+    from app.services.model_registry import ModelRegistry
+    from app.services.model_storage import ModelStorage
+    from app.services.model_upload_service import ModelUploadService
 
 # Module-level singletons set by main.py lifespan
 _model_registry: "ModelRegistry | None" = None
@@ -107,7 +107,7 @@ def get_model_storage() -> "ModelStorage":
 
 
 @lru_cache
-def get_model_upload_service() -> "ModelUploadService":  # type: ignore[name-defined]
+def get_model_upload_service() -> "ModelUploadService":
     """Return the ModelUploadService singleton."""
     from app.services.model_upload_service import ModelUploadService
 
@@ -174,17 +174,14 @@ def get_inference_service() -> EggInferenceService:
 # Resolves to EggInferenceService with Depends(get_inference_service) injected.
 # Usage in routes:
 #   async def handler(svc: AnnotatedEggInferenceService) -> ...:
-from typing import Annotated as _Annotated
-from fastapi import Depends as _Depends
-
-AnnotatedEggInferenceService = _Annotated[
+AnnotatedEggInferenceService = Annotated[
     EggInferenceService,
-    _Depends(get_inference_service),
+    Depends(get_inference_service),
 ]
 
-AnnotatedNeonateInferenceService = _Annotated[
+AnnotatedNeonateInferenceService = Annotated[
     NeonateInferenceService,
-    _Depends(get_neonate_inference_service),
+    Depends(get_neonate_inference_service),
 ]
 
 
@@ -262,9 +259,7 @@ async def get_current_user(
 
 
 # Type alias for route signatures: user: CurrentUser
-from app.models.user import User as _User
-
-CurrentUser = Annotated[_User, Depends(get_current_user)]
+CurrentUser = Annotated["User", Depends(get_current_user)]
 
 
 async def get_session_dep():
@@ -290,6 +285,7 @@ def get_cached_storage_dir() -> str:
     global _storage_dir_cache
     if _storage_dir_cache is None:
         from app.config import AppSettings
+
         _storage_dir_cache = str(AppSettings().image_storage_dir)
     return _storage_dir_cache
 

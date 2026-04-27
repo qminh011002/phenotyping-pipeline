@@ -77,7 +77,9 @@ class ModelStorage:
         d = self.default_dir(organism)
         if not d.is_dir():
             return None
-        candidates = sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() == ".pt")
+        candidates = sorted(
+            p for p in d.iterdir() if p.is_file() and p.suffix.lower() == ".pt"
+        )
         return candidates[0] if candidates else None
 
     # ── Active-model resolution ────────────────────────────────────────────────

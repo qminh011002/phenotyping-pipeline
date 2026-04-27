@@ -19,9 +19,7 @@ class User(Base):
     """A registered user account."""
 
     __tablename__ = "user_account"
-    __table_args__ = (
-        Index("ix_user_account_email", "email", unique=True),
-    )
+    __table_args__ = (Index("ix_user_account_email", "email", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
