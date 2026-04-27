@@ -57,6 +57,8 @@ export interface StoredBatchDetail {
   images: StoredImageDetail[];
   /** Class names persisted on the batch row; optional for back-compat. */
   classes?: string[];
+  /** Lifecycle state: 'processing' | 'draft' | 'completed' | 'failed'. Optional for back-compat. */
+  status?: string;
 }
 
 // ── Store files before navigating to processing page ─────────────────────────

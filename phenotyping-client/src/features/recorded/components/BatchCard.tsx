@@ -9,6 +9,7 @@ import {
   Loader2,
   CheckCircle2,
   Clock,
+  FileEdit,
   Trash2,
   Cpu,
   MoreVertical,
@@ -38,7 +39,7 @@ interface BatchCardProps {
   onDelete?: (batchId: string) => Promise<void>;
 }
 
-type Status = "completed" | "failed" | "processing" | "unknown";
+type Status = "completed" | "failed" | "processing" | "draft" | "unknown";
 
 function statusInfo(status: Status) {
   switch (status) {
@@ -68,6 +69,13 @@ function statusInfo(status: Status) {
           "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300",
         dotClass: "bg-amber-500 shadow-[0_0_8px_rgb(245_158_11_/_0.55)]",
       };
+    case "draft":
+      return {
+        label: "Draft",
+        icon: FileEdit,
+        badgeVariant: "warning" as const,
+        accentClass: "border-l-amber-500 dark:border-l-amber-400",
+      };
     default:
       return {
         label: "Unknown",
@@ -83,6 +91,7 @@ function parseStatus(status: string): Status {
   if (status === "completed") return "completed";
   if (status === "failed") return "failed";
   if (status === "processing") return "processing";
+  if (status === "draft") return "draft";
   return "unknown";
 }
 

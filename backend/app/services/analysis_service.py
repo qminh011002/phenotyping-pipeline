@@ -192,17 +192,15 @@ class AnalysisService:
 
         return image
 
-    async def complete_batch(
+    async def _recompute_aggregates(
         self,
-        batch_id: UUID,
+        batch: AnalysisBatch,
         db: AsyncSession,
         user_id: UUID,
     ) -> AnalysisBatch | None:
         """Mark a batch as completed and compute aggregate statistics.
 
-        Aggregates are computed from all child AnalysisImage rows that have
-        status='completed'. Images with status='failed' are excluded from
-        aggregates but counted in total_image_count.
+        Only images with status='completed' contribute. Mutates ``batch`` in place.
         """
         # Global mean over all detected boxes:
         #   sum(avg_confidence_i * count_i) / sum(count_i)
@@ -216,7 +214,7 @@ class AnalysisService:
                 ).label("conf_weighted"),
                 func.coalesce(func.sum(AnalysisImage.elapsed_secs), 0).label("total_elapsed"),
             )
-            .where(AnalysisImage.batch_id == batch_id)
+            .where(AnalysisImage.batch_id == batch.id)
             .where(AnalysisImage.status == "completed")
         )
         result = await db.execute(stmt)
@@ -244,13 +242,12 @@ class AnalysisService:
         await db.flush()
         await db.refresh(batch)
         logger.info(
-            "Analysis batch completed",
+            "Analysis batch finished (saved to records)",
             extra={
                 "context": {
                     "batch_id": str(batch_id),
                     "total_count": batch.total_count,
                     "avg_confidence": batch.avg_confidence,
-                    "total_elapsed_secs": batch.total_elapsed_secs,
                 }
             },
         )
@@ -395,6 +392,9 @@ class AnalysisService:
             search: Optional substring. ILIKE match against batch ``name`` OR
                 any child image's ``original_filename``.
             organism: Optional organism type filter.
+            statuses: Restrict to the given status values (e.g.
+                ``["completed"]`` for the Records list, ``["draft"]`` for a
+                drafts view). ``None`` returns every status.
         """
         # Base count query — always scoped to this user.
         count_stmt = select(func.count(AnalysisBatch.id)).where(
@@ -412,6 +412,10 @@ class AnalysisService:
         if organism:
             count_stmt = count_stmt.where(AnalysisBatch.organism_type == organism)
             batch_stmt = batch_stmt.where(AnalysisBatch.organism_type == organism)
+
+        if statuses:
+            count_stmt = count_stmt.where(AnalysisBatch.status.in_(statuses))
+            batch_stmt = batch_stmt.where(AnalysisBatch.status.in_(statuses))
 
         if search:
             # Match the search string against the batch name OR any image's
@@ -606,7 +610,8 @@ class AnalysisService:
         agg_result = await db.execute(agg_stmt)
         agg_row = agg_result.one()
 
-        # Recent analyses
+        # Recent analyses — only saved batches (drafts are hidden from home
+        # and Records until the operator clicks Finish).
         recent_stmt = (
             select(AnalysisBatch)
             .where(AnalysisBatch.user_id == user_id)

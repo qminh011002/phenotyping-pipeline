@@ -184,9 +184,14 @@ export async function addImageResult(
   return http.post<{ status: string; batch_id: string }>(`analyses/${batchId}/images`, data);
 }
 
-/** POST /analyses/{batch_id}/complete — mark batch as completed */
+/** POST /analyses/{batch_id}/complete — finish processing; batch enters 'draft' state */
 export async function completeBatch(batchId: string): Promise<AnalysisBatchDetail> {
   return http.post<AnalysisBatchDetail>(`analyses/${batchId}/complete`);
+}
+
+/** POST /analyses/{batch_id}/finish — save a draft to Records (draft → completed) */
+export async function finishBatch(batchId: string): Promise<AnalysisBatchDetail> {
+  return http.post<AnalysisBatchDetail>(`analyses/${batchId}/finish`);
 }
 
 /** GET /analyses/active — get the currently-processing batch */
@@ -205,12 +210,17 @@ export async function listAnalyses(params: {
   pageSize?: number;
   q?: string;
   organism?: string;
+  /** Restrict to the given statuses. Records page passes ["completed"]. */
+  statuses?: string[];
 }): Promise<AnalysisListResponse> {
   const qs = new URLSearchParams();
   if (params.page !== undefined) qs.set("page", String(params.page));
   if (params.pageSize !== undefined) qs.set("page_size", String(params.pageSize));
   if (params.q) qs.set("q", params.q);
   if (params.organism) qs.set("organism", params.organism);
+  if (params.statuses && params.statuses.length > 0) {
+    for (const s of params.statuses) qs.append("status", s);
+  }
   const query = qs.toString();
   return http.get<AnalysisListResponse>(`analyses${query ? `?${query}` : ""}`);
 }
