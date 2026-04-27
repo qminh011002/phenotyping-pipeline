@@ -195,6 +195,7 @@ def _build_test_app():
     _mock_registry.device = "cpu"
     _mock_registry.cuda_available = False
     _mock_registry.uptime_seconds = 3600.5
+    _mock_registry.models_status = {"egg": "loaded"}
 
     # ── Mock log buffer ────────────────────────────────────────────────────
     _mock_log_buffer = MagicMock()
@@ -257,6 +258,13 @@ def _build_test_app():
             return self._row
 
     _main_mod.app.dependency_overrides[_deps_mod.get_app_settings_service] = _MockAppSettingsService
+
+    # Bypass JWT auth — every batch-touching route depends on get_current_user.
+    import uuid as _uuid
+    _fake_user = MagicMock()
+    _fake_user.id = _uuid.uuid4()
+    _fake_user.email = "e2e@example.com"
+    _main_mod.app.dependency_overrides[_deps_mod.get_current_user] = lambda: _fake_user
 
     # ── Mock pipeline config ────────────────────────────────────────────────
     from app.schemas.config import EggConfig

@@ -49,6 +49,7 @@ def app():
     _mock_registry.device = "cpu"
     _mock_registry.cuda_available = False
     _mock_registry.uptime_seconds = 3600.5
+    _mock_registry.models_status = {"egg": "loaded"}
 
     _mock_log_buffer = MagicMock()
 
@@ -61,9 +62,37 @@ def app():
     _deps_mod._executor = _mock_executor
     _deps_mod._inference_service = _mock_inference_svc
 
+    # Bypass JWT auth in all router tests by overriding the dependency.
+    import uuid as _uuid
+    from app.deps import get_current_user as _get_current_user
+
+    _fake_user = MagicMock()
+    _fake_user.id = _uuid.uuid4()
+    _fake_user.email = "test@example.com"
+    _main_mod.app.dependency_overrides[_get_current_user] = lambda: _fake_user
+
+    # Mock the DB session so routes that depend on it don't hit a real DB.
+    import app.database as _db_mod
+
+    _mock_session = MagicMock()
+    _mock_session.execute = AsyncMock()
+    _mock_session.commit = AsyncMock()
+    _mock_session.rollback = AsyncMock()
+    _mock_session.add = MagicMock()
+    _mock_session.delete = MagicMock()
+    _mock_session.flush = AsyncMock()
+    _mock_session.refresh = AsyncMock()
+
+    async def _mock_get_session():
+        yield _mock_session
+
+    _main_mod.app.dependency_overrides[_db_mod.get_session] = _mock_get_session
+
     yield _main_mod.app
 
-    # Restore lifespan
+    # Restore lifespan and clear overrides
+    _main_mod.app.dependency_overrides.pop(_get_current_user, None)
+    _main_mod.app.dependency_overrides.pop(_db_mod.get_session, None)
     _main_mod.app.router.lifespan_context = _original_lifespan
 
 
