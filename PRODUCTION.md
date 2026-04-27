@@ -20,6 +20,60 @@ So the monorepo stays easy to keep in sync, but CI avoids unnecessary component 
 
 ---
 
+## Start here: what to configure first
+
+Start from the **repo root on your laptop**, not from the server:
+
+```bash
+cd /home/minhtq/company_projects/phenotyping-ecosystem
+```
+
+This guide is ordered so you first prepare the project files, then prepare the server, then connect them with GitHub Actions. Use this as the quick map:
+
+| Order | Where | Files / folders | What you configure |
+|---:|---|---|---|
+| 1 | Repo root | `PRODUCTION.md`, `.gitignore` | Read this guide, then fix ignore rules so env templates can be committed safely. |
+| 2 | `backend/` | `.env.development`, `.env.production`, `Dockerfile`, `gunicorn.conf.py`, `.dockerignore` | Backend runtime contract, production image, process settings, and image build exclusions. |
+| 3 | `phenotyping-client/` | `.env.development`, `.env.production`, `package-lock.json`, `Dockerfile`, `nginx.conf`, `.dockerignore` | Frontend build contract, static nginx image, and npm lockfile. |
+| 4 | Repo root | `docker-compose.prod.yml` | Production app stack: backend + frontend containers. Production Postgres runs on Ubuntu, not here. |
+| 5 | Repo root | `.github/workflows/ci.yml`, `.github/workflows/deploy.yml` | CI path filtering, Docker smoke test, GHCR image build/push, and server deploy. |
+| 6 | Ubuntu server | `/etc/phenotyping/.env.production`, `/opt/phenotyping/.env`, `/var/lib/phenotyping/overlays` | Real production secrets, image tag, and persistent overlay storage. |
+| 7 | Ubuntu server | system packages + services | Install Postgres, Docker, nginx, UFW, and the self-hosted GitHub Actions runner. |
+| 8 | GitHub UI | branch rules + runner registration | Require `ci-success`, register the runner, then merge through PRs only. |
+
+The important split:
+
+```text
+Repo files you commit:
+  backend/Dockerfile
+  backend/gunicorn.conf.py
+  backend/.env.production              # template only, no real secrets
+  phenotyping-client/Dockerfile
+  phenotyping-client/nginx.conf
+  phenotyping-client/.env.production   # build placeholder only
+  docker-compose.prod.yml
+  .github/workflows/ci.yml
+  .github/workflows/deploy.yml
+
+Server files you never commit:
+  /etc/phenotyping/.env.production     # real backend secrets
+  /opt/phenotyping/.env                # IMAGE_TAG for Docker Compose
+```
+
+If you are setting this up from zero, follow the numbered guide in this order:
+
+1. §3 — define env files and generate secrets.
+2. §4 — add backend Docker production files.
+3. §5 — add frontend Docker/nginx production files.
+4. §6 — add `docker-compose.prod.yml`.
+5. §7 and §8 — prepare the Ubuntu server and host nginx.
+6. §9 — add CI/CD workflows and branch protection.
+7. §11 — use the day-to-day PR workflow.
+
+Do not start by editing files under `/opt/phenotyping` manually. That directory is the server's deployment checkout and gets synced from `main` by the deploy workflow. Start in the repo, commit the files, push a branch, open a PR, and let CI/CD move the server forward.
+
+---
+
 ## 0. What this guide assumes
 
 - **Deployment scope**: **internal LAN only**. No public internet exposure. Users on the company network reach the app at `http://192.168.x.x` (or whatever LAN IP the server has). No DNS, no HTTPS, no public certs.
