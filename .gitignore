@@ -78,6 +78,7 @@ uvicorn.log*
 # ==========================================
 # Cursor / Agent artifacts
 # ==========================================
+.codex
 .cursor/
 .claude/
 .agent/
@@ -94,6 +95,12 @@ Production Deployment Guide.html
 phenotyping_pipeline/
 
 # ==========================================
+# Local dev-only scripts and compose
+# ==========================================
+dev.sh
+docker-compose.yml
+
+# ==========================================
 # Task docs (not source code)
 # ==========================================
 tasks/
@@ -108,3 +115,4 @@ SETUP.md
 *.md
 !*.md
 PRODUCTION.md
+CLAUDE.md

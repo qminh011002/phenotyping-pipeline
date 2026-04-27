@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.parcel-cache/
+.vite/
+src-tauri/target/
+
+# Local env files (gitignored anyway, but be defensive)
+.env
+.env.local
+.env.*.local
+
+# Tests / IDE
+__tests__/
+.vscode/
+.idea/
+
+# Logs
+*.log
