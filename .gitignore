@@ -79,8 +79,19 @@ uvicorn.log*
 # Cursor / Agent artifacts
 # ==========================================
 .cursor/
+.claude/
 .agent/
 agent-transcripts/
+
+# ==========================================
+# Local production guide exports
+# ==========================================
+Production Deployment Guide.html
+
+# ==========================================
+# External/reference pipeline checkout
+# ==========================================
+phenotyping_pipeline/
 
 # ==========================================
 # Task docs (not source code)
@@ -96,3 +107,4 @@ README.md
 SETUP.md
 *.md
 !*.md
+PRODUCTION.md
