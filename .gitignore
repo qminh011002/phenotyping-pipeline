@@ -21,7 +21,8 @@ backend/data/results/*
 backend/data/overlays/*
 !backend/data/results/.gitkeep
 !backend/data/overlays/.gitkeep
-backend/alembic.ini
+# alembic.ini intentionally tracked — sqlalchemy.url is empty and the real
+# DATABASE_URL is read at runtime from env via alembic/env.py.
 
 # ==========================================
 # Node / pnpm
