@@ -48,6 +48,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Make entrypoint executable (in case host filesystem stripped the +x bit).
 RUN chmod +x /app/scripts/entrypoint.sh
 
+# Runtime data is written by the non-root app user:
+# - /data/inference_config.yaml is seeded on first startup
+# - /data/models/... stores default/custom model weights
+# - /data/overlays/... stores generated overlay images
+RUN mkdir -p /data/models /data/overlays && chown -R app:app /data
+
 # ── Step 6: drop privileges ──────────────────────────────────────────────────
 USER app
 
