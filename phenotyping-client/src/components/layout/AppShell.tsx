@@ -36,9 +36,9 @@ export function AppShell() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-svh min-h-0 overflow-hidden">
       <Sidebar />
-      <SidebarInset className="h-svh min-h-0 overflow-hidden bg-background md:m-2 md:rounded-lg">
+      <SidebarInset className="h-svh min-h-0 overflow-hidden bg-background md:m-2 md:h-[calc(100svh-1rem)] md:rounded-lg">
         <div className="flex h-12 shrink-0 items-center gap-2 bg-background px-3">
           <SidebarTrigger />
           <div className="h-4 w-px bg-border" />
@@ -46,7 +46,7 @@ export function AppShell() {
             {shellTitle}
           </div>
         </div>
-        <main className="relative flex-1 overflow-hidden">
+        <main className="relative min-h-0 flex-1 overflow-hidden">
           <AnimatePresence initial={false}>
             <MotionPage key={location.pathname}>
               <Outlet />

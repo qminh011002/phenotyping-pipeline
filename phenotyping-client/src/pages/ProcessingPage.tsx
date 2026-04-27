@@ -38,9 +38,9 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
     return (
         <section className="mt-8 w-[min(48rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-card text-left shadow-sm">
             <div className="flex h-14 items-center gap-3 border-b bg-muted/20 px-6">
-                <span className="relative flex h-4 w-4" aria-hidden>
+                <span className="relative flex items-center h-3.5 w-3.5" aria-hidden>
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-40" />
-                    <span className="relative inline-flex h-4 w-4 rounded-full bg-green-500" />
+                    <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-green-500" />
                 </span>
                 <span className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Live Log
@@ -48,7 +48,7 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
             </div>
             <div
                 ref={scrollRef}
-                className="max-h-52 overflow-y-auto bg-slate-950 px-6 py-4 font-mono text-sm leading-7 text-slate-300"
+                className="max-h-52 overflow-y-auto bg-black px-6 py-4 font-mono text-sm leading-7 text-slate-300"
             >
                 {logs.length === 0 ? (
                     <div className="text-slate-500">Waiting for processing events...</div>

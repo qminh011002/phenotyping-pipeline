@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Env files — track committed defaults (.env, .env.development, .env.production, .env.example)
+# but ignore per-machine overrides (*.local) which Vite loads with highest precedence.
+.env.local
+.env.*.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

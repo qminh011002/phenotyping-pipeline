@@ -16,10 +16,10 @@ import { Microscope, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { BatchCard } from "./BatchCard";
-import type { AnalysisBatchSummary } from "@/types/api";
+import type { RecordedBatchSummary } from "../hooks/useRecorded";
 
 interface BatchListProps {
-  batches: AnalysisBatchSummary[];
+  batches: RecordedBatchSummary[];
   page: number;
   totalPages: number;
   loading: boolean;
@@ -31,35 +31,27 @@ interface BatchListProps {
 
 function SkeletonCard() {
   return (
-    <div className="flex min-h-[210px] flex-col gap-4 rounded-lg bg-card/80 px-4 py-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Skeleton className="size-9 rounded-md" />
-          <Skeleton className="h-4 w-12" />
-        </div>
-        <Skeleton className="h-4 w-24" />
-      </div>
-      <div className="space-y-2">
-        <Skeleton className="h-5 w-3/4" />
-        <Skeleton className="h-3 w-1/2" />
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-md bg-muted/45 p-3">
-          <Skeleton className="h-3 w-10" />
-          <Skeleton className="mt-2 h-6 w-8" />
-        </div>
-        <div className="rounded-md bg-muted/45 p-3">
-          <Skeleton className="h-3 w-8" />
-          <Skeleton className="mt-2 h-6 w-12" />
-        </div>
-        <div className="rounded-md bg-muted/45 p-3">
-          <Skeleton className="h-3 w-8" />
-          <Skeleton className="mt-2 h-6 w-10" />
+    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card/80 px-3.5 py-3.5 shadow-sm">
+      <div className="flex shrink-0 items-start gap-3">
+        <Skeleton className="size-16 shrink-0 rounded-md" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Skeleton className="h-5 w-24 rounded-md" />
+            <Skeleton className="size-7 rounded-md" />
+          </div>
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-3 w-1/2" />
         </div>
       </div>
-      <div className="mt-auto flex items-center gap-2">
-        <Skeleton className="h-5 w-14 rounded-md" />
-        <Skeleton className="ml-auto h-1.5 w-20 rounded-full" />
+      <div className="mt-4 flex min-w-0 shrink-0 items-start gap-2">
+        <Skeleton className="mt-2 size-2 shrink-0 rounded-full" />
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 overflow-hidden">
+          <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
+          <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
+          <Skeleton className="h-6 w-16 shrink-0 rounded-md" />
+          <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
+          <Skeleton className="h-6 w-12 shrink-0 rounded-md" />
+        </div>
       </div>
     </div>
   );
@@ -112,7 +104,7 @@ export function BatchList({
 
   if (loading) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-4">
         {Array.from({ length: 6 }).map((_, i) => (
           <SkeletonCard key={i} />
         ))}
@@ -142,10 +134,10 @@ export function BatchList({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-4">
         {batches.map((batch) => (
           itemVariants ? (
-            <motion.div key={batch.id} variants={itemVariants}>
+            <motion.div key={batch.id} variants={itemVariants} className="h-full">
               <BatchCard batch={batch} onDelete={onDelete} />
             </motion.div>
           ) : (
