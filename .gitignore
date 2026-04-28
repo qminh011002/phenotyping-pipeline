@@ -109,6 +109,17 @@ ROADMAP.md
 IMPLEMENTATION_ORDER.md
 
 # ==========================================
+# Model weights — never commit (large binaries, server-managed)
+# Weights live on the server at /var/lib/phenotyping/models/, not in git.
+# ==========================================
+*.pt
+*.pth
+*.onnx
+*.engine
+data/models/
+backend/data/
+
+# ==========================================
 # Docs (not source code)
 # ==========================================
 README.md
