@@ -110,15 +110,19 @@ jobs:
         working-directory: /opt/phenotyping
         env:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          REGISTRY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          # Persist the tag so subsequent `docker compose` calls use it.
+          # Persist tag + registry owner so subsequent `docker compose` calls use them.
           touch .env
-          if grep -q '^IMAGE_TAG=' .env; then
-            sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" .env
-          else
-            echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
-          fi
+          for var in IMAGE_TAG REGISTRY_OWNER; do
+            val="${!var}"
+            if grep -q "^${var}=" .env; then
+              sed -i "s|^${var}=.*|${var}=${val}|" .env
+            else
+              echo "${var}=${val}" >> .env
+            fi
+          done
 
           docker compose -f docker-compose.prod.yml pull
           docker compose -f docker-compose.prod.yml run --rm -e SKIP_MIGRATIONS=1 backend alembic upgrade head
