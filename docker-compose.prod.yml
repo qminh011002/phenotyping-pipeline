@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/qminh01102002/phenotyping-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/${REGISTRY_OWNER:-qminh011002}/phenotyping-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     network_mode: host
     env_file:
@@ -13,7 +13,7 @@ services:
       - /var/lib/phenotyping/overlays:/data/overlays
 
   frontend:
-    image: ghcr.io/qminh01102002/phenotyping-frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/${REGISTRY_OWNER:-qminh011002}/phenotyping-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
