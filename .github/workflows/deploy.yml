@@ -124,7 +124,24 @@ jobs:
             fi
           done
 
-          docker compose -f docker-compose.prod.yml pull
+          # Retry pull with exponential backoff. ghcr.io connection resets are
+          # common on the company network, especially mid-layer for large images.
+          # Docker resumes from where it left off on retry.
+          pull_ok=0
+          for attempt in 1 2 3 4 5; do
+            if docker compose -f docker-compose.prod.yml pull; then
+              pull_ok=1
+              break
+            fi
+            sleep_for=$((attempt * 15))
+            echo "::warning::pull attempt $attempt failed; retrying in ${sleep_for}s"
+            sleep "$sleep_for"
+          done
+          if [ "$pull_ok" -ne 1 ]; then
+            echo "::error::docker compose pull failed after 5 attempts"
+            exit 1
+          fi
+
           # TEMP: skipping alembic upgrade — schema was provisioned manually via schema_full.sql.
           # Re-enable once we're back on a fully alembic-managed schema:
           #   docker compose -f docker-compose.prod.yml run --rm -e SKIP_MIGRATIONS=1 backend alembic upgrade head
