@@ -29,22 +29,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd --create-home --shell /bin/bash app
 WORKDIR /app
 
-# ── Step 4: copy app source + metadata, then install ────────────────────────
-# Hatchling's wheel build (declared in pyproject.toml under [tool.hatch.build...])
-# requires the `app/` directory to exist at install time, so we copy code first
-# and install second. To keep the install fast on rebuilds, we mount BuildKit's
-# pip cache so wheels are reused across layer invalidations.
+# ── Step 4a: install third-party deps FIRST ──────────────────────────────────
+# Splitting deps install from source copy means: changing app/ code doesn't
+# invalidate the (~1 GB) torch/ultralytics layer. Only a pyproject.toml change
+# busts this cache.
 COPY pyproject.toml ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print('\n'.join(d['project']['dependencies']))" > /tmp/requirements.txt && \
+    pip install -r /tmp/requirements.txt
+
+# ── Step 4b: copy source (the layer that actually changes per commit) ────────
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY gunicorn.conf.py ./
 COPY scripts ./scripts
 
+# ── Step 4c: install the local package itself (deps already satisfied) ───────
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
-    pip install .
+    pip install --no-deps .
 
 # Make entrypoint executable (in case host filesystem stripped the +x bit).
 RUN chmod +x /app/scripts/entrypoint.sh
