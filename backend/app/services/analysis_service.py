@@ -392,6 +392,7 @@ class AnalysisService:
         organism: str | None,
         db: AsyncSession,
         user_id: UUID,
+        statuses: list[str] | None = None,
     ) -> AnalysisListResponse:
         """Return a paginated list of analysis batches.
 
@@ -401,6 +402,8 @@ class AnalysisService:
             search: Optional substring. ILIKE match against batch ``name`` OR
                 any child image's ``original_filename``.
             organism: Optional organism type filter.
+            statuses: Optional list of status values to include (e.g.
+                ``["completed", "failed"]``). When None, no status filter.
         """
         # Base count query — always scoped to this user.
         count_stmt = select(func.count(AnalysisBatch.id)).where(
@@ -418,6 +421,10 @@ class AnalysisService:
         if organism:
             count_stmt = count_stmt.where(AnalysisBatch.organism_type == organism)
             batch_stmt = batch_stmt.where(AnalysisBatch.organism_type == organism)
+
+        if statuses:
+            count_stmt = count_stmt.where(AnalysisBatch.status.in_(statuses))
+            batch_stmt = batch_stmt.where(AnalysisBatch.status.in_(statuses))
 
         if search:
             # Match the search string against the batch name OR any image's

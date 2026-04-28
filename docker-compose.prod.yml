@@ -11,6 +11,8 @@ services:
       GUNICORN_WORKERS: "2"
     volumes:
       - /var/lib/phenotyping/overlays:/data/overlays
+      - /var/lib/phenotyping/models:/data/models
+      - /var/lib/phenotyping/inference_config.yaml:/data/inference_config.yaml
 
   frontend:
     image: ghcr.io/${REGISTRY_OWNER:-qminh011002}/phenotyping-frontend:${IMAGE_TAG:-latest}
