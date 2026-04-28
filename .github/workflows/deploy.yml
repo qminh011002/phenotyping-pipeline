@@ -63,6 +63,9 @@ jobs:
     # docker compose locally. The runner service is configured to run as the
     # `admin01` user with docker group membership.
     runs-on: [self-hosted, phenotyping-prod]
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -81,6 +84,7 @@ jobs:
           # so the production directory tracks main.
           sudo -n rsync -a --delete \
             --exclude='.git' \
+            --exclude='.env' \
             --exclude='node_modules' \
             --exclude='__pycache__' \
             "$GITHUB_WORKSPACE/" /opt/phenotyping/
@@ -92,6 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           # Persist the tag so subsequent `docker compose` calls use it.
+          touch .env
           if grep -q '^IMAGE_TAG=' .env; then
             sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" .env
           else
