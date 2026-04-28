@@ -98,21 +98,6 @@ export interface HealthResponse {
   models_status: Partial<Record<Organism, ModelStatus>>;
 }
 
-// ── App Settings ─────────────────────────────────────────────────────────────
-
-export interface AppSettingsResponse {
-  image_storage_dir: string;
-  data_dir: string;
-}
-
-export interface StorageSettingsResponse {
-  image_storage_dir: string;
-}
-
-export interface StorageSettingsUpdate {
-  image_storage_dir: string;
-}
-
 // ── Analyses ─────────────────────────────────────────────────────────────────
 
 export interface AnalysisImageSummary {

@@ -939,15 +939,3 @@ class TestSettingsJourney:
         assert "image_storage_dir" in data
         assert isinstance(data["image_storage_dir"], str)
 
-    @pytest.mark.asyncio
-    async def test_update_storage_settings_validates_parent_exists(self, app):
-        """PUT /settings/storage with non-existent parent returns 422."""
-        _main_mod, _, _ = app
-
-        transport = ASGITransport(app=_main_mod)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            response = await ac.put(
-                "/settings/storage",
-                json={"image_storage_dir": "/nonexistent/path/that/does/not/exist"},
-            )
-        assert response.status_code == 422

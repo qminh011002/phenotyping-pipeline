@@ -86,12 +86,26 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to GHCR (with retry)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          login_ok=0
+          for attempt in 1 2 3 4 5; do
+            if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin; then
+              login_ok=1
+              break
+            fi
+            sleep_for=$((attempt * 15))
+            echo "::warning::ghcr login attempt $attempt failed; retrying in ${sleep_for}s"
+            sleep "$sleep_for"
+          done
+          if [ "$login_ok" -ne 1 ]; then
+            echo "::error::ghcr login failed after 5 attempts"
+            exit 1
+          fi
 
       - name: Pull latest code into /opt/phenotyping
         run: |
