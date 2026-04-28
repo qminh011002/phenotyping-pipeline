@@ -94,9 +94,17 @@ class TestSingleInference:
 
     @pytest.mark.asyncio
     async def test_upload_with_batch_id_query_param(self, inference_client, tiny_png_bytes):
-        """batch_id query param is accepted without error."""
+        """batch_id query param is accepted without error.
+
+        The route now validates that ``batch_id`` is a UUID and is owned by the
+        current user (BE-020), so we send a real UUID. The mocked DB session in
+        ``conftest.py`` returns a truthy MagicMock from ``scalar_one_or_none``
+        which the ownership check treats as "batch found".
+        """
+        import uuid as _uuid
+        bid = _uuid.uuid4()
         response = await inference_client.post(
-            "/inference/egg?batch_id=abc-123",
+            f"/inference/egg?batch_id={bid}",
             files={"file": ("plate.png", tiny_png_bytes, "image/png")},
         )
         assert response.status_code == 200

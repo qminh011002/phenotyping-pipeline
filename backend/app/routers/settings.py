@@ -17,15 +17,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import BACKEND_ENV_FILE
+from app.database import get_session
 from app.deps import get_app_settings_service
-from app.database import AsyncSession, get_session
-from app.services.app_settings_service import AppSettingsService
 from app.schemas.health import (
     AppSettingsResponse,
     AppSettingsUpdate,
     StorageSettingsResponse,
     StorageSettingsUpdate,
 )
+from app.services.app_settings_service import AppSettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _validate_storage_path(path: str) -> Path:
     """Validate and return an absolute Path for image_storage_dir.
@@ -106,6 +107,7 @@ def _persist_to_env(key: str, value: str) -> None:
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+
 @router.get(
     "",
     response_model=AppSettingsResponse,
@@ -152,6 +154,7 @@ async def update_settings(
 
     # Invalidate the cached storage_dir so inference/overlay readers pick up the new path
     from app.deps import invalidate_storage_dir_cache
+
     invalidate_storage_dir_cache()
 
     logger.info(
@@ -207,6 +210,7 @@ async def update_storage_settings(
     row = await svc.update_storage_dir(db=db, new_dir=str(resolved))
 
     from app.deps import invalidate_storage_dir_cache
+
     invalidate_storage_dir_cache()
 
     logger.info(

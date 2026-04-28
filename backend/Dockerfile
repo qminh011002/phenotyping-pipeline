@@ -45,6 +45,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install .
 
+# Make entrypoint executable (in case host filesystem stripped the +x bit).
+RUN chmod +x /app/scripts/entrypoint.sh
+
+# Runtime data is written by the non-root app user:
+# - /data/inference_config.yaml is seeded on first startup
+# - /data/models/... stores default/custom model weights
+# - /data/overlays/... stores generated overlay images
+RUN mkdir -p /data/models /data/overlays && chown -R app:app /data
+
 # ── Step 6: drop privileges ──────────────────────────────────────────────────
 USER app
 
@@ -58,6 +67,11 @@ ENV APP_ENV=production
 # Hits the FastAPI /health route which already exists at app/routers/health.py.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
+
+# Entrypoint runs `alembic upgrade head` then execs CMD. Keep CMD separate so it
+# can still be overridden (e.g. for one-off shells: `docker run ... bash`).
+# Set SKIP_MIGRATIONS=1 when running additional replicas that should NOT migrate.
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
 # Start under Gunicorn. Config (workers, timeouts, logging) lives in gunicorn.conf.py
 # so you can tune without rebuilding the image (just bump GUNICORN_WORKERS env var).

@@ -38,7 +38,7 @@ def temp_pipeline_config(tmp_path):
     }
     config_path.write_text(yaml.safe_dump(initial))
 
-    return PipelineConfigManager(pipeline_root=config_dir)
+    return PipelineConfigManager(data_dir=tmp_path / "data", pipeline_root=config_dir)
 
 
 @pytest_asyncio.fixture

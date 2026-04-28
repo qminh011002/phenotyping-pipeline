@@ -44,10 +44,10 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: /new analysis/i })).not.toBeInTheDocument();
   });
 
-  it("renders the brand link, 3 navigation links, and footer links", () => {
+  it("renders the brand link, create link, 3 navigation links, and footer links", () => {
     renderSidebar();
     const links = screen.getAllByRole("link");
-    expect(links).toHaveLength(6);
+    expect(links).toHaveLength(7);
   });
 
   it("marks the current route active", () => {

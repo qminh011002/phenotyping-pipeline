@@ -10,14 +10,17 @@ from __future__ import annotations
 
 class ModelNotLoadedError(Exception):
     """Raised when inference is attempted before the YOLO model is loaded."""
+
     pass
 
 
 class InvalidImageError(Exception):
     """Raised when an uploaded image is corrupt or has an unsupported format."""
+
     pass
 
 
 class InferenceFailedError(Exception):
     """Raised when the inference pipeline raises an unexpected exception."""
+
     pass

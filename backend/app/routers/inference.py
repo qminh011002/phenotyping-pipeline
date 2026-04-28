@@ -11,15 +11,7 @@ import uuid
 from pathlib import PurePath
 from typing import Annotated
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    HTTPException,
-    Query,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select as _select
 
 from app.database import AsyncSession, get_session
@@ -118,8 +110,12 @@ async def run_single_inference(
     inference_svc: AnnotatedEggInferenceService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-    file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
-    batch_id: Annotated[str | None, Query(description="Optional batch ID for overlay path")] = None,
+    file: Annotated[
+        UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")
+    ],
+    batch_id: Annotated[
+        str | None, Query(description="Optional batch ID for overlay path")
+    ] = None,
 ) -> DetectionResult:
     """Run egg detection on a single uploaded image.
 
@@ -212,8 +208,12 @@ async def run_single_neonate_inference(
     inference_svc: AnnotatedNeonateInferenceService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-    file: Annotated[UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")],
-    batch_id: Annotated[str | None, Query(description="Optional batch ID for overlay path")] = None,
+    file: Annotated[
+        UploadFile, File(description="Image file to analyze (JPG, PNG, TIFF, BMP)")
+    ],
+    batch_id: Annotated[
+        str | None, Query(description="Optional batch ID for overlay path")
+    ] = None,
 ) -> DetectionResult:
     """Run neonate detection on a single uploaded image."""
     stem = _validate_extension(file.filename or "unknown")
@@ -247,9 +247,13 @@ async def run_single_neonate_inference(
     try:
         result = await inference_svc.process_single(data, stem, resolved_batch_id)
     except InvalidImageError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except ModelNotLoadedError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     except Exception as exc:
         logger.exception(
             "Neonate inference failed for %s",
@@ -333,9 +337,13 @@ async def run_batch_neonate_inference(
     try:
         result = await inference_svc.process_batch(validated, batch_id)
     except InvalidImageError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except ModelNotLoadedError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        ) from exc
     except Exception as exc:
         logger.exception(
             "Neonate batch inference failed (%d files)",
@@ -348,6 +356,7 @@ async def run_batch_neonate_inference(
         ) from exc
 
     return result
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /inference/egg/batch

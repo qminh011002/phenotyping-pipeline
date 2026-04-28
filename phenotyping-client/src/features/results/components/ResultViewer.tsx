@@ -1,8 +1,8 @@
 // ResultViewer — full page for viewing inference results.
 // Renders the RAW uploaded image (from the browser blob URL stored in
 // sessionStorage) with client-side bbox overlays drawn from
-// result.annotations. The backend-generated overlay PNG is never
-// displayed directly — ZIP export from /recorded uses it.
+// result.annotations. The backend-generated overlay PNG is only used
+// for the Download button — never displayed.
 //
 // Annotation Editor (FS-009):
 // - "Edit" toggle in header activates the AnnotationEditor slot.
@@ -31,14 +31,13 @@ import {
 } from '@/features/upload/lib/processingSession';
 import { consumeStartIndex } from '@/features/recorded/lib/openBatchInResults';
 import {
-    getAnalysesOverlayUrl,
+    finishBatch,
     getAnalysesRawUrl,
     getAnalysisDetail,
     putEditedAnnotations,
     renameBatch,
     resetEditedAnnotations,
 } from '@/services/api';
-import { http } from '@/services/http';
 import { cn } from '@/lib/utils';
 
 import { boxesEqual } from '../lib/bboxMath';
@@ -91,6 +90,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         future: [],
     });
     const [savingEdits, setSavingEdits] = useState(false);
+    const [finishing, setFinishing] = useState(false);
     const [resetDialogOpen, setResetDialogOpen] = useState(false);
     const [dirtyNavDialogOpen, setDirtyNavDialogOpen] = useState(false);
     const [quitDialogOpen, setQuitDialogOpen] = useState(false);
@@ -350,14 +350,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [editMode, selectedIdx, sessionBoxes, editorTool, isDirty, savingEdits, handleSaveEdits]);
 
-    // ── Overlay download URL ─────────────────────────────────────────────────
-    const overlayDownloadSrc = useMemo(() => {
-        if (!currentResult || !batchDetail) return '';
-        const imageRecord = currentImageRecord;
-        if (!imageRecord || !imageRecord.overlay_path) return '';
-        return getAnalysesOverlayUrl(batchDetail.id, imageRecord.id);
-    }, [currentResult, batchDetail, currentImageRecord]);
-
     // ── Raw image URL ───────────────────────────────────────────────────────
     const rawSrc = useMemo(() => {
         if (!currentResult) return '';
@@ -426,33 +418,22 @@ export function ResultViewer({ className }: ResultViewerProps) {
         setSelectedIdx(null);
     }, []);
 
-    const handleSaveToRecords = useCallback(() => {
-        const detail = loadBatchDetail();
-        if (detail) {
-            navigate(`/recorded?batch=${detail.id}`);
-            return;
+    const handleFinish = useCallback(async () => {
+        if (!batchDetail || finishing) return;
+        setFinishing(true);
+        try {
+            const updated = await finishBatch(batchDetail.id);
+            const nextDetail = { ...batchDetail, status: updated.status };
+            setBatchDetail(nextDetail);
+            storeBatchDetail(nextDetail);
+            toast.success('Saved to Records');
+            navigate(`/recorded?batch=${batchDetail.id}`);
+        } catch {
+            toast.error('Failed to save to Records');
+        } finally {
+            setFinishing(false);
         }
-
-        navigate('/recorded');
-    }, [navigate]);
-
-    const handleDownload = useCallback(() => {
-        if (!currentResult || !overlayDownloadSrc) return;
-
-        http.getBlob(overlayDownloadSrc)
-            .then((blob) => {
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `${currentResult.filename.replace(/\.[^.]+$/, '')}_overlay.png`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-                toast.success('Download started');
-            })
-            .catch(() => toast.error('Failed to download overlay image'));
-    }, [currentResult, overlayDownloadSrc]);
+    }, [batchDetail, finishing, navigate]);
 
     const handleImageDimensions = useCallback(() => {
         // Image dimensions are tracked internally by OverlayImage (Konva).
@@ -496,11 +477,12 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 canEdit={Boolean(batchDetail && currentImageRecord)}
                 editMode={editMode}
                 isDirty={isDirty}
+                isSaved={batchDetail?.status === 'completed'}
+                finishing={finishing}
                 onBack={handleBack}
                 onNavigate={handleNavigate}
                 onRename={handleRenameBatch}
-                onSaveToRecords={handleSaveToRecords}
-                onDownload={handleDownload}
+                onFinish={handleFinish}
             />
 
             <ResultViewerContent

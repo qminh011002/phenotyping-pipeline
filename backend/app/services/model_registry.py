@@ -82,7 +82,9 @@ class ModelRegistry:
                     "torch.set_num_threads=%d (from TORCH_NUM_THREADS)", n_threads
                 )
             except ValueError:
-                logger.warning("Invalid TORCH_NUM_THREADS=%r — using torch default", override)
+                logger.warning(
+                    "Invalid TORCH_NUM_THREADS=%r — using torch default", override
+                )
 
         for organism in VALID_ORGANISMS:
             await self._load_one(
@@ -146,7 +148,9 @@ class ModelRegistry:
                 resolved.path,
                 exc,
                 exc_info=True,
-                extra={"context": {"organism": organism, "model_path": str(resolved.path)}},
+                extra={
+                    "context": {"organism": organism, "model_path": str(resolved.path)}
+                },
             )
             return
 

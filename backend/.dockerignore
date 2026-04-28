@@ -1,29 +1,24 @@
 # Python build artefacts
-
-**pycache**/
-_.pyc
-_.pyo
+__pycache__/
+*.pyc
+*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
 # Virtualenvs (never copy these into the image)
-
 .venv/
 venv/
 
 # Local-only files
-
 .env
 .env.local
-\*.log
+*.log
 data/
 
 # Tests stay out of the production image
-
 tests/
 
 # IDE
-
 .vscode/
 .idea/

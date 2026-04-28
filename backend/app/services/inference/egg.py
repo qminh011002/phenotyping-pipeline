@@ -12,12 +12,11 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import cv2
 import numpy as np
-
-from pathlib import Path
 
 from app.config import PipelineConfigManager
 from app.schemas.detection import BatchDetectionResult, BBox, DetectionResult
@@ -25,6 +24,7 @@ from app.schemas.detection import BatchDetectionResult, BBox, DetectionResult
 if TYPE_CHECKING:
     from ultralytics import YOLO
 
+    from app.schemas.config import EggConfig
     from app.services.log_buffer import LogBuffer
     from app.services.model_registry import ModelRegistry
 
@@ -163,9 +163,7 @@ class EggInferenceService:
 
         return valid_x_min <= cx < valid_x_max and valid_y_min <= cy < valid_y_max
 
-    def _is_box_touching_edge(
-        self, x1: float, y1: float, x2: float, y2: float
-    ) -> bool:
+    def _is_box_touching_edge(self, x1: float, y1: float, x2: float, y2: float) -> bool:
         """Check if a detection box touches the tile edge (within edge_margin pixels).
 
         Adapted from `infer_egg.is_box_touching_edge()`.
@@ -234,9 +232,7 @@ class EggInferenceService:
         return np.array(keep, dtype=int)
 
     @staticmethod
-    def _draw_board(
-        overlay: np.ndarray, lines: list[str], x: int, y: int
-    ) -> int:
+    def _draw_board(overlay: np.ndarray, lines: list[str], x: int, y: int) -> int:
         """Draw a black-background green-text board at (x, y).
 
         Adapted from `infer_egg.draw_board()`.
@@ -263,7 +259,9 @@ class EggInferenceService:
         pad = 14
         line_gap = 10
 
-        sizes = [cv2.getTextSize(l, font, font_scale, thickness)[0] for l in lines]
+        sizes = [
+            cv2.getTextSize(line, font, font_scale, thickness)[0] for line in lines
+        ]
         board_w = max(w for w, _ in sizes) + pad * 2
         board_h = sum(h for _, h in sizes) + line_gap * (len(lines) - 1) + pad * 2
 
@@ -401,9 +399,13 @@ class EggInferenceService:
                     cx = (g[:, 0] + g[:, 2]) * 0.5
                     cy = (g[:, 1] + g[:, 3]) * 0.5
                     valid_x_min = x_off + (half if x_off > 0 else 0)
-                    valid_x_max = (x_off + half + stride) if (x_off + tile_size < w) else w
+                    valid_x_max = (
+                        (x_off + half + stride) if (x_off + tile_size < w) else w
+                    )
                     valid_y_min = y_off + (half if y_off > 0 else 0)
-                    valid_y_max = (y_off + half + stride) if (y_off + tile_size < h) else h
+                    valid_y_max = (
+                        (y_off + half + stride) if (y_off + tile_size < h) else h
+                    )
                     mask = (
                         (cx >= valid_x_min)
                         & (cx < valid_x_max)
@@ -436,7 +438,9 @@ class EggInferenceService:
             cls_ids_arr = np.concatenate(all_cls_ids, axis=0)
 
             if cfg.min_box_area > 0:
-                areas = (boxes_arr[:, 2] - boxes_arr[:, 0]) * (boxes_arr[:, 3] - boxes_arr[:, 1])
+                areas = (boxes_arr[:, 2] - boxes_arr[:, 0]) * (
+                    boxes_arr[:, 3] - boxes_arr[:, 1]
+                )
                 mask = areas >= cfg.min_box_area
                 boxes_arr = boxes_arr[mask]
                 scores_arr = scores_arr[mask]
@@ -656,9 +660,7 @@ class EggInferenceService:
                 on_progress(completed, total)
             return r
 
-        results = await asyncio.gather(
-            *(_one(b, f) for b, f in images)
-        )
+        results = await asyncio.gather(*(_one(b, f) for b, f in images))
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)
@@ -678,4 +680,5 @@ class EggInferenceService:
         falling back to the env default if the DB is unavailable.
         """
         from app.deps import get_cached_storage_dir
+
         return Path(get_cached_storage_dir())

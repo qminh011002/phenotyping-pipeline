@@ -5,7 +5,6 @@ See `.cursor/rules/logging.mdc` for the full architecture specification.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import sys
@@ -68,9 +67,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         context: dict[str, Any] = {
-            k: v
-            for k, v in record.__dict__.items()
-            if k not in self._EXCLUDE
+            k: v for k, v in record.__dict__.items() if k not in self._EXCLUDE
         }
 
         # Merge in safe_extra (reserved LogRecord keys preserved by SafeMakeRecord)
@@ -78,8 +75,9 @@ class JsonFormatter(logging.Formatter):
             context.update(record._safe_extra)
 
         timestamp = (
-            datetime.fromtimestamp(record.created, tz=timezone.utc)
-            .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%f"
+            )[:-3]
             + "Z"
         )
 
@@ -143,10 +141,14 @@ class SafeMakeRecord(logging.Logger):
                     safe_extra[key] = extra.pop(key)
             if safe_extra:
                 # Create record first with sanitized extra
-                record = super().makeRecord(name, level, fn, lno, msg, args, exc_info, func, extra, sinfo)
+                record = super().makeRecord(
+                    name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
+                )
                 record._safe_extra = safe_extra
                 return record
-        return super().makeRecord(name, level, fn, lno, msg, args, exc_info, func, extra, sinfo)
+        return super().makeRecord(
+            name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
+        )
 
 
 # ── RingBufferHandler ──────────────────────────────────────────────────────────

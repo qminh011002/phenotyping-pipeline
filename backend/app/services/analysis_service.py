@@ -150,10 +150,14 @@ class AnalysisService:
             # filesystem format:   "{batch_id}/{filename}_overlay.png"
             url = result.overlay_url.rstrip("/")
             if url.startswith("/inference/results/"):
-                suffix = url.removeprefix("/inference/results/")  # "{batch_id}/{filename}/overlay.png"
+                suffix = url.removeprefix(
+                    "/inference/results/"
+                )  # "{batch_id}/{filename}/overlay.png"
                 # Drop the "/overlay.png" suffix and add "_overlay.png"
                 if suffix.endswith("/overlay.png"):
-                    overlay_path_value = suffix.removesuffix("/overlay.png") + "_overlay.png"
+                    overlay_path_value = (
+                        suffix.removesuffix("/overlay.png") + "_overlay.png"
+                    )
 
         # Verify the batch belongs to the user before inserting the image row.
         batch_stmt = (
@@ -214,7 +218,9 @@ class AnalysisService:
                 func.coalesce(
                     func.sum(AnalysisImage.avg_confidence * AnalysisImage.count), 0
                 ).label("conf_weighted"),
-                func.coalesce(func.sum(AnalysisImage.elapsed_secs), 0).label("total_elapsed"),
+                func.coalesce(func.sum(AnalysisImage.elapsed_secs), 0).label(
+                    "total_elapsed"
+                ),
             )
             .where(AnalysisImage.batch_id == batch_id)
             .where(AnalysisImage.status == "completed")
@@ -568,7 +574,12 @@ class AnalysisService:
 
         logger.info(
             "Analysis batch deleted",
-            extra={"context": {"batch_id": str(batch_id), "overlay_files_deleted": len(overlay_files)}},
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "overlay_files_deleted": len(overlay_files),
+                }
+            },
         )
         return True
 
@@ -592,12 +603,12 @@ class AnalysisService:
             select(
                 func.count(AnalysisImage.id).label("total_images"),
                 func.coalesce(func.sum(AnalysisImage.count), 0).label("total_eggs"),
-                func.coalesce(
-                    func.avg(AnalysisImage.avg_confidence), 0
-                ).label("avg_conf"),
-                func.coalesce(
-                    func.avg(AnalysisImage.elapsed_secs), 0
-                ).label("avg_time"),
+                func.coalesce(func.avg(AnalysisImage.avg_confidence), 0).label(
+                    "avg_conf"
+                ),
+                func.coalesce(func.avg(AnalysisImage.elapsed_secs), 0).label(
+                    "avg_time"
+                ),
             )
             .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
             .where(AnalysisImage.status == "completed")

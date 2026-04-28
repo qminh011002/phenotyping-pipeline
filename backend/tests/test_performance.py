@@ -169,6 +169,13 @@ def _build_test_app():
 
     _main_mod.app.dependency_overrides[_deps_mod.get_app_settings_service] = _MockAppSettingsService
 
+    # Bypass JWT auth on every protected route.
+    import uuid as _uuid
+    _fake_user = MagicMock()
+    _fake_user.id = _uuid.uuid4()
+    _fake_user.email = "perf@example.com"
+    _main_mod.app.dependency_overrides[_deps_mod.get_current_user] = lambda: _fake_user
+
     # ── Mock pipeline config ────────────────────────────────────────────────
     from app.schemas.config import EggConfig
 
@@ -384,25 +391,25 @@ class TestBatchUploadLimits:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestConcurrencyBounds:
-    """Verify inference concurrency handling — Semaphore is created per-call (not shared)."""
+    """Verify inference concurrency handling — Semaphore is owned by the service."""
 
     @pytest.mark.asyncio
-    async def test_semaphore_inside_process_single_is_created_per_call(self):
-        """The Semaphore is instantiated inside process_single, not shared across calls.
-
-        This is a known design: the semaphore limits concurrency WITHIN a single
-        call's thread pool (e.g. bounding the image-decode + inference pipeline),
-        but does NOT bound across concurrent HTTP requests because a fresh
-        Semaphore(1) is created per call.
-        """
+    async def test_semaphore_owned_by_service_and_used_in_process_single(self):
+        """The Semaphore is created once in EggInferenceService.__init__ and acquired
+        inside process_single. This bounds concurrency across all calls (1 on CPU,
+        2 on GPU) — replacing the old per-call Semaphore which did not bound across
+        concurrent HTTP requests."""
         from app.services.inference.egg import EggInferenceService
         import inspect
 
-        # Read the source of process_single to confirm where the Semaphore is created
-        source = inspect.getsource(EggInferenceService.process_single)
-        assert "asyncio.Semaphore" in source, "Semaphore should be in process_single source"
-        assert "semaphore = asyncio.Semaphore" in source, (
-            "Semaphore is created inside process_single — not at class/module level"
+        init_source = inspect.getsource(EggInferenceService.__init__)
+        assert "asyncio.Semaphore" in init_source, (
+            "Semaphore should be created in EggInferenceService.__init__"
+        )
+
+        process_source = inspect.getsource(EggInferenceService.process_single)
+        assert "self._semaphore" in process_source, (
+            "process_single should acquire the service-owned semaphore"
         )
 
     @pytest.mark.asyncio

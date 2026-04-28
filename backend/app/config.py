@@ -46,7 +46,9 @@ class AppSettings(BaseSettings):
             "for ``data/inference_config.yaml`` when the backend has no local copy yet."
         ),
     )
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
+    )
     data_dir: Path = Path("./data")
     image_storage_dir: Path = Field(
         default=Path("./data/overlays"),
@@ -133,7 +135,9 @@ class PipelineConfigManager:
                         exc,
                     )
         with open(self._config_path, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(_BUILTIN_FALLBACK, fh, default_flow_style=False, sort_keys=False)
+            yaml.safe_dump(
+                _BUILTIN_FALLBACK, fh, default_flow_style=False, sort_keys=False
+            )
         logger.info(
             "Seeded %s from builtin defaults (no pipeline config found)",
             self._config_path,

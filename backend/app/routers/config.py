@@ -97,7 +97,13 @@ async def update_config(update: ConfigUpdateRequest) -> EggConfig:
         logger.info(
             "Config updated: %s",
             diff_parts,
-            extra={"context": {"old": old_config.model_dump(), "new": merged.model_dump(), "changed": list(changed_fields.keys())}},
+            extra={
+                "context": {
+                    "old": old_config.model_dump(),
+                    "new": merged.model_dump(),
+                    "changed": list(changed_fields.keys()),
+                }
+            },
         )
 
     return merged

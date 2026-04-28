@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import (
@@ -15,7 +13,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from app.db.base import Base
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
@@ -30,7 +27,9 @@ class DatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
+    )
 
 
 class Database:

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "FastAPI backend for phenotyping ecosystem inference server"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "Phenotyping Team" },
 ]
@@ -52,3 +52,10 @@ dev = [
     "black>=24.8.0",                   # formatter
     "isort>=5.13.0",                   # import sorter
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "data*", "scripts*", "tests*"]
+[tool.isort]
+profile = "black"

@@ -1,4 +1,5 @@
 """Custom model upload, assignment, and management endpoints."""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -7,11 +8,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.deps import (
-    get_model_registry,
-    get_model_upload_service as _get_model_upload_service,
-    get_pipeline_config,
-)
+from app.deps import get_model_registry
+from app.deps import get_model_upload_service as _get_model_upload_service
+from app.deps import get_pipeline_config
 from app.schemas.model import (
     AssignmentsResponse,
     AssignModelRequest,
@@ -21,13 +20,13 @@ from app.schemas.model import (
     OrganismAssignment,
 )
 from app.services.model_upload_service import (
+    MAX_FILE_SIZE,
+    VALID_ORGANISMS,
     InvalidModelError,
     InvalidOrganismError,
-    MAX_FILE_SIZE,
-    ModelOrganismMismatchError,
     ModelNotFoundError,
+    ModelOrganismMismatchError,
     ModelUploadService,
-    VALID_ORGANISMS,
 )
 
 router = APIRouter(prefix="/models", tags=["models"])
