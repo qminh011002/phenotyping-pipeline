@@ -43,6 +43,7 @@ COPY scripts ./scripts
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
     pip install .
 
 # Make entrypoint executable (in case host filesystem stripped the +x bit).
