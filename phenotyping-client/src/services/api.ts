@@ -10,7 +10,6 @@ import type {
   AnalysisBatchDetail,
   AnalysisImageDetail,
   AnalysisListResponse,
-  AppSettingsResponse,
   AssignmentsResponse,
   AssignResultResponse,
   BatchDetectionResult,
@@ -23,8 +22,6 @@ import type {
   HealthResponse,
   LogEntry,
   Organism,
-  StorageSettingsResponse,
-  StorageSettingsUpdate,
 } from "@/types/api";
 
 // ── Health ─────────────────────────────────────────────────────────────────
@@ -116,28 +113,6 @@ export async function getConfig(signal?: AbortSignal): Promise<EggConfig> {
 /** PUT /config — update egg inference config */
 export async function updateConfig(updates: Partial<EggConfig>): Promise<EggConfig> {
   return http.put<EggConfig>("config", updates);
-}
-
-// ── Settings / Storage ─────────────────────────────────────────────────────
-
-/** GET /settings — return full app settings */
-export async function getSettings(): Promise<AppSettingsResponse> {
-  return http.get<AppSettingsResponse>("settings");
-}
-
-/** PUT /settings — update app settings */
-export async function updateSettings(updates: StorageSettingsUpdate): Promise<AppSettingsResponse> {
-  return http.put<AppSettingsResponse>("settings", updates);
-}
-
-/** GET /settings/storage — return only the image_storage_dir */
-export async function getStorageSettings(): Promise<StorageSettingsResponse> {
-  return http.get<StorageSettingsResponse>("settings/storage");
-}
-
-/** PUT /settings/storage — update the overlay storage directory */
-export async function updateStorageSettings(updates: StorageSettingsUpdate): Promise<StorageSettingsResponse> {
-  return http.put<StorageSettingsResponse>("settings/storage", updates);
 }
 
 // ── Logs ───────────────────────────────────────────────────────────────────

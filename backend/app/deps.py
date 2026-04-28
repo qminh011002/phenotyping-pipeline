@@ -271,16 +271,17 @@ async def get_session_dep():
         yield session
 
 
-# ── Cached storage_dir ( invalidated on PUT /settings/storage ) ─────────────────
+# ── Storage dir (env-driven, read at startup) ──────────────────────────────────
 
 _storage_dir_cache: str | None = None
 
 
 def get_cached_storage_dir() -> str:
-    """Return the current image_storage_dir, reading from the DB if the cache is cold.
+    """Return image_storage_dir, sourced from the IMAGE_STORAGE_DIR env var.
 
-    The cache is invalidated whenever PUT /settings/storage successfully updates
-    the DB row (see invalidate_storage_dir_cache below).
+    The value is cached for the lifetime of the process — change ``.env``
+    (or ``/etc/phenotyping/.env.production`` in prod) and restart the backend
+    to take effect.
     """
     global _storage_dir_cache
     if _storage_dir_cache is None:
@@ -288,12 +289,3 @@ def get_cached_storage_dir() -> str:
 
         _storage_dir_cache = str(AppSettings().image_storage_dir)
     return _storage_dir_cache
-
-
-def invalidate_storage_dir_cache() -> None:
-    """Drop the cached value so the next call re-reads from the DB.
-
-    Called by PUT /settings/storage after a successful DB update.
-    """
-    global _storage_dir_cache
-    _storage_dir_cache = None
