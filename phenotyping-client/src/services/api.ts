@@ -4,6 +4,7 @@
 
 import { getBaseUrl } from "./http";
 import { http } from "./http";
+import { getAccessToken } from "@/stores/authStore";
 import type {
   ActiveBatchResponse,
   AnalysisBatchDetail,
@@ -248,9 +249,13 @@ export async function downloadBatchArchive(
   imageIds: string[] | null,
 ): Promise<{ blob: Blob; filename: string }> {
   const url = `${getBaseUrl().replace(/\/$/, "")}/analyses/${batchId}/download`;
+  const token = getAccessToken();
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ image_ids: imageIds ?? null }),
   });
   if (!response.ok) {
