@@ -125,6 +125,8 @@ jobs:
           done
 
           docker compose -f docker-compose.prod.yml pull
-          docker compose -f docker-compose.prod.yml run --rm -e SKIP_MIGRATIONS=1 backend alembic upgrade head
+          # TEMP: skipping alembic upgrade — schema was provisioned manually via schema_full.sql.
+          # Re-enable once we're back on a fully alembic-managed schema:
+          #   docker compose -f docker-compose.prod.yml run --rm -e SKIP_MIGRATIONS=1 backend alembic upgrade head
           docker compose -f docker-compose.prod.yml up -d
           docker image prune -f
