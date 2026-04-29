@@ -116,12 +116,23 @@ export class LogStreamClient {
 
   private _closeWebSocket(reason: string): void {
     if (this._ws !== null) {
-      this._ws.onopen = null;
-      this._ws.onmessage = null;
-      this._ws.onerror = null;
-      this._ws.onclose = null;
-      this._ws.close(1000, reason);
+      const ws = this._ws;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
       this._ws = null;
+      // Calling close() during the CONNECTING phase produces a noisy
+      // "WebSocket is closed before the connection is established" console
+      // warning. Defer the close until the handshake either resolves or
+      // fails — by then the socket can be closed cleanly.
+      if (ws.readyState === WebSocket.CONNECTING) {
+        const finalize = () => ws.close(1000, reason);
+        ws.addEventListener("open", finalize, { once: true });
+        ws.addEventListener("error", () => {/* swallow handshake error */}, { once: true });
+      } else if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, reason);
+      }
     }
     this._closed = true;
   }

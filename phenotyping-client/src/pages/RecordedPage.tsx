@@ -33,7 +33,7 @@ export default function RecordedPage() {
 
     return (
         <div className="flex flex-col h-full">
-            <header className="border-b px-6 py-3">
+            <header className="px-6 py-3">
                 <SearchFilters filters={filters} onFiltersChange={setFilters} total={total} />
             </header>
 

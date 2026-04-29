@@ -3,11 +3,11 @@ import {
     Bell,
     ChevronsUpDown,
     CircleHelp,
+    Cpu,
     CreditCard,
     History,
     Home,
     LogOut,
-    Microscope,
     Moon,
     PlusCircle,
     Send,
@@ -49,6 +49,7 @@ import { ProcessingIndicator } from './ProcessingIndicator';
 const NAV_ITEMS = [
     { to: '/', icon: Home, label: 'Dashboard', end: true },
     { to: '/recorded', icon: History, label: 'Recorded', end: false },
+    { to: '/models', icon: Cpu, label: 'Models', end: false },
     { to: '/settings', icon: Settings, label: 'Settings', end: false },
 ] as const;
 
@@ -81,10 +82,15 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
                             <NavLink to="/">
-                                <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-                                    <Microscope className="size-4" />
+                                <div className="flex aspect-square size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/50">
+                                    <img
+                                        src="/assets/logo/app-icon.png"
+                                        alt=""
+                                        className="h-full w-full scale-105 object-cover"
+                                        aria-hidden="true"
+                                    />
                                 </div>
-                                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                                     <span className="truncate font-semibold">Phenotyping</span>
                                     <span className="truncate text-xs text-sidebar-foreground/70">
                                         Analysis workspace

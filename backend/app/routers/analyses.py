@@ -218,10 +218,20 @@ async def get_analysis(
     db: Annotated[AsyncSession, Depends(get_session)],
     user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
+    include_annotations: bool = True,
 ) -> AnalysisBatchDetail:
-    """Return the full detail of a single analysis batch including all images."""
+    """Return the full detail of a single analysis batch including all images.
+
+    Pass ``?include_annotations=false`` for a lighter payload that omits the
+    per-image bbox arrays — useful for the card-grid view that doesn't render
+    boxes. The ResultViewer should re-fetch with the default (full) payload
+    before entering edit mode.
+    """
     detail = await analysis_svc.get_batch_detail(
-        batch_id=batch_id, db=db, user_id=user.id
+        batch_id=batch_id,
+        db=db,
+        user_id=user.id,
+        include_annotations=include_annotations,
     )
     if detail is None:
         raise HTTPException(
@@ -298,6 +308,38 @@ async def delete_analysis(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis batch {batch_id} not found.",
         )
+
+
+@router.get(
+    "/{batch_id}/images/{image_id}",
+    response_model=AnalysisImageDetail,
+    summary="Get full detail for a single image (lazy-load annotations)",
+    responses={
+        200: {"description": "Image detail returned"},
+        404: {"description": "Batch or image not found"},
+    },
+)
+async def get_image_detail(
+    batch_id: UUID,
+    image_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisImageDetail:
+    """Return one image's metadata + annotations + edited_annotations.
+
+    Used by the ResultViewer to fetch annotations on-demand per image
+    instead of loading the whole batch upfront — scales O(1) with batch size.
+    """
+    detail = await analysis_svc.get_image_detail(
+        batch_id=batch_id, image_id=image_id, db=db, user_id=user.id
+    )
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    return detail
 
 
 @router.get(

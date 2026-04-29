@@ -137,16 +137,14 @@ export function ResultViewerHeader({
 
             {/* Right — actions */}
             <div className="flex items-center justify-end gap-2">
-                {!isSaved && (
-                    <Button size="sm" onClick={onFinish} disabled={finishing} className="gap-2">
-                        {finishing ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                            <Check className="h-4 w-4" />
-                        )}
-                        {finishing ? 'Saving…' : 'Finish'}
-                    </Button>
-                )}
+                <Button size="sm" onClick={onFinish} disabled={finishing} className="gap-2">
+                    {finishing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                        <Check className="h-4 w-4" />
+                    )}
+                    {finishing ? 'Saving…' : isSaved ? 'Save' : 'Finish'}
+                </Button>
             </div>
         </header>
     );

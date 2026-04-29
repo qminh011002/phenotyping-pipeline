@@ -40,14 +40,15 @@ describe("Sidebar", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: /dashboard/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /recorded/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /models/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /settings/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /new analysis/i })).not.toBeInTheDocument();
   });
 
-  it("renders the brand link, create link, 3 navigation links, and footer links", () => {
+  it("renders the brand link, create link, 4 navigation links, and footer links", () => {
     renderSidebar();
     const links = screen.getAllByRole("link");
-    expect(links).toHaveLength(7);
+    expect(links).toHaveLength(8);
   });
 
   it("marks the current route active", () => {
@@ -92,6 +93,7 @@ describe("Sidebar", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: /dashboard/i })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: /recorded/i })).toHaveAttribute("href", "/recorded");
+    expect(screen.getByRole("link", { name: /models/i })).toHaveAttribute("href", "/models");
     expect(screen.getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
   });
 });

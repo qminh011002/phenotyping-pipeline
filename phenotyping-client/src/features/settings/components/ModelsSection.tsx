@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bug,
   Check,
+  CheckCircle2,
   Cpu,
-  RotateCcw,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -12,6 +12,7 @@ import { toast } from "@/components/ui/sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   assignModel,
   deleteCustomModel,
@@ -75,6 +76,93 @@ interface ModelLibraryProps {
   onUploadFile: (organism: Organism, file: File) => void;
 }
 
+interface ModeTabProps {
+  organism: Organism;
+  assignment: OrganismAssignment;
+  customCount: number;
+  selected: boolean;
+  onSelect: (organism: Organism) => void;
+}
+
+function ModeTab({ organism, assignment, customCount, selected, onSelect }: ModeTabProps) {
+  const meta = ORGANISM_META[organism];
+  const slotState: "custom" | "default" | "missing" =
+    assignment.custom_model !== null
+      ? "custom"
+      : assignment.has_default
+        ? "default"
+        : "missing";
+  const activeLabel =
+    assignment.custom_model?.original_filename
+    ?? assignment.default_filename
+    ?? "No active model";
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(organism)}
+      className={cn(
+        "group relative flex min-h-36 cursor-pointer flex-col rounded-md bg-card/55 p-4 text-left shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] transition-[background-color,box-shadow,transform] duration-150 hover:-translate-y-0.5 hover:bg-card/75 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        selected && "bg-primary/12 shadow-[inset_0_0_0_1px_rgb(16_185_129/0.55),inset_0_1px_0_rgb(255_255_255/0.08)]",
+      )}
+    >
+      {selected && (
+        <div className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+          <CheckCircle2 className="size-3.5" />
+        </div>
+      )}
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "flex size-9 items-center justify-center rounded-md bg-muted/45 text-muted-foreground",
+              selected && "bg-primary/15 text-primary",
+            )}
+          >
+            <Bug className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">{meta.label}</h3>
+            <p className="text-xs text-muted-foreground">Detection mode</p>
+          </div>
+        </div>
+
+        {slotState === "missing" ? (
+          <Badge variant="destructive">Missing</Badge>
+        ) : (
+          <Badge
+            variant={slotState === "custom" ? "default" : "secondary"}
+            className={selected ? "mr-7" : undefined}
+          >
+            {slotState === "custom" ? "Custom" : "Default"}
+          </Badge>
+        )}
+      </div>
+
+      <div className="mt-4 min-w-0">
+        <p className="truncate font-mono text-xs text-muted-foreground" title={activeLabel}>
+          {activeLabel}
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {customCount} custom model{customCount !== 1 ? "s" : ""}
+        </p>
+      </div>
+
+      <div className="mt-auto pt-4">
+        <span
+          className={cn(
+            "text-xs font-medium text-muted-foreground transition-colors",
+            selected && "text-primary",
+          )}
+        >
+          {selected ? "Managing this mode" : "Open mode"}
+        </span>
+      </div>
+    </button>
+  );
+}
+
 function ModelLibrary({
   assignment,
   customModels,
@@ -111,11 +199,11 @@ function ModelLibrary({
         : "missing";
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
-      <div className="flex flex-col gap-4 border-b border-border/70 px-5 py-5">
+    <section className="overflow-hidden rounded-md bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
+      <div className="flex flex-col gap-4 px-5 pt-5 pb-2">
         <div className="min-w-0 space-y-2">
           <div className="flex items-center gap-2">
-            <div className="flex size-9 items-center justify-center rounded-lg border border-border/70 bg-muted/60 text-muted-foreground">
+            <div className="flex size-9 items-center justify-center rounded-md bg-muted/45 text-muted-foreground">
               <Bug className="h-4 w-4" />
             </div>
             <div>
@@ -133,7 +221,7 @@ function ModelLibrary({
               </Badge>
             )}
             {model_filename && (
-              <span className="rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 font-mono text-muted-foreground">
+              <span className="rounded-md bg-muted/45 px-2.5 py-1 font-mono text-muted-foreground">
                 {model_filename}
               </span>
             )}
@@ -147,8 +235,8 @@ function ModelLibrary({
       <div className="space-y-3 p-5">
         {has_default && default_filename ? (
           <div
-            className={`flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between ${
-              is_default ? "border-primary/35 bg-primary/5" : "border-border/70 bg-muted/20"
+            className={`flex flex-col gap-3 rounded-md p-4 sm:flex-row sm:items-center sm:justify-between ${
+              is_default ? "bg-primary/10" : "bg-muted/30"
             }`}
           >
             <div className="min-w-0 space-y-1">
@@ -167,21 +255,31 @@ function ModelLibrary({
               </p>
             </div>
 
-            {!is_default && (
+            {is_default ? (
               <Button
-                variant="outline"
+                variant="secondary"
+                size="sm"
+                className="gap-1.5 self-start sm:self-center"
+                disabled
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Active
+              </Button>
+            ) : (
+              <Button
+                variant="default"
                 size="sm"
                 className="gap-1.5 self-start sm:self-center"
                 onClick={() => onRevertDefault(organism)}
                 disabled={revertKey === organism}
               >
-                <RotateCcw className="h-3.5 w-3.5" />
-                {revertKey === organism ? "Reverting..." : "Use Default"}
+                <Check className="h-3.5 w-3.5" />
+                {revertKey === organism ? "Activating..." : "Set Active"}
               </Button>
             )}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 p-4 text-sm">
+          <div className="rounded-md bg-amber-500/10 p-4 text-sm">
             <p className="font-medium text-amber-700 dark:text-amber-400">
               No default model installed for {meta.label.toLowerCase()} mode.
             </p>
@@ -194,7 +292,7 @@ function ModelLibrary({
         )}
 
         {customModels.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border/80 bg-muted/15 px-4 py-5 text-sm text-muted-foreground">
+          <div className="rounded-md bg-muted/30 px-4 py-5 text-sm text-muted-foreground">
             No custom `.pt` files uploaded for {meta.label.toLowerCase()} yet.
           </div>
         ) : (
@@ -206,8 +304,8 @@ function ModelLibrary({
               return (
                 <div
                   key={model.id}
-                  className={`flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between ${
-                    isActive ? "border-primary/35 bg-primary/5" : "border-border/70 bg-background"
+                  className={`flex flex-col gap-3 rounded-md p-4 sm:flex-row sm:items-center sm:justify-between ${
+                    isActive ? "bg-primary/10" : "bg-muted/30"
                   }`}
                 >
                   <div className="min-w-0 space-y-1">
@@ -228,9 +326,19 @@ function ModelLibrary({
                   </div>
 
                   <div className="flex gap-2 self-start sm:self-center">
-                    {!isActive && (
+                    {isActive ? (
                       <Button
-                        variant="outline"
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1.5"
+                        disabled
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Active
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="default"
                         size="sm"
                         className="gap-1.5"
                         onClick={() => onActivate(organism, model.id)}
@@ -284,7 +392,11 @@ function ModelLibrary({
   );
 }
 
-export function ModelsSection() {
+interface ModelsSectionProps {
+  showHeader?: boolean;
+}
+
+export function ModelsSection({ showHeader = true }: ModelsSectionProps = {}) {
   const [assignments, setAssignments] = useState<AssignmentsResponse | null>(null);
   const [customModels, setCustomModels] = useState<CustomModelResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -293,6 +405,7 @@ export function ModelsSection() {
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [revertKey, setRevertKey] = useState<Organism | null>(null);
+  const [selectedOrganism, setSelectedOrganism] = useState<Organism>("egg");
 
   const mountedRef = useRef(true);
   const fetchData = useCallback(async () => {
@@ -414,31 +527,48 @@ export function ModelsSection() {
 
   return (
     <section className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="flex items-center gap-2 text-base font-semibold">
-          <Cpu className="h-4 w-4" />
-          Detection Models
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Manage YOLO detection models (`.pt`) for all 4 configured modes. Each mode keeps
-          its own model library and one active model selection.
-        </p>
-      </div>
+      {showHeader && (
+        <div className="space-y-1">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
+            <Cpu className="h-4 w-4" />
+            Detection Models
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Manage YOLO detection models (`.pt`) for all 4 configured modes. Each mode keeps
+            its own model library and one active model selection.
+          </p>
+        </div>
+      )}
       <div className="space-y-4">
         {loading ? (
           <div className="space-y-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-48 w-full rounded-xl" />
-            ))}
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-36 w-full rounded-md" />
+              ))}
+            </div>
+            <Skeleton className="h-80 w-full rounded-md" />
           </div>
         ) : error ? (
           <p className="text-sm text-destructive">{error}</p>
         ) : assignments ? (
-          ORGANISM_ORDER.map((organism) => (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {ORGANISM_ORDER.map((organism) => (
+                <ModeTab
+                  key={organism}
+                  organism={organism}
+                  assignment={assignments.assignments[organism]}
+                  customCount={modelsByOrganism[organism].length}
+                  selected={selectedOrganism === organism}
+                  onSelect={setSelectedOrganism}
+                />
+              ))}
+            </div>
+
             <ModelLibrary
-              key={organism}
-              assignment={assignments.assignments[organism]}
-              customModels={modelsByOrganism[organism]}
+              assignment={assignments.assignments[selectedOrganism]}
+              customModels={modelsByOrganism[selectedOrganism]}
               uploadingOrganism={uploadingOrganism}
               actionKey={actionKey}
               deleteKey={deleteKey}
@@ -448,7 +578,7 @@ export function ModelsSection() {
               onRevertDefault={handleRevertDefault}
               onUploadFile={handleUploadFile}
             />
-          ))
+          </>
         ) : null}
       </div>
     </section>

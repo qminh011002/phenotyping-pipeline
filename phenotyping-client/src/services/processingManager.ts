@@ -253,6 +253,7 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
   }
 
   setStage("Creating analysis batch…");
+  const projectName = useProcessingStore.getState().projectName?.trim();
   let dbBatchId: string;
   try {
     const detail = await createBatch({
@@ -261,6 +262,10 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
       device: (configSnapshot.device as string) ?? "cpu",
       config_snapshot: configSnapshot,
       total_image_count: stored.length,
+      // Pass the user-entered project name so it lands in the DB and shows
+      // up in /recorded. Omit when blank so the backend still falls back to
+      // its auto-generated default ("<Organism> analysis · <date>").
+      ...(projectName ? { name: projectName } : {}),
       classes: loadProjectClasses(),
     });
     dbBatchId = detail.id;

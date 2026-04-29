@@ -101,7 +101,9 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
         const enrichedItems = await Promise.all(
           items.map(async (batch) => {
             try {
-              const detail = await getAnalysisDetail(batch.id, controller.signal);
+              const detail = await getAnalysisDetail(batch.id, controller.signal, {
+                includeAnnotations: false,
+              });
               return {
                 ...batch,
                 firstImage: detail.images[0] ?? null,
@@ -116,14 +118,21 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
           }),
         );
 
-        setBatches(enrichedItems);
-        setTotal(data.total);
+        // Only commit results if this fetch is still the active one — a newer
+        // fetch may have already replaced us (StrictMode remount, filter change),
+        // and clobbering its state would briefly show the empty state.
+        if (abortRef.current === controller) {
+          setBatches(enrichedItems);
+          setTotal(data.total);
+        }
       } catch (err) {
-        if ((err as Error).name !== "AbortError") {
+        if ((err as Error).name !== "AbortError" && abortRef.current === controller) {
           setError(String(err));
         }
       } finally {
-        setLoading(false);
+        if (abortRef.current === controller) {
+          setLoading(false);
+        }
       }
     },
     []

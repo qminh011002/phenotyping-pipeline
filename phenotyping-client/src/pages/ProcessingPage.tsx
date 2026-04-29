@@ -4,7 +4,7 @@ import { PauseCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
-import { loadProcessingFiles, loadBatchId } from '@/features/upload/lib/processingSession';
+import { loadBatchDetail, loadProcessingFiles, loadBatchId } from '@/features/upload/lib/processingSession';
 import { useProcessingStore } from '@/stores/processingStore';
 import type { ProcessingLogEntry } from '@/stores/processingStore';
 import {
@@ -153,9 +153,16 @@ export default function ProcessingPage() {
     }, [navigate]);
 
     useEffect(() => {
-        if (completedBatchId) {
-            navigate('/analyze/results');
-        }
+        if (!completedBatchId) return;
+        // Construct a URL-driven results link so reload / share / back-forward
+        // all work. First image ID comes from the batch detail just stored by
+        // the processing manager.
+        const stored = loadBatchDetail();
+        const firstImageId = stored?.images?.[0]?.id;
+        const url = firstImageId
+            ? `/analyze/results/${completedBatchId}/images/${firstImageId}`
+            : `/analyze/results/${completedBatchId}`;
+        navigate(url);
     }, [completedBatchId, navigate]);
 
     const { doneCount, errorCount, allCompleted } = useMemo(() => {
@@ -188,7 +195,16 @@ export default function ProcessingPage() {
     async function handleInterruptedViewResults() {
         try {
             await finalizeInterruptedBatch();
-            navigate('/analyze/results');
+            const stored = loadBatchDetail();
+            const batchId = stored?.id;
+            const firstImageId = stored?.images?.[0]?.id;
+            if (batchId && firstImageId) {
+                navigate(`/analyze/results/${batchId}/images/${firstImageId}`);
+            } else if (batchId) {
+                navigate(`/analyze/results/${batchId}`);
+            } else {
+                navigate('/analyze/results');
+            }
         } catch (err) {
             console.error('finalizeInterruptedBatch failed', err);
         }

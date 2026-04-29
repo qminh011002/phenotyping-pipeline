@@ -11,6 +11,9 @@ interface ProjectTypeCardProps {
     /** Per-organism load state from /health. Defaults to "loaded" so legacy
      *  callers that haven't fetched health yet keep the old behaviour. */
     modelStatus?: ModelStatus;
+    /** Filesystem-aware installation state from /models/assignments. A model can
+     *  be installed on disk but not loaded into the running backend yet. */
+    modelInstalled?: boolean;
 }
 
 export function ProjectTypeCard({
@@ -18,18 +21,22 @@ export function ProjectTypeCard({
     selected,
     onSelect,
     modelStatus = 'loaded',
+    modelInstalled = false,
 }: ProjectTypeCardProps) {
     const { label, description, badges, available, id } = type;
 
     // The "Soon" gate (organism not in MVP) wins over model-status — both
     // disable the card, but we keep the "Soon" copy for unsupported organisms.
-    const modelMissing = available && modelStatus !== 'loaded';
-    const enabled = available && !modelMissing;
+    const modelNotReady = available && modelStatus !== 'loaded';
+    const modelInstalledButNotLoaded = modelStatus === 'missing' && modelInstalled;
+    const enabled = available && !modelNotReady;
 
     const hint =
         modelStatus === 'error'
             ? 'Failed to load — check backend logs.'
-            : `Drop a .pt file into backend/data/models/${id}/default/ and restart, or upload one in Settings → Models.`;
+            : modelInstalledButNotLoaded
+              ? 'Model file found. Restart the backend so it can be loaded for inference.'
+              : `Drop a .pt file into backend/data/models/${id}/default/ and restart, or upload one in Models.`;
 
     return (
         <button
@@ -71,7 +78,7 @@ export function ProjectTypeCard({
                             Soon
                         </span>
                     )}
-                    {available && modelMissing && (
+                    {available && modelNotReady && (
                         <span
                             className={cn(
                                 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
@@ -81,7 +88,11 @@ export function ProjectTypeCard({
                             )}
                         >
                             <AlertTriangle className="h-3 w-3" />
-                            {modelStatus === 'error' ? 'Model error' : 'Model not installed'}
+                            {modelStatus === 'error'
+                                ? 'Model error'
+                                : modelInstalledButNotLoaded
+                                  ? 'Restart required'
+                                  : 'Model not installed'}
                         </span>
                     )}
                 </div>
@@ -92,7 +103,7 @@ export function ProjectTypeCard({
                         !enabled && 'text-muted-foreground/55',
                     )}
                 >
-                    {modelMissing ? hint : description}
+                    {modelNotReady ? hint : description}
                 </span>
             </div>
 
