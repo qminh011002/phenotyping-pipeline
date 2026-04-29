@@ -10,6 +10,7 @@ import { MODES, PROJECT_TYPES, type Mode, type Organism } from '@/features/analy
 import { storeProjectClasses } from '@/features/upload/lib/processingSession';
 import { Camera, Upload as UploadIcon } from 'lucide-react';
 import { useBoot } from '@/providers/BootProvider';
+import { getModelAssignments } from '@/services/api';
 
 export default function AnalyzePage() {
     const navigate = useNavigate();
@@ -21,6 +22,7 @@ export default function AnalyzePage() {
     const [mode, setMode] = useState<Mode | null>('upload');
     const [organism, setOrganism] = useState<Organism | null>(null);
     const [showNameError, setShowNameError] = useState(false);
+    const [installedModels, setInstalledModels] = useState<Partial<Record<Organism, boolean>>>({});
     const { modelsStatus } = useBoot();
 
     useEffect(() => {
@@ -39,12 +41,34 @@ export default function AnalyzePage() {
         }
     }, [organism, modelsStatus]);
 
+    useEffect(() => {
+        let alive = true;
+
+        getModelAssignments()
+            .then((data) => {
+                if (!alive) return;
+                const next: Partial<Record<Organism, boolean>> = {};
+                for (const [key, assignment] of Object.entries(data.assignments)) {
+                    const organismKey = key as Organism;
+                    next[organismKey] = assignment.has_default || assignment.custom_model !== null;
+                }
+                setInstalledModels(next);
+            })
+            .catch(() => {
+                if (alive) setInstalledModels({});
+            });
+
+        return () => {
+            alive = false;
+        };
+    }, []);
+
     const nameTrimmed = projectName.trim();
     const modeOk = mode !== null && MODES.find((m) => m.id === mode)?.available === true;
     const organismOk =
-        organism !== null
-        && PROJECT_TYPES.find((p) => p.id === organism)?.available === true
-        && (modelsStatus[organism] === 'loaded' || modelsStatus[organism] === undefined);
+        organism !== null &&
+        PROJECT_TYPES.find((p) => p.id === organism)?.available === true &&
+        (modelsStatus[organism] === 'loaded' || modelsStatus[organism] === undefined);
     const canSubmit = nameTrimmed.length > 0 && modeOk && organismOk;
 
     function handleSubmit() {
@@ -65,7 +89,21 @@ export default function AnalyzePage() {
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
             {/* Fixed header */}
             <header className="shrink-0 border-b bg-background">
-                <div className="mx-auto w-full max-w-7xl px-6 py-6"></div>
+                <div className="mx-auto flex w-full items-center px-14 py-3">
+                    <div className="flex items-center gap-3">
+                        <div className="flex aspect-square size-10 items-center justify-center">
+                            <img
+                                src="/assets/logo/app-icon.png"
+                                alt=""
+                                className="h-full w-full scale-110 object-cover"
+                                aria-hidden="true"
+                            />
+                        </div>
+                        <div className="grid text-left leading-tight">
+                            <span className="text-2xl font-extrabold">phenotyping</span>
+                        </div>
+                    </div>
+                </div>
             </header>
 
             {/* Scrollable content */}
@@ -120,6 +158,7 @@ export default function AnalyzePage() {
                                         selected={organism === t.id}
                                         onSelect={() => setOrganism(t.id)}
                                         modelStatus={modelsStatus[t.id]}
+                                        modelInstalled={installedModels[t.id]}
                                     />
                                 ))}
                             </div>

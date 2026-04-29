@@ -201,12 +201,38 @@ export async function listAnalyses(params: {
   return http.get<AnalysisListResponse>(`analyses${query ? `?${query}` : ""}`);
 }
 
-/** GET /analyses/{batch_id} — return full batch detail with all images */
+/** GET /analyses/{batch_id} — return full batch detail with all images.
+ *
+ * Pass `{ includeAnnotations: false }` for a lighter payload that omits the
+ * per-image bbox arrays — used by views that don't render boxes (e.g. the
+ * BatchDetail card grid). Default includes annotations.
+ */
 export async function getAnalysisDetail(
   batchId: string,
   signal?: AbortSignal,
+  options?: { includeAnnotations?: boolean },
 ): Promise<AnalysisBatchDetail> {
-  return http.get<AnalysisBatchDetail>(`analyses/${batchId}`, signal);
+  const path =
+    options?.includeAnnotations === false
+      ? `analyses/${batchId}?include_annotations=false`
+      : `analyses/${batchId}`;
+  return http.get<AnalysisBatchDetail>(path, signal);
+}
+
+/** GET /analyses/{batch_id}/images/{image_id} — single-image detail with annotations.
+ *
+ * Used by ResultViewer to lazy-fetch annotations one image at a time, so
+ * batches with many images don't pay an O(N) cost upfront.
+ */
+export async function getImageDetail(
+  batchId: string,
+  imageId: string,
+  signal?: AbortSignal,
+): Promise<AnalysisImageDetail> {
+  return http.get<AnalysisImageDetail>(
+    `analyses/${batchId}/images/${imageId}`,
+    signal,
+  );
 }
 
 /** DELETE /analyses/{batch_id} — delete a batch and its overlay files */

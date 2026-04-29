@@ -196,24 +196,20 @@ class AnalysisService:
 
         return image
 
-    async def complete_batch(
-        self,
-        batch_id: UUID,
-        db: AsyncSession,
-        user_id: UUID,
-    ) -> AnalysisBatch | None:
-        """Mark a batch as completed and compute aggregate statistics.
+    async def _recompute_aggregates(
+        self, batch_id: UUID, db: AsyncSession
+    ) -> tuple[int, float | None, float]:
+        """Compute (total_count, avg_confidence, total_elapsed_secs) from child images.
 
-        Aggregates are computed from all child AnalysisImage rows that have
-        status='completed'. Images with status='failed' are excluded from
-        aggregates but counted in total_image_count.
+        Aggregates over AnalysisImage rows with status='completed'. Failed
+        images contribute to total_image_count but are excluded from counts
+        and confidence.
         """
         # Global mean over all detected boxes:
         #   sum(avg_confidence_i * count_i) / sum(count_i)
         # The previous "avg of avg" understated/overstated batches with skew.
         stmt = (
             select(
-                func.count(AnalysisImage.id).label("n"),
                 func.coalesce(func.sum(AnalysisImage.count), 0).label("total_count"),
                 func.coalesce(
                     func.sum(AnalysisImage.avg_confidence * AnalysisImage.count), 0
@@ -225,38 +221,100 @@ class AnalysisService:
             .where(AnalysisImage.batch_id == batch_id)
             .where(AnalysisImage.status == "completed")
         )
-        result = await db.execute(stmt)
-        row = result.one()
+        row = (await db.execute(stmt)).one()
+        total_count = int(row.total_count)
+        avg_conf = float(row.conf_weighted) / total_count if total_count > 0 else None
+        return total_count, avg_conf, float(row.total_elapsed)
 
+    async def complete_batch(
+        self,
+        batch_id: UUID,
+        db: AsyncSession,
+        user_id: UUID,
+    ) -> AnalysisBatch | None:
+        """End the processing phase: compute aggregates and move the batch to ``draft``.
+
+        Drafts are visible to the ResultViewer (so the operator can edit
+        annotations) but hidden from the Records list. Promotion to
+        ``completed`` happens in ``finish_batch`` when the operator clicks
+        Finish.
+        """
         stmt_batch = (
             select(AnalysisBatch)
             .where(AnalysisBatch.id == batch_id)
             .where(AnalysisBatch.user_id == user_id)
         )
-        batch_result = await db.execute(stmt_batch)
-        batch = batch_result.scalar_one_or_none()
+        batch = (await db.execute(stmt_batch)).scalar_one_or_none()
         if batch is None:
             return None
 
-        total_count = int(row.total_count)
-        batch.status = "completed"
-        batch.completed_at = datetime.now(timezone.utc)
-        batch.total_count = total_count
-        batch.avg_confidence = (
-            float(row.conf_weighted) / total_count if total_count > 0 else None
+        total_count, avg_conf, total_elapsed = await self._recompute_aggregates(
+            batch_id, db
         )
-        batch.total_elapsed_secs = float(row.total_elapsed)
+        batch.status = "draft"
+        batch.total_count = total_count
+        batch.avg_confidence = avg_conf
+        batch.total_elapsed_secs = total_elapsed
 
         await db.flush()
         await db.refresh(batch)
         logger.info(
-            "Analysis batch completed",
+            "Analysis batch ready for review (draft)",
             extra={
                 "context": {
                     "batch_id": str(batch_id),
                     "total_count": batch.total_count,
                     "avg_confidence": batch.avg_confidence,
                     "total_elapsed_secs": batch.total_elapsed_secs,
+                }
+            },
+        )
+        return batch
+
+    async def finish_batch(
+        self,
+        batch_id: UUID,
+        db: AsyncSession,
+    ) -> AnalysisBatch | None:
+        """Promote a draft batch to ``completed`` and stamp ``completed_at``.
+
+        Re-runs the aggregate query so any annotation edits made during the
+        review phase are reflected in ``total_count`` and ``avg_confidence``
+        once edits are wired into per-image counts.
+
+        Raises ``ValueError`` if the batch is not in ``draft`` state.
+        """
+        batch = (
+            await db.execute(
+                select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
+            )
+        ).scalar_one_or_none()
+        if batch is None:
+            return None
+
+        if batch.status != "draft":
+            raise ValueError(
+                f"Batch {batch_id} is not in 'draft' state (got '{batch.status}')."
+            )
+
+        total_count, avg_conf, total_elapsed = await self._recompute_aggregates(
+            batch_id, db
+        )
+        batch.total_count = total_count
+        batch.avg_confidence = avg_conf
+        batch.total_elapsed_secs = total_elapsed
+        batch.status = "completed"
+        batch.completed_at = datetime.now(timezone.utc)
+
+        await db.flush()
+        await db.refresh(batch)
+        logger.info(
+            "Analysis batch saved to records (completed)",
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "total_count": batch.total_count,
+                    "avg_confidence": batch.avg_confidence,
                 }
             },
         )
@@ -463,8 +521,16 @@ class AnalysisService:
         batch_id: UUID,
         db: AsyncSession,
         user_id: UUID,
+        include_annotations: bool = True,
     ) -> AnalysisBatchDetail | None:
-        """Return full batch detail including all images. Scoped to ``user_id``."""
+        """Return full batch detail including all images. Scoped to ``user_id``.
+
+        ``include_annotations=False`` strips the per-image ``annotations`` and
+        ``edited_annotations`` arrays from the response — the metadata-only
+        view used by the BatchDetail card grid, which doesn't render boxes.
+        Saves bandwidth + JSON parse time on big batches; the ResultViewer
+        re-fetches with the full payload before entering edit mode.
+        """
         stmt = (
             select(AnalysisBatch)
             .options(selectinload(AnalysisBatch.images))
@@ -487,8 +553,10 @@ class AnalysisService:
                 overlay_path=img.overlay_path,
                 error_message=img.error_message,
                 created_at=img.created_at,
-                annotations=img.annotations,
-                edited_annotations=img.edited_annotations,
+                annotations=img.annotations if include_annotations else None,
+                edited_annotations=(
+                    img.edited_annotations if include_annotations else None
+                ),
             )
             for img in batch.images
         ]
@@ -513,6 +581,44 @@ class AnalysisService:
             config_snapshot=batch.config_snapshot or {},
             notes=batch.notes,
             images=image_summaries,
+        )
+
+    async def get_image_detail(
+        self,
+        batch_id: UUID,
+        image_id: UUID,
+        db: AsyncSession,
+        user_id: UUID,
+    ) -> AnalysisImageDetail | None:
+        """Return full detail for a single image (metadata + annotations).
+
+        Used by the URL-driven ResultViewer to lazy-fetch annotations per
+        image instead of pulling the whole batch upfront. Scoped to ``user_id``
+        and to the given ``batch_id`` so a guess at ``image_id`` from another
+        user can't leak data.
+        """
+        stmt = (
+            select(AnalysisImage)
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisImage.batch_id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
+        image = (await db.execute(stmt)).scalar_one_or_none()
+        if image is None:
+            return None
+        return AnalysisImageDetail(
+            id=image.id,
+            original_filename=image.original_filename,
+            status=image.status,
+            count=image.count,
+            avg_confidence=image.avg_confidence,
+            elapsed_secs=image.elapsed_secs,
+            overlay_path=image.overlay_path,
+            error_message=image.error_message,
+            created_at=image.created_at,
+            annotations=image.annotations,
+            edited_annotations=image.edited_annotations,
         )
 
     # ── Delete ────────────────────────────────────────────────────────────────

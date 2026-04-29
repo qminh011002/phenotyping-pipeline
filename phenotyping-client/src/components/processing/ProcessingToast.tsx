@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Microscope } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useProcessingStore } from "@/stores/processingStore";
+import { loadBatchDetail } from "@/features/upload/lib/processingSession";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,8 @@ export function ProcessingToast() {
   const isProcessing = useProcessingStore((s) => s.isProcessing);
   const images = useProcessingStore((s) => s.images);
   const totalImages = useProcessingStore((s) => s.totalImages);
+  const completedBatchId = useProcessingStore((s) => s.completedBatchId);
+  const activeBatchId = useProcessingStore((s) => s.activeBatchId);
   const setToastId = useProcessingStore((s) => s.setToastId);
   const reset = useProcessingStore((s) => s.reset);
 
@@ -87,7 +90,16 @@ export function ProcessingToast() {
         action: {
           label: "View Results",
           onClick: () => {
-            navigate("/analyze/results");
+            const batchId = completedBatchId ?? activeBatchId;
+            const stored = loadBatchDetail();
+            const firstImageId = stored?.images?.[0]?.id;
+            const url =
+              batchId && firstImageId
+                ? `/analyze/results/${batchId}/images/${firstImageId}`
+                : batchId
+                  ? `/analyze/results/${batchId}`
+                  : "/analyze/results";
+            navigate(url);
             reset();
           },
         },
@@ -97,7 +109,7 @@ export function ProcessingToast() {
 
     setToastId(null);
     return () => clearTimeout(t);
-  }, [isProcessing, allDone, doneCount, errorCount, hasErrors, images.length, totalImages, totalDone, navigate, reset, setToastId]);
+  }, [isProcessing, allDone, doneCount, errorCount, hasErrors, images.length, totalImages, totalDone, navigate, reset, setToastId, completedBatchId, activeBatchId]);
 
   return null;
 }

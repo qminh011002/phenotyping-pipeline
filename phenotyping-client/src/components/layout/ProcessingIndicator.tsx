@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Loader2, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useProcessingStore } from "@/stores/processingStore";
+import { loadBatchDetail } from "@/features/upload/lib/processingSession";
 
 interface ProcessingIndicatorProps {
   collapsed?: boolean;
@@ -16,9 +17,14 @@ export function ProcessingIndicator({ collapsed = false }: ProcessingIndicatorPr
   if (!isProcessing && !completedBatchId) return null;
 
   if (completedBatchId) {
+    const stored = loadBatchDetail();
+    const firstImageId = stored?.images?.[0]?.id;
+    const to = firstImageId
+      ? `/analyze/results/${completedBatchId}/images/${firstImageId}`
+      : `/analyze/results/${completedBatchId}`;
     return (
       <Link
-        to="/analyze/results"
+        to={to}
         className={cn(
           "flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium",
           "bg-green-500/10 text-green-600 dark:text-green-400",

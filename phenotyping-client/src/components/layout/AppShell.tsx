@@ -14,6 +14,7 @@ import { isManagerRunning, resumeActiveBatchIfAny } from "@/services/processingM
 const SHELL_TITLES: Record<string, string> = {
   "/": "Dashboard",
   "/recorded": "Recorded",
+  "/models": "Models",
   "/settings": "Settings",
   "/analyze/processing": "Processing",
 };
@@ -39,7 +40,7 @@ export function AppShell() {
     <SidebarProvider className="h-svh min-h-0 overflow-hidden">
       <Sidebar />
       <SidebarInset className="h-svh min-h-0 overflow-hidden bg-background md:m-2 md:h-[calc(100svh-1rem)] md:rounded-lg">
-        <div className="flex h-12 shrink-0 items-center gap-2 bg-background px-3">
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3">
           <SidebarTrigger />
           <div className="h-4 w-px bg-border" />
           <div className="min-w-0 text-sm text-muted-foreground">

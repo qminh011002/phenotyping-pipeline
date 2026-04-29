@@ -83,9 +83,9 @@ const ZOOM_FACTOR = 1.15;
 // Smaller = more wheel ticks per doubling. Roboflow-like finesse.
 const WHEEL_ZOOM_SENSITIVITY = 0.0006;
 
-// All non-selected boxes share one green stroke (model + user). Selection
+// All non-selected boxes share one yellow stroke (model + user). Selection
 // stays blue so it remains distinguishable.
-const STROKE_BOX = '#22c55e';
+const STROKE_BOX = '#facc15'; // tailwind yellow-400
 const STROKE_MODEL = STROKE_BOX;
 const STROKE_USER = STROKE_BOX;
 const STROKE_SELECTED = '#3b82f6';
@@ -188,6 +188,9 @@ export function OverlayImage({
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
     // Transient preview boxes during a body drag or rubber-band draw.
     const [rubberBand, setRubberBand] = useState<[number, number, number, number] | null>(null);
+    // After a rubber-band draw releases, the new box is held here until the
+    // user confirms it via the floating ✓/✕ controls. Image-space coords.
+    const [pendingBox, setPendingBox] = useState<[number, number, number, number] | null>(null);
     // True while a drag / resize / rubber-band is in flight — hides the dim layer.
     const [interacting, setInteracting] = useState(false);
     // Cursor in image coords — drives the draw-mode crosshair.
@@ -540,11 +543,14 @@ export function OverlayImage({
             if (evtButton !== 0) return;
             const pt = getImagePointer();
             if (!pt) return;
+            // Starting a new rubber band discards any unconfirmed pending box.
+            // The user implicitly chose to abandon it by drawing again.
+            if (pendingBox) setPendingBox(null);
             drawStartRef.current = pt;
             setRubberBand([pt.x, pt.y, pt.x, pt.y]);
             setInteracting(true);
         },
-        [editing, mode, getImagePointer],
+        [editing, mode, getImagePointer, pendingBox],
     );
 
     const handleStageMouseMoveDraw = useCallback(() => {
@@ -572,17 +578,58 @@ export function OverlayImage({
         const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
         if (!enforced) return;
         const clamped = clampBox(enforced, imageEl.naturalWidth, imageEl.naturalHeight);
+        // Stage the new box for explicit confirmation (✓/✕ floating buttons)
+        // instead of committing immediately. Confirm flows through onCommit;
+        // cancel just clears the pending state.
+        setPendingBox(clamped);
+    }, [editing, mode, editor, getImagePointer, imageEl]);
+
+    const confirmPendingBox = useCallback(() => {
+        if (!editor || !pendingBox) return;
         const newBox: BBox = {
             label: editor.defaultClass ?? 'object',
-            bbox: clamped,
+            bbox: pendingBox,
             confidence: 1.0,
             origin: 'user',
             edited_at: new Date().toISOString(),
         };
         const next = [...annotations, newBox];
+        setPendingBox(null);
         editor.onCommit(next);
         editor.onSelect(next.length - 1);
-    }, [editing, mode, editor, getImagePointer, imageEl, annotations]);
+    }, [editor, pendingBox, annotations]);
+
+    const cancelPendingBox = useCallback(() => {
+        setPendingBox(null);
+    }, []);
+
+    // Discard pending box if the user leaves draw mode (e.g. switches to drag,
+    // navigates to a different image, or unmounts). Stale pending boxes from
+    // a previous image must never be committed against the current annotations.
+    useEffect(() => {
+        if (mode !== 'draw') setPendingBox(null);
+    }, [mode]);
+    useEffect(() => {
+        return () => setPendingBox(null);
+    }, [src]);
+
+    // Enter ⇒ confirm, Escape ⇒ cancel — only while a box is pending.
+    useEffect(() => {
+        if (!pendingBox) return;
+        const onKey = (e: KeyboardEvent) => {
+            const target = e.target;
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                confirmPendingBox();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelPendingBox();
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [pendingBox, confirmPendingBox, cancelPendingBox]);
 
     // ── Box drag (move) ─────────────────────────────────────────────────────
     const handleBoxDragStart = useCallback(
@@ -816,7 +863,16 @@ export function OverlayImage({
 
     const stageDraggable = editing ? mode === 'drag' : true;
 
-    const cursorStyle = mode === 'draw' ? 'crosshair' : stageDraggable ? 'grab' : 'default';
+    // Cursor: hovering a box → "move" (snappy, uses raw hoverIdx). Otherwise
+    // crosshair in draw mode, grab when stage is pannable.
+    const cursorStyle =
+        hoverIdx !== null && !interacting
+            ? 'move'
+            : mode === 'draw'
+              ? 'crosshair'
+              : stageDraggable
+                ? 'grab'
+                : 'default';
 
     const invScale = 1 / Math.max(scale, 0.001);
     const handleSize = HANDLE_PX * invScale;
@@ -1065,12 +1121,12 @@ export function OverlayImage({
                                 const w = Math.max(0, x2 - x1);
                                 const h = Math.max(0, y2 - y1);
                                 const isSelected = editing && selectedIndex === index;
+                                const isHover = hoverIdx === index;
                                 const stroke = isSelected
                                     ? STROKE_SELECTED
                                     : box.origin === 'user'
                                       ? STROKE_USER
                                       : STROKE_MODEL;
-                                const isHover = hoverIdx === index;
                                 const commonProps = {
                                     x: x1,
                                     y: y1,
@@ -1183,6 +1239,31 @@ export function OverlayImage({
                                         />
                                     );
                                 })()}
+
+                            {/* Pending (just-drawn) box awaiting confirm/cancel */}
+                            {editing && mode === 'draw' && pendingBox && (
+                                <>
+                                    <Rect
+                                        x={pendingBox[0]}
+                                        y={pendingBox[1]}
+                                        width={pendingBox[2] - pendingBox[0]}
+                                        height={pendingBox[3] - pendingBox[1]}
+                                        fill={FILL_SELECTED}
+                                        stroke={STROKE_SELECTED}
+                                        strokeWidth={1.5}
+                                        strokeScaleEnabled={false}
+                                        dash={[4, 3]}
+                                        listening={false}
+                                    />
+                                    <ConfirmCancelHandle
+                                        x={pendingBox[2]}
+                                        y={pendingBox[1]}
+                                        size={handleSize * 1.6}
+                                        onConfirm={confirmPendingBox}
+                                        onCancel={cancelPendingBox}
+                                    />
+                                </>
+                            )}
                         </Layer>
                     </Stage>
                 )}
@@ -1247,6 +1328,119 @@ function DeleteHandle({ x, y, size, onClick, groupRef }: DeleteHandleProps) {
                 strokeScaleEnabled={false}
                 lineCap="round"
             />
+        </Group>
+    );
+}
+
+// ── Confirm / Cancel handles for a just-drawn pending box ─────────────────
+// Two circular icons sit just above the top-left of the pending box: a green
+// check (confirm) and a red X (cancel). Both stop event bubbling so clicks
+// don't bleed into the stage's draw-start handler.
+
+interface ConfirmCancelHandleProps {
+    x: number;
+    y: number;
+    size: number;
+    onConfirm: () => void;
+    onCancel: () => void;
+}
+
+function ConfirmCancelHandle({ x, y, size, onConfirm, onCancel }: ConfirmCancelHandleProps) {
+    // Square buttons stacked vertically just outside the box's top-right corner.
+    // x,y is the box top-right (x2, y1) in image coords; children are positioned
+    // relative to that anchor.
+    const s = size;             // icon side length
+    const gap = s * 0.25;       // gap between the two buttons
+    const margin = s * 0.4;     // gap between the buttons and the box edge
+    const radius = s * 0.22;    // border-radius
+    const stroke = Math.max(1, s * 0.09);
+
+    // Both buttons sit fully outside the box on the right.
+    // Confirm (top) and Cancel (below it).
+    const btnX = margin;
+    const confirmY = 0;
+    const cancelY = s + gap;
+
+    return (
+        <Group x={x} y={y} listening>
+            {/* Confirm — green check */}
+            <Group
+                x={btnX}
+                y={confirmY}
+                onMouseDown={(e) => {
+                    e.cancelBubble = true;
+                }}
+                onClick={(e) => {
+                    e.cancelBubble = true;
+                    onConfirm();
+                }}
+                onTap={(e) => {
+                    e.cancelBubble = true;
+                    onConfirm();
+                }}
+            >
+                <Rect
+                    width={s}
+                    height={s}
+                    cornerRadius={radius}
+                    fill="#10b981"
+                    stroke="white"
+                    strokeWidth={stroke}
+                    strokeScaleEnabled={false}
+                />
+                <Line
+                    points={[
+                        s * 0.25, s * 0.55,
+                        s * 0.45, s * 0.72,
+                        s * 0.78, s * 0.32,
+                    ]}
+                    stroke="white"
+                    strokeWidth={Math.max(1, s * 0.13)}
+                    strokeScaleEnabled={false}
+                    lineCap="round"
+                    lineJoin="round"
+                />
+            </Group>
+            {/* Cancel — red X */}
+            <Group
+                x={btnX}
+                y={cancelY}
+                onMouseDown={(e) => {
+                    e.cancelBubble = true;
+                }}
+                onClick={(e) => {
+                    e.cancelBubble = true;
+                    onCancel();
+                }}
+                onTap={(e) => {
+                    e.cancelBubble = true;
+                    onCancel();
+                }}
+            >
+                <Rect
+                    width={s}
+                    height={s}
+                    cornerRadius={radius}
+                    fill="#ef4444"
+                    stroke="white"
+                    strokeWidth={stroke}
+                    strokeScaleEnabled={false}
+                />
+                <Line
+                    points={[s * 0.3, s * 0.3, s * 0.7, s * 0.7]}
+                    stroke="white"
+                    strokeWidth={Math.max(1, s * 0.11)}
+                    strokeScaleEnabled={false}
+                    lineCap="round"
+                />
+                <Line
+                    points={[s * 0.7, s * 0.3, s * 0.3, s * 0.7]}
+                    stroke="white"
+                    strokeWidth={Math.max(1, s * 0.11)}
+                    strokeScaleEnabled={false}
+                    lineCap="round"
+                />
+            </Group>
         </Group>
     );
 }

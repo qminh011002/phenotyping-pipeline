@@ -166,11 +166,19 @@ export function stopStageTracker(): void {
     opening = false;
     clearReconnect();
     if (ws) {
+        const sock = ws;
+        ws = null;
+        // Closing during CONNECTING produces a console warning. Defer until
+        // the handshake completes (or fails) before issuing the close.
         try {
-            ws.close();
+            if (sock.readyState === WebSocket.CONNECTING) {
+                sock.addEventListener("open", () => sock.close(), { once: true });
+                sock.addEventListener("error", () => {/* swallow */}, { once: true });
+            } else if (sock.readyState === WebSocket.OPEN) {
+                sock.close();
+            }
         } catch {
             /* ignore */
         }
-        ws = null;
     }
 }
