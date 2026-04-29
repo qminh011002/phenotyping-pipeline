@@ -285,9 +285,7 @@ class AnalysisService:
         Raises ``ValueError`` if the batch is not in ``draft`` state.
         """
         batch = (
-            await db.execute(
-                select(AnalysisBatch).where(AnalysisBatch.id == batch_id)
-            )
+            await db.execute(select(AnalysisBatch).where(AnalysisBatch.id == batch_id))
         ).scalar_one_or_none()
         if batch is None:
             return None
