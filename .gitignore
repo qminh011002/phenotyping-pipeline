@@ -128,3 +128,5 @@ SETUP.md
 !*.md
 PRODUCTION.md
 CLAUDE.md
+phenotyping-client/FRONTEND_PERF_REVIEW.md
+backend/BackendReview.md
