@@ -59,16 +59,30 @@ def _prep(plain: str) -> bytes:
     return hashlib.sha256(raw).hexdigest().encode("ascii")
 
 
-def hash_password(plain: str) -> str:
+def _hash_password_sync(plain: str) -> str:
     salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
     return bcrypt.hashpw(_prep(plain), salt).decode("ascii")
 
 
-def verify_password(plain: str, hashed: str) -> bool:
+def _verify_password_sync(plain: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(_prep(plain), hashed.encode("ascii"))
     except (ValueError, TypeError):
         return False
+
+
+async def hash_password(plain: str) -> str:
+    """Hash a password off the event loop (bcrypt cost-12 ≈ 150–300 ms)."""
+    import asyncio
+
+    return await asyncio.to_thread(_hash_password_sync, plain)
+
+
+async def verify_password(plain: str, hashed: str) -> bool:
+    """Verify a password off the event loop."""
+    import asyncio
+
+    return await asyncio.to_thread(_verify_password_sync, plain, hashed)
 
 
 # ── JWT encode / decode ─────────────────────────────────────────────────────────

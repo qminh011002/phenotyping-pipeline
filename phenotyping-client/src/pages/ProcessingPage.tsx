@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { PauseCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
-import { loadBatchDetail, loadProcessingFiles, loadBatchId } from '@/features/upload/lib/processingSession';
+import {
+    loadBatchDetail,
+    loadProcessingFiles,
+    loadBatchId,
+} from '@/features/upload/lib/processingSession';
 import { useProcessingStore } from '@/stores/processingStore';
 import type { ProcessingLogEntry } from '@/stores/processingStore';
 import {
@@ -15,25 +20,32 @@ import {
     resumeActiveBatchIfAny,
 } from '@/services/processingManager';
 
+const logTimeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+});
+
 function formatLogTime(iso: string): string {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '--:--:--';
-    return d.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-    });
+    return logTimeFormatter.format(d);
 }
 
 function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
     const scrollRef = useRef<HTMLDivElement>(null);
+    const rowVirtualizer = useVirtualizer({
+        count: logs.length,
+        getScrollElement: () => scrollRef.current,
+        estimateSize: () => 28,
+        overscan: 12,
+    });
 
     useEffect(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        el.scrollTop = el.scrollHeight;
-    }, [logs]);
+        if (logs.length === 0) return;
+        rowVirtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
+    }, [logs.length, rowVirtualizer]);
 
     return (
         <section className="mt-8 w-[min(48rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-card text-left shadow-sm">
@@ -53,27 +65,41 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
                 {logs.length === 0 ? (
                     <div className="text-slate-500">Waiting for processing events...</div>
                 ) : (
-                    logs.map((log) => (
-                        <div key={log.id} className="flex min-w-0 gap-3 whitespace-pre-wrap">
-                            <span
-                                className={
-                                    log.level === 'ERROR'
-                                        ? 'w-12 shrink-0 font-bold text-red-400'
-                                        : log.level === 'WARN'
-                                          ? 'w-12 shrink-0 font-bold text-yellow-400'
-                                          : 'w-12 shrink-0 font-bold text-green-400'
-                                }
-                            >
-                                {log.level}
-                            </span>
-                            <span className="shrink-0 text-slate-500 tabular-nums">
-                                {formatLogTime(log.timestamp)}
-                            </span>
-                            <span className="min-w-0 break-words text-slate-300">
-                                {log.message}
-                            </span>
-                        </div>
-                    ))
+                    <div
+                        className="relative"
+                        style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                    >
+                        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                            const log = logs[virtualRow.index];
+                            return (
+                                <div
+                                    key={virtualRow.key}
+                                    ref={rowVirtualizer.measureElement}
+                                    data-index={virtualRow.index}
+                                    className="absolute left-0 top-0 flex w-full min-w-0 gap-3 whitespace-pre-wrap"
+                                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                                >
+                                    <span
+                                        className={
+                                            log.level === 'ERROR'
+                                                ? 'w-12 shrink-0 font-bold text-red-400'
+                                                : log.level === 'WARN'
+                                                  ? 'w-12 shrink-0 font-bold text-yellow-400'
+                                                  : 'w-12 shrink-0 font-bold text-green-400'
+                                        }
+                                    >
+                                        {log.level}
+                                    </span>
+                                    <span className="shrink-0 text-slate-500 tabular-nums">
+                                        {formatLogTime(log.timestamp)}
+                                    </span>
+                                    <span className="min-w-0 break-words text-slate-300">
+                                        {log.message}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
                 )}
             </div>
         </section>

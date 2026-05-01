@@ -79,7 +79,7 @@ async def register(
     user = User(
         email=email,
         name=body.name,
-        password_hash=hash_password(body.password),
+        password_hash=await hash_password(body.password),
     )
     session.add(user)
     try:
@@ -104,7 +104,7 @@ async def login(
     email = body.email.lower().strip()
     result = await session.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(body.password, user.password_hash):
+    if user is None or not await verify_password(body.password, user.password_hash):
         # Same response for unknown email vs wrong password — don't leak which.
         raise _unauthorized("invalid_credentials", "Invalid email or password")
     logger.info(

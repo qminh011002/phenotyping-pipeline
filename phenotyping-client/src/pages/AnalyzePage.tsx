@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useProcessingStore } from '@/stores/processingStore';
 import { Button } from '@/components/ui/button';
@@ -22,8 +23,21 @@ export default function AnalyzePage() {
     const [mode, setMode] = useState<Mode | null>('upload');
     const [organism, setOrganism] = useState<Organism | null>(null);
     const [showNameError, setShowNameError] = useState(false);
-    const [installedModels, setInstalledModels] = useState<Partial<Record<Organism, boolean>>>({});
     const { modelsStatus } = useBoot();
+    const assignmentsQuery = useQuery({
+        queryKey: ['model-assignments'],
+        queryFn: ({ signal }) => getModelAssignments(signal),
+    });
+    const installedModels = useMemo(() => {
+        const next: Partial<Record<Organism, boolean>> = {};
+        const assignments = assignmentsQuery.data?.assignments;
+        if (!assignments) return next;
+        for (const [key, assignment] of Object.entries(assignments)) {
+            const organismKey = key as Organism;
+            next[organismKey] = assignment.has_default || assignment.custom_model !== null;
+        }
+        return next;
+    }, [assignmentsQuery.data]);
 
     useEffect(() => {
         if (isProcessing) {
@@ -40,28 +54,6 @@ export default function AnalyzePage() {
             setOrganism(null);
         }
     }, [organism, modelsStatus]);
-
-    useEffect(() => {
-        let alive = true;
-
-        getModelAssignments()
-            .then((data) => {
-                if (!alive) return;
-                const next: Partial<Record<Organism, boolean>> = {};
-                for (const [key, assignment] of Object.entries(data.assignments)) {
-                    const organismKey = key as Organism;
-                    next[organismKey] = assignment.has_default || assignment.custom_model !== null;
-                }
-                setInstalledModels(next);
-            })
-            .catch(() => {
-                if (alive) setInstalledModels({});
-            });
-
-        return () => {
-            alive = false;
-        };
-    }, []);
 
     const nameTrimmed = projectName.trim();
     const modeOk = mode !== null && MODES.find((m) => m.id === mode)?.available === true;

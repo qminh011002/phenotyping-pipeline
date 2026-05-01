@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -100,18 +101,104 @@ class ModelUploadService:
         )
         return record
 
-    def _validate_yolo(self, path: Path) -> bool:
-        """Load the .pt file with ultralytics and check task == 'detect'."""
-        try:
-            from ultralytics import YOLO
+    async def save_uploaded_file_from_path(
+        self,
+        db: AsyncSession,
+        organism: str,
+        filename: str,
+        source_path: Path,
+        size_bytes: int,
+    ) -> CustomModel:
+        """Move a tempfile to the organism's custom dir and create a DB record.
 
-            model = YOLO(str(path))
-            valid = model.task == "detect"
-            del model
-            return valid
-        except Exception as exc:
-            logger.warning("YOLO validation failed for %s: %s", path.name, exc)
+        ``source_path`` is the streamed-to-disk upload (no longer needs to be
+        in RAM). On validation failure the moved file is unlinked.
+        """
+        custom_dir = self._ensure_custom_dir(organism)
+
+        model_id = uuid.uuid4()
+        stored_name = f"{model_id}_{filename}"
+        stored_path = custom_dir / stored_name
+
+        # Move first (cheap intra-FS rename); fall back to copy across mounts.
+        def _move() -> None:
+            try:
+                source_path.rename(stored_path)
+            except OSError:
+                shutil.copyfile(source_path, stored_path)
+                source_path.unlink(missing_ok=True)
+
+        await asyncio.to_thread(_move)
+
+        is_valid = await asyncio.to_thread(self._validate_yolo, stored_path)
+        if not is_valid:
+            await asyncio.to_thread(lambda: stored_path.unlink(missing_ok=True))
+            raise InvalidModelError(
+                "Invalid model file: not a YOLO detection model or file is corrupt"
+            )
+
+        record = CustomModel(
+            id=model_id,
+            organism=organism,
+            original_filename=filename,
+            stored_path=str(stored_path),
+            file_size_bytes=size_bytes,
+            uploaded_at=datetime.now(UTC),
+            is_valid=True,
+        )
+        db.add(record)
+        await db.flush()
+
+        logger.info(
+            "Custom model uploaded",
+            extra={
+                "context": {
+                    "model_id": str(model_id),
+                    "organism": organism,
+                    "filename": filename,
+                    "stored_path": str(stored_path),
+                    "size_bytes": size_bytes,
+                }
+            },
+        )
+        return record
+
+    def _validate_yolo(self, path: Path) -> bool:
+        """Validate by reading just the checkpoint header.
+
+        Avoids constructing a full YOLO instance (which loads weights, possibly
+        to GPU) just to read ``.task``. We torch.load with map_location='cpu'
+        and inspect the same metadata fields ultralytics writes when training.
+        """
+        try:
+            import torch
+
+            ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Checkpoint load failed for %s: %s", path.name, exc
+            )
             return False
+
+        try:
+            # Ultralytics writes 'train_args' / 'task' on the checkpoint. The
+            # task field is the most direct signal; fall back to inspecting the
+            # underlying model's attribute when missing.
+            task = ckpt.get("task") if isinstance(ckpt, dict) else None
+            if task is None and isinstance(ckpt, dict):
+                model = ckpt.get("model")
+                task = getattr(model, "task", None)
+            if task is None and isinstance(ckpt, dict):
+                train_args = ckpt.get("train_args") or {}
+                task = train_args.get("task")
+            return task == "detect"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not extract task from checkpoint %s: %s", path.name, exc
+            )
+            return False
+        finally:
+            del ckpt
 
     # ── Listing / lookup / deletion ────────────────────────────────────────────
 

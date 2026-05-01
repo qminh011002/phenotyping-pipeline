@@ -6,6 +6,7 @@ Stores only URL/path references to overlay images saved on disk by the inference
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -185,6 +186,28 @@ class AnalysisService:
 
         if batch_row is not None:
             batch_row.processed_image_count = batch_row.processed_image_count + 1
+
+            # Maintain aggregates incrementally so we don't have to scan every
+            # AnalysisImage row at finalize time. ``_recompute_aggregates`` is
+            # kept as a finalize/repair step in ``complete_batch`` /
+            # ``finish_batch``.
+            prev_count = batch_row.total_count or 0
+            new_count = prev_count + (result.count or 0)
+            batch_row.total_count = new_count
+
+            batch_row.total_elapsed_secs = (
+                batch_row.total_elapsed_secs or 0.0
+            ) + (result.elapsed_seconds or 0.0)
+
+            new_conf = result.avg_confidence
+            if new_conf is not None and (result.count or 0) > 0:
+                prev_avg = batch_row.avg_confidence or 0.0
+                # Count-weighted running average: (Σ avg_i * n_i) / Σ n_i
+                if new_count > 0:
+                    batch_row.avg_confidence = (
+                        prev_avg * prev_count + new_conf * (result.count or 0)
+                    ) / new_count
+
             if (
                 batch_row.total_image_count == 1
                 and batch_row.name
@@ -275,8 +298,12 @@ class AnalysisService:
         self,
         batch_id: UUID,
         db: AsyncSession,
+        user_id: UUID,
     ) -> AnalysisBatch | None:
         """Promote a draft batch to ``completed`` and stamp ``completed_at``.
+
+        Scoped to ``user_id`` — a batch belonging to another user is treated
+        as not found (404), matching the rest of the API surface.
 
         Re-runs the aggregate query so any annotation edits made during the
         review phase are reflected in ``total_count`` and ``avg_confidence``
@@ -285,7 +312,11 @@ class AnalysisService:
         Raises ``ValueError`` if the batch is not in ``draft`` state.
         """
         batch = (
-            await db.execute(select(AnalysisBatch).where(AnalysisBatch.id == batch_id))
+            await db.execute(
+                select(AnalysisBatch)
+                .where(AnalysisBatch.id == batch_id)
+                .where(AnalysisBatch.user_id == user_id)
+            )
         ).scalar_one_or_none()
         if batch is None:
             return None
@@ -466,10 +497,11 @@ class AnalysisService:
             AnalysisBatch.user_id == user_id
         )
 
-        # Base batch query with eager-loaded images
+        # Base batch query — no selectinload(images) because the summary view
+        # does not touch the relationship. Loading every image per row was
+        # shipping ~50× the rows we render.
         batch_stmt = (
             select(AnalysisBatch)
-            .options(selectinload(AnalysisBatch.images))
             .where(AnalysisBatch.user_id == user_id)
             .order_by(AnalysisBatch.created_at.desc())
         )
@@ -643,52 +675,41 @@ class AnalysisService:
         if batch is None:
             return False
 
-        # Collect overlay file paths from disk
-        overlay_files: list[Path] = []
-        for img in batch.images:
-            if img.overlay_path:
-                # overlay_path may be an absolute path or relative to storage_dir
-                p = Path(img.overlay_path)
-                if not p.is_absolute():
-                    p = storage_dir / p
-                overlay_files.append(p)
-
         # Delete DB rows (cascade handles images relationship)
         await db.delete(batch)
         await db.flush()
 
-        # Delete overlay files from disk
-        for p in overlay_files:
+        # Overlays for a batch all live under storage_dir/{batch_id}/, so a
+        # single rmtree is sufficient — no need to per-file unlink each
+        # overlay (which blocks the loop on large batches). Run the rmtree
+        # in a worker thread.
+        batch_dir = storage_dir / str(batch_id)
+
+        def _rmtree_batch_dir() -> None:
             try:
-                if p.exists():
-                    p.unlink()
+                if batch_dir.exists():
+                    shutil.rmtree(batch_dir)
             except OSError as exc:
                 logger.warning(
-                    "Failed to delete overlay file: %s (%s)",
-                    p,
+                    "Failed to delete batch directory: %s (%s)",
+                    batch_dir,
                     exc,
-                    extra={"context": {"overlay_path": str(p), "exception": str(exc)}},
+                    extra={
+                        "context": {
+                            "batch_dir": str(batch_dir),
+                            "exception": str(exc),
+                        }
+                    },
                 )
 
-        # Also clean up the batch directory if it exists
-        batch_dir = storage_dir / str(batch_id)
-        try:
-            if batch_dir.exists():
-                shutil.rmtree(batch_dir)
-        except OSError as exc:
-            logger.warning(
-                "Failed to delete batch directory: %s (%s)",
-                batch_dir,
-                exc,
-                extra={"context": {"batch_dir": str(batch_dir), "exception": str(exc)}},
-            )
+        await asyncio.to_thread(_rmtree_batch_dir)
 
         logger.info(
             "Analysis batch deleted",
             extra={
                 "context": {
                     "batch_id": str(batch_id),
-                    "overlay_files_deleted": len(overlay_files),
+                    "batch_dir": str(batch_dir),
                 }
             },
         )

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 
 import { EmptyState } from '@/components/common/EmptyState';
@@ -37,6 +38,7 @@ import {
 } from '@/features/upload/lib/processingSession';
 import { consumeStartIndex } from '@/features/recorded/lib/openBatchInResults';
 import {
+    completeBatch,
     finishBatch,
     getAnalysesRawUrl,
     getAnalysisDetail,
@@ -58,18 +60,26 @@ interface ResultViewerProps {
     className?: string;
 }
 
+type SaveEditsArgs = {
+    imageId?: string;
+    boxesToSave?: BBox[];
+    force?: boolean;
+};
+
 export function ResultViewer({ className }: ResultViewerProps) {
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     // Path params: /analyze/results/:batchId/images/:imageId
     // Both segments are optional; the component canonicalizes missing
     // imageId by redirecting to the first image of the batch.
-    const { batchId: batchIdFromUrl = null, imageId: imageIdFromUrl = null } =
-        useParams<{ batchId?: string; imageId?: string }>();
+    const { batchId: batchIdFromUrl = null, imageId: imageIdFromUrl = null } = useParams<{
+        batchId?: string;
+        imageId?: string;
+    }>();
 
     /** Build the canonical results URL for a given batch + image. */
     const buildUrl = useCallback(
-        (batchId: string, imageId: string) =>
-            `/analyze/results/${batchId}/images/${imageId}`,
+        (batchId: string, imageId: string) => `/analyze/results/${batchId}/images/${imageId}`,
         [],
     );
 
@@ -141,8 +151,16 @@ export function ResultViewer({ className }: ResultViewerProps) {
             // browser back/forward.
             if (batchIdFromUrl) {
                 try {
-                    const detail = await getAnalysisDetail(batchIdFromUrl, undefined, {
-                        includeAnnotations: false,
+                    const detail = await queryClient.fetchQuery({
+                        queryKey: [
+                            'analysis-detail',
+                            batchIdFromUrl,
+                            { includeAnnotations: false },
+                        ],
+                        queryFn: ({ signal }) =>
+                            getAnalysisDetail(batchIdFromUrl, signal, {
+                                includeAnnotations: false,
+                            }),
                     });
                     if (cancelled) return;
                     setBatchDetail(detail);
@@ -151,9 +169,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
                     // no need to round-trip the network for them.
                     const stored = loadProcessingResults();
                     for (const r of stored) {
-                        const img = detail.images.find(
-                            (i) => i.original_filename === r.filename,
-                        );
+                        const img = detail.images.find((i) => i.original_filename === r.filename);
                         if (img && !imageDetailCache.current.has(img.id)) {
                             imageDetailCache.current.set(img.id, {
                                 ...img,
@@ -182,9 +198,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
             }
             setBatchDetail(storedDetail as AnalysisBatchDetail);
             for (const r of stored) {
-                const img = storedDetail.images.find(
-                    (i) => i.original_filename === r.filename,
-                );
+                const img = storedDetail.images.find((i) => i.original_filename === r.filename);
                 if (img && !imageDetailCache.current.has(img.id)) {
                     imageDetailCache.current.set(img.id, {
                         ...img,
@@ -210,8 +224,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         return () => {
             cancelled = true;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [batchIdFromUrl]);
+    }, [batchIdFromUrl, buildUrl, bumpCache, navigate, queryClient]);
 
     // ── Current index derived from URL ──────────────────────────────────────
     const currentIndex = useMemo(() => {
@@ -229,8 +242,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
     useEffect(() => {
         if (!batchDetail) return;
         const valid =
-            imageIdFromUrl !== null &&
-            batchDetail.images.some((img) => img.id === imageIdFromUrl);
+            imageIdFromUrl !== null && batchDetail.images.some((img) => img.id === imageIdFromUrl);
         if (!valid && batchDetail.images.length > 0) {
             navigate(buildUrl(batchDetail.id, batchDetail.images[0].id), {
                 replace: true,
@@ -276,24 +288,69 @@ export function ResultViewer({ className }: ResultViewerProps) {
     // ── Synthetic results array (for header / nav / content) ─────────────────
     // Maintains the existing DetectionResult shape so child components don't
     // need refactoring. Annotations come from the cache; empty until fetched.
+    const resultCacheRef = useRef<{
+        batchId: string | null;
+        byImageId: Map<string, DetectionResult>;
+        array: DetectionResult[];
+    }>({ batchId: null, byImageId: new Map(), array: [] });
     const results = useMemo<DetectionResult[]>(() => {
-        if (!batchDetail) return [];
+        if (!batchDetail) {
+            resultCacheRef.current = { batchId: null, byImageId: new Map(), array: [] };
+            return [];
+        }
+        if (resultCacheRef.current.batchId !== batchDetail.id) {
+            resultCacheRef.current = {
+                batchId: batchDetail.id,
+                byImageId: new Map(),
+                array: [],
+            };
+        }
         const organism = (batchDetail.organism_type as Organism) ?? 'egg';
-        return batchDetail.images.map((img) => {
+        const cache = resultCacheRef.current;
+        const seenIds = new Set<string>();
+        let changed = cache.array.length !== batchDetail.images.length;
+        const nextArray = batchDetail.images.map((img) => {
             const cached = imageDetailCache.current.get(img.id);
-            return {
+            const annotations = (cached?.annotations ?? []) as unknown as BBox[];
+            const overlayUrl = img.overlay_path
+                ? `/analyses/${batchDetail.id}/images/${img.id}/overlay`
+                : '';
+            const previous = cache.byImageId.get(img.id);
+            seenIds.add(img.id);
+            if (
+                previous &&
+                previous.filename === img.original_filename &&
+                previous.organism === organism &&
+                previous.count === (img.count ?? 0) &&
+                previous.avg_confidence === (img.avg_confidence ?? 0) &&
+                previous.elapsed_seconds === (img.elapsed_secs ?? 0) &&
+                previous.annotations === annotations &&
+                previous.overlay_url === overlayUrl
+            ) {
+                return previous;
+            }
+            changed = true;
+            const next = {
                 filename: img.original_filename,
                 organism,
                 count: img.count ?? 0,
                 avg_confidence: img.avg_confidence ?? 0,
                 elapsed_seconds: img.elapsed_secs ?? 0,
-                annotations: ((cached?.annotations ?? []) as unknown) as BBox[],
-                overlay_url: img.overlay_path
-                    ? `/analyses/${batchDetail.id}/images/${img.id}/overlay`
-                    : '',
+                annotations,
+                overlay_url: overlayUrl,
             };
+            cache.byImageId.set(img.id, next);
+            return next;
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        for (const imageId of cache.byImageId.keys()) {
+            if (!seenIds.has(imageId)) {
+                cache.byImageId.delete(imageId);
+                changed = true;
+            }
+        }
+        if (!changed) return cache.array;
+        cache.array = nextArray;
+        return nextArray;
     }, [batchDetail, cacheVersion]);
 
     const currentResult = results[currentIndex] ?? null;
@@ -362,18 +419,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
         [batchDetail, navigate, buildUrl],
     );
 
-    const handleNavigate = useCallback(
-        (index: number) => {
-            if (isDirty) {
-                setPendingNavIdx(index);
-                setDirtyNavDialogOpen(true);
-                return;
-            }
-            navigateToIndex(index);
-        },
-        [isDirty, navigateToIndex],
-    );
-
     const confirmDirtyNav = useCallback(() => {
         setDirtyNavDialogOpen(false);
         if (pendingNavIdx === null) return;
@@ -390,34 +435,85 @@ export function ResultViewer({ className }: ResultViewerProps) {
     // After a successful PUT, refresh just this image's cache entry — no need
     // to re-fetch the full batch. Per-image cost stays O(1).
     const saveSeqRef = useRef(0);
-    const handleSaveEdits = useCallback(async () => {
-        if (!batchDetail || !currentImageRecord || !isDirty) return;
-        const batchId = batchDetail.id;
-        const imageId = currentImageRecord.id;
-        const boxesToSave = sessionBoxes;
-        const seq = ++saveSeqRef.current;
-        setSavingEdits(true);
-        try {
-            await putEditedAnnotations(batchId, imageId, boxesToSave);
-            if (seq !== saveSeqRef.current) return; // newer save in flight
-            const updatedImage = await getImageDetail(batchId, imageId);
-            if (seq !== saveSeqRef.current) return;
-            imageDetailCache.current.set(imageId, updatedImage);
-            bumpCache();
-        } catch {
-            if (seq === saveSeqRef.current) toast.error('Failed to auto-save edits');
-        } finally {
-            if (seq === saveSeqRef.current) setSavingEdits(false);
-        }
-    }, [batchDetail, currentImageRecord, isDirty, sessionBoxes, bumpCache]);
+    const saveAbortRef = useRef<AbortController | null>(null);
+    const handleSaveEdits = useCallback(
+        async (args: SaveEditsArgs = {}) => {
+            if (!batchDetail) return false;
+            const batchId = batchDetail.id;
+            const imageId = args.imageId ?? currentImageRecord?.id;
+            if (!imageId) return false;
+            const boxesToSave = args.boxesToSave ?? sessionBoxes;
+            const cached = imageDetailCache.current.get(imageId);
+            const baseline = (cached?.edited_annotations ??
+                cached?.annotations ??
+                []) as unknown as BBox[];
+            if (!args.force && boxesEqual(boxesToSave, baseline)) return true;
+            saveAbortRef.current?.abort();
+            const controller = new AbortController();
+            saveAbortRef.current = controller;
+            const seq = ++saveSeqRef.current;
+            setSavingEdits(true);
+            try {
+                await putEditedAnnotations(batchId, imageId, boxesToSave, controller.signal);
+                if (seq !== saveSeqRef.current) return; // newer save in flight
+                const updatedImage = await getImageDetail(batchId, imageId, controller.signal);
+                if (seq !== saveSeqRef.current) return;
+                imageDetailCache.current.set(imageId, updatedImage);
+                if (currentImageRecord?.id === imageId) bumpCache();
+                return true;
+            } catch {
+                if (!controller.signal.aborted && seq === saveSeqRef.current) {
+                    toast.error('Failed to auto-save edits');
+                }
+                return false;
+            } finally {
+                if (seq === saveSeqRef.current) {
+                    if (saveAbortRef.current === controller) saveAbortRef.current = null;
+                    setSavingEdits(false);
+                }
+            }
+        },
+        [batchDetail, currentImageRecord?.id, sessionBoxes, bumpCache],
+    );
 
     useEffect(() => {
         if (!editMode || !isDirty) return;
+        const imageId = currentImageRecord?.id;
+        if (!imageId) return;
+        const boxesToSave = sessionBoxes;
         const t = setTimeout(() => {
-            void handleSaveEdits();
+            void handleSaveEdits({ imageId, boxesToSave, force: true });
         }, 500);
         return () => clearTimeout(t);
-    }, [editMode, handleSaveEdits, isDirty]);
+    }, [editMode, handleSaveEdits, isDirty, currentImageRecord?.id, sessionBoxes]);
+
+    useEffect(() => {
+        return () => {
+            saveAbortRef.current?.abort();
+            saveSeqRef.current += 1;
+            saveAbortRef.current = null;
+        };
+    }, [currentImageRecord?.id]);
+
+    const handleNavigate = useCallback(
+        (index: number) => {
+            if (!isDirty) {
+                navigateToIndex(index);
+                return;
+            }
+            const imageId = currentImageRecord?.id;
+            const boxesToSave = sessionBoxes;
+            void handleSaveEdits({ imageId, boxesToSave, force: true }).then((saved) => {
+                if (saved) {
+                    navigateToIndex(index);
+                    return;
+                }
+                setPendingNavIdx(index);
+                setDirtyNavDialogOpen(true);
+            });
+        },
+        [currentImageRecord?.id, handleSaveEdits, isDirty, navigateToIndex, sessionBoxes],
+    );
 
     // ── Reset to model ──────────────────────────────────────────────────────
     // Single-image cache update — same pattern as save edits.
@@ -426,10 +522,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
         setResetDialogOpen(false);
         try {
             await resetEditedAnnotations(batchDetail.id, currentImageRecord.id);
-            const updatedImage = await getImageDetail(
-                batchDetail.id,
-                currentImageRecord.id,
-            );
+            const updatedImage = await getImageDetail(batchDetail.id, currentImageRecord.id);
             imageDetailCache.current.set(currentImageRecord.id, updatedImage);
             bumpCache();
             const newBaseline = (updatedImage.annotations as BBox[] | null) ?? [];
@@ -566,12 +659,33 @@ export function ResultViewer({ className }: ResultViewerProps) {
     }, [navigate]);
 
     const handleSaveAndQuit = useCallback(async () => {
-        if (isDirty && !savingEdits) {
-            await handleSaveEdits();
+        if (!batchDetail) {
+            setQuitDialogOpen(false);
+            navigate('/recorded');
+            return;
         }
-        setQuitDialogOpen(false);
-        navigate('/');
-    }, [handleSaveEdits, isDirty, navigate, savingEdits]);
+        try {
+            // Persist any uncommitted annotation edits first.
+            if (isDirty && !savingEdits) {
+                await handleSaveEdits();
+            }
+            // If the batch is still in `processing` (e.g. processingManager
+            // didn't get a chance to call /complete because the operator hit
+            // Back early), promote it to `draft` so it shows up in Records.
+            if (batchDetail.status === 'processing') {
+                const updated = await completeBatch(batchDetail.id);
+                const nextDetail = { ...batchDetail, status: updated.status };
+                setBatchDetail(nextDetail);
+                storeBatchDetail(nextDetail);
+            }
+            toast.success('Saved as draft');
+        } catch {
+            toast.error('Failed to save draft');
+        } finally {
+            setQuitDialogOpen(false);
+            navigate(`/recorded?batch=${batchDetail.id}`);
+        }
+    }, [batchDetail, handleSaveEdits, isDirty, navigate, savingEdits]);
 
     const handleRenameBatch = useCallback(
         async (next: string) => {
@@ -601,6 +715,10 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
     const handleRedo = useCallback(() => {
         dispatchHistory({ type: 'redo' });
+        setSelectedIdx(null);
+    }, []);
+
+    const handleBackgroundClick = useCallback(() => {
         setSelectedIdx(null);
     }, []);
 
@@ -701,7 +819,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 viewBoxes={viewBoxes}
                 visibleAnnotations={visibleAnnotations}
                 onBackgroundClick={
-                    editMode && editorTool === 'drag' ? () => setSelectedIdx(null) : undefined
+                    editMode && editorTool === 'drag' ? handleBackgroundClick : undefined
                 }
                 onDimensions={handleImageDimensions}
                 onSelect={setSelectedIdx}

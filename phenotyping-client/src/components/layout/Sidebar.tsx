@@ -82,7 +82,7 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
                             <NavLink to="/">
-                                <div className="flex aspect-square size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted/50">
+                                <div className="flex aspect-square size-8 shrink-0 items-center justify-center">
                                     <img
                                         src="/assets/logo/app-icon.png"
                                         alt=""
