@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import tempfile
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -28,6 +31,33 @@ from app.services.model_upload_service import (
     ModelOrganismMismatchError,
     ModelUploadService,
 )
+
+# Multi-MB chunk for shutil.copyfileobj — large enough to amortize syscall
+# overhead, small enough to count against MAX_FILE_SIZE without overshoot.
+_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+
+
+def _stream_to_tempfile(src, max_bytes: int) -> tuple[Path, int]:
+    """Copy ``src`` to a NamedTemporaryFile, returning (path, total_bytes).
+
+    Raises ``ValueError`` if more than ``max_bytes`` are read. Runs the actual
+    copy under :func:`asyncio.to_thread` callers — this helper is sync.
+    """
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pt")
+    total = 0
+    try:
+        while True:
+            chunk = src.read(_UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("size_exceeded")
+            tmp.write(chunk)
+    finally:
+        tmp.close()
+    return Path(tmp.name), total
+
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -69,20 +99,34 @@ async def upload_model(
             detail=f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)}MB)",
         )
 
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
+    # Stream the upload to a tempfile in chunks so a 500 MB .pt never sits in
+    # RAM, and a missing Content-Length still hits the limit during the copy.
+    try:
+        tmp_path, total = await asyncio.to_thread(
+            _stream_to_tempfile, file.file, MAX_FILE_SIZE
+        )
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large (max {MAX_FILE_SIZE // (1024 * 1024)}MB)",
-        )
+        ) from None
 
     try:
-        record = await svc.save_uploaded_file(db, organism, filename, content)
+        record = await svc.save_uploaded_file_from_path(
+            db, organism, filename, tmp_path, total
+        )
     except (InvalidModelError, InvalidOrganismError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+    finally:
+        # If the service moved the tempfile, this no-ops; if it copied or
+        # rejected it, this cleans up.
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     return CustomModelResponse.model_validate(record)
 

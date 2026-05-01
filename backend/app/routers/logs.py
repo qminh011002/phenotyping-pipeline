@@ -60,13 +60,23 @@ async def ws_logs_stream(websocket: WebSocket) -> None:
         - The subscription is removed from the LogBuffer.
         - The number of dropped messages is logged at DEBUG level.
     """
-    await websocket.accept()
-
     log_buffer = get_log_buffer()
     client_id: str | None = None
 
+    # Acquire the subscription before .accept() so we can refuse the connection
+    # cleanly when the cap is hit, rather than accepting + immediately closing.
+    from app.services.log_buffer import SubscriberLimitReached
+
     try:
         client_id, queue = await log_buffer.subscribe()
+    except SubscriberLimitReached:
+        # 1013 = "Try Again Later"
+        await websocket.close(code=1013, reason="log subscriber cap reached")
+        return
+
+    await websocket.accept()
+
+    try:
 
         logger.debug(
             "WS client connected",

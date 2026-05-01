@@ -70,10 +70,11 @@ def _configure_mock_inference_service(mock_svc):
     )
 
     def make_batch_result(*args, **kwargs):
+        # images is list[tuple[bytes, filename, suffix]] post-1.1
         images = args[0] if args else kwargs.get("images", [])
         results = [
-            make_single_result(filename, count=3, conf=0.89)
-            for _, filename in images
+            make_single_result(item[1], count=3, conf=0.89)
+            for item in images
         ]
         return BatchDetectionResult(
             results=results,

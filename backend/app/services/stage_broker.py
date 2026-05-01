@@ -26,15 +26,27 @@ _STAGE_MESSAGES = {
 }
 
 
+_HEARTBEAT_INTERVAL = 15.0  # seconds between liveness pings
+
+
 class StageBroker:
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Capture the main event loop so worker threads can schedule emits."""
         self._loop = loop
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = loop.create_task(self._heartbeat_loop())
+
+    async def shutdown(self) -> None:
+        """Cancel the heartbeat task; safe to call multiple times."""
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -44,6 +56,22 @@ class StageBroker:
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
             self._clients.discard(ws)
+
+    async def _heartbeat_loop(self) -> None:
+        """Ping every connected client periodically; drop those that fail.
+
+        Without this, a TCP-half-open connection sits in ``_clients`` until the
+        next stage broadcast — which may be never if no inference is running.
+        """
+        while True:
+            try:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL)
+            except asyncio.CancelledError:
+                return
+            try:
+                await self._broadcast({"type": "heartbeat"})
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("stage heartbeat broadcast failed: %s", exc)
 
     async def _broadcast(self, payload: dict[str, Any]) -> None:
         async with self._lock:

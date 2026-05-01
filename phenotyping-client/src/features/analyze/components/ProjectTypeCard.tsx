@@ -56,10 +56,7 @@ export function ProjectTypeCard({
             )}
         >
             {selected && (
-                <span
-                    aria-hidden
-                    className="absolute inset-y-0 left-0 w-1 bg-green-600"
-                />
+                <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-green-600" />
             )}
 
             <div className="min-w-0 flex flex-col gap-1.5">

@@ -5,7 +5,7 @@
 // and panning/zooming is handled by Konva's native transform (compositor-
 // accelerated canvas, no per-pixel React renders).
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { CloudUpload, Minus, Plus } from 'lucide-react';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
@@ -163,7 +163,7 @@ function isVisible(b: BBox, threshold: number): boolean {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function OverlayImage({
+export const OverlayImage = memo(function OverlayImage({
     src,
     alt = 'Overlay',
     annotations = [],
@@ -195,6 +195,8 @@ export function OverlayImage({
     const [interacting, setInteracting] = useState(false);
     // Cursor in image coords — drives the draw-mode crosshair.
     const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+    const cursorRafRef = useRef<number | null>(null);
+    const cursorRafQueued = useRef(false);
 
     const editing = editor !== undefined;
     const mode = editor?.mode ?? 'drag';
@@ -478,9 +480,22 @@ export function OverlayImage({
         hoverRafRef.current = requestAnimationFrame(computeHoverFromPointer);
     }, [computeHoverFromPointer]);
 
+    const updateCursorFromPointer = useCallback(() => {
+        cursorRafQueued.current = false;
+        const pt = getImagePointer();
+        if (pt) setCursor(pt);
+    }, [getImagePointer]);
+
+    const queueCursorUpdate = useCallback(() => {
+        if (cursorRafQueued.current) return;
+        cursorRafQueued.current = true;
+        cursorRafRef.current = requestAnimationFrame(updateCursorFromPointer);
+    }, [updateCursorFromPointer]);
+
     useEffect(() => {
         return () => {
             if (hoverRafRef.current !== null) cancelAnimationFrame(hoverRafRef.current);
+            if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
         };
     }, []);
 
@@ -491,8 +506,7 @@ export function OverlayImage({
         // pressing. This is what makes the crosshair follow the pointer from the
         // moment the user enters draw mode.
         if (mode === 'draw') {
-            const pt = getImagePointer();
-            if (pt) setCursor(pt);
+            queueCursorUpdate();
         }
         if (backgroundDownPos.current) {
             const p = stage.getPointerPosition();
@@ -506,7 +520,7 @@ export function OverlayImage({
         if (mode !== 'draw' && !interacting) {
             queueHoverHitTest();
         }
-    }, [getImagePointer, mode, interacting, queueHoverHitTest]);
+    }, [mode, interacting, queueHoverHitTest, queueCursorUpdate]);
 
     // Clear the hover state when the pointer leaves the stage or interaction
     // begins so the spotlight doesn't stay locked on a box.
@@ -1270,7 +1284,7 @@ export function OverlayImage({
             </div>
         </div>
     );
-}
+});
 
 // ── Delete handle (small red X on NW corner of selected box) ──────────────
 // The Group is positioned at the box's top-left (x, y) and children are laid
@@ -1349,10 +1363,10 @@ function ConfirmCancelHandle({ x, y, size, onConfirm, onCancel }: ConfirmCancelH
     // Square buttons stacked vertically just outside the box's top-right corner.
     // x,y is the box top-right (x2, y1) in image coords; children are positioned
     // relative to that anchor.
-    const s = size;             // icon side length
-    const gap = s * 0.25;       // gap between the two buttons
-    const margin = s * 0.4;     // gap between the buttons and the box edge
-    const radius = s * 0.22;    // border-radius
+    const s = size; // icon side length
+    const gap = s * 0.25; // gap between the two buttons
+    const margin = s * 0.4; // gap between the buttons and the box edge
+    const radius = s * 0.22; // border-radius
     const stroke = Math.max(1, s * 0.09);
 
     // Both buttons sit fully outside the box on the right.
@@ -1389,11 +1403,7 @@ function ConfirmCancelHandle({ x, y, size, onConfirm, onCancel }: ConfirmCancelH
                     strokeScaleEnabled={false}
                 />
                 <Line
-                    points={[
-                        s * 0.25, s * 0.55,
-                        s * 0.45, s * 0.72,
-                        s * 0.78, s * 0.32,
-                    ]}
+                    points={[s * 0.25, s * 0.55, s * 0.45, s * 0.72, s * 0.78, s * 0.32]}
                     stroke="white"
                     strokeWidth={Math.max(1, s * 0.13)}
                     strokeScaleEnabled={false}

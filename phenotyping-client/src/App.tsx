@@ -11,6 +11,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { BootProvider } from '@/providers/BootProvider';
 import { onForceLogout } from '@/services/http';
 import { startStageTracker, stopStageTracker } from '@/services/stageTracker';
+import { useProcessingStore } from '@/stores/processingStore';
 import HomePage from '@/pages/HomePage';
 import AnalyzePage from '@/pages/AnalyzePage';
 import UploadPage from '@/pages/UploadPage';
@@ -81,8 +82,21 @@ const router = createBrowserRouter([
 
 export default function App() {
     useEffect(() => {
-        startStageTracker();
-        return () => stopStageTracker();
+        if (useProcessingStore.getState().isProcessing) {
+            startStageTracker();
+        }
+        const unsubscribe = useProcessingStore.subscribe((state, prevState) => {
+            if (state.isProcessing === prevState.isProcessing) return;
+            if (state.isProcessing) {
+                startStageTracker();
+            } else {
+                stopStageTracker();
+            }
+        });
+        return () => {
+            unsubscribe();
+            stopStageTracker();
+        };
     }, []);
 
     // Listen for forced logouts (revoked refresh, etc.) and surface a toast.

@@ -39,6 +39,19 @@ router = APIRouter(prefix="/analyses", tags=["analyses"])
 _DEFAULT_PAGE = 1
 _DEFAULT_PAGE_SIZE = 20
 
+_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".bmp": "image/bmp",
+}
+
+
+def _guess_image_media_type(suffix: str) -> str:
+    return _IMAGE_MEDIA_TYPES.get(suffix.lower(), "application/octet-stream")
+
 
 @router.post(
     "",
@@ -446,19 +459,25 @@ async def get_raw(
     if not overlay_path.is_absolute():
         overlay_path = Path(get_cached_storage_dir()) / overlay_path
 
-    raw_path = overlay_path.with_name(
-        overlay_path.name.replace("_overlay.png", "_raw.png"),
-    )
+    # The raw file shares the overlay's stem with `_raw` substituted for
+    # `_overlay`, but the suffix matches the original upload (.jpg, .tif, …)
+    # because we now write the raw upload bytes through unchanged. Find it
+    # by glob and pick the first match.
+    raw_stem = overlay_path.name.replace("_overlay.png", "_raw")
+    raw_candidates = sorted(overlay_path.parent.glob(f"{raw_stem}.*"))
+    raw_path = raw_candidates[0] if raw_candidates else None
 
-    if not raw_path.exists():
+    if raw_path is None or not raw_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Raw file not found on disk: {raw_path}",
+            detail=f"Raw file not found on disk near: {overlay_path}",
         )
+
+    media_type = _guess_image_media_type(raw_path.suffix)
 
     return FileResponse(
         raw_path,
-        media_type="image/png",
+        media_type=media_type,
         headers={"Content-Disposition": f'inline; filename="{raw_path.name}"'},
     )
 
@@ -608,6 +627,7 @@ async def complete_analysis(
 async def finish_analysis(
     batch_id: UUID,
     db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> AnalysisBatchDetail:
     """Explicit save-to-records step. Recomputes aggregates to pick up any
@@ -615,7 +635,9 @@ async def finish_analysis(
     and stamps ``completed_at``.
     """
     try:
-        finished = await analysis_svc.finish_batch(batch_id=batch_id, db=db)
+        finished = await analysis_svc.finish_batch(
+            batch_id=batch_id, db=db, user_id=user.id
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -627,7 +649,9 @@ async def finish_analysis(
             detail=f"Analysis batch {batch_id} not found.",
         )
     await db.commit()
-    updated = await analysis_svc.get_batch_detail(batch_id=batch_id, db=db)
+    updated = await analysis_svc.get_batch_detail(
+        batch_id=batch_id, db=db, user_id=user.id
+    )
     assert updated is not None
     return updated
 

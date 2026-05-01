@@ -88,7 +88,7 @@ class EggInferenceService:
     # ── Tile & dedup helpers ───────────────────────────────────────────────────
 
     def _tile_image(
-        self, image: np.ndarray
+        self, image: np.ndarray, cfg: "EggConfig | None" = None
     ) -> tuple[list[np.ndarray], list[tuple[int, int]]]:
         """Cut image into overlapping tiles with edge coverage.
 
@@ -103,9 +103,10 @@ class EggInferenceService:
         coords
             List of (y, x) offsets for each tile, in global image coordinates.
         """
-        cfg = self._egg_config
+        if cfg is None:
+            cfg = self._egg_config
         tile_size = cfg.tile_size
-        stride = self._computed_stride
+        stride = int(cfg.tile_size * (1 - cfg.overlap))
         h, w = image.shape[:2]
 
         ys = list(range(0, h - tile_size + 1, stride))
@@ -120,18 +121,24 @@ class EggInferenceService:
         ys = sorted(set(ys))
         xs = sorted(set(xs))
 
-        tiles: list[np.ndarray] = []
-        coords: list[tuple[int, int]] = []
+        # Pad the source ONCE to a size that fully contains every tile, then
+        # let each tile be a zero-copy view into the padded array. The previous
+        # implementation allocated a fresh (tile_size, tile_size, 3) array per
+        # edge tile, which transiently doubled resident memory for large images.
+        max_y = max(ys, default=0)
+        max_x = max(xs, default=0)
+        pad_h = max(h, max_y + tile_size)
+        pad_w = max(w, max_x + tile_size)
+        if pad_h != h or pad_w != w:
+            padded = np.zeros((pad_h, pad_w, 3), dtype=image.dtype)
+            padded[:h, :w] = image
+        else:
+            padded = image
 
-        for y in ys:
-            for x in xs:
-                tile = image[y : y + tile_size, x : x + tile_size]
-                if tile.shape[0] != tile_size or tile.shape[1] != tile_size:
-                    padded = np.zeros((tile_size, tile_size, 3), dtype=image.dtype)
-                    padded[: tile.shape[0], : tile.shape[1]] = tile
-                    tile = padded
-                tiles.append(tile)
-                coords.append((y, x))
+        tiles: list[np.ndarray] = [
+            padded[y : y + tile_size, x : x + tile_size] for y in ys for x in xs
+        ]
+        coords: list[tuple[int, int]] = [(y, x) for y in ys for x in xs]
 
         return tiles, coords
 
@@ -296,7 +303,12 @@ class EggInferenceService:
         emit_stage(code, batch_id, filename, organism="egg")
 
     def _run_inference(
-        self, image: np.ndarray, filename: str, batch_id: str
+        self,
+        image: np.ndarray,
+        filename: str,
+        batch_id: str,
+        raw_image_data: bytes | None = None,
+        raw_suffix: str = ".png",
     ) -> DetectionResult:
         """Run tiled detection on one image and save the overlay to disk.
 
@@ -331,7 +343,9 @@ class EggInferenceService:
         """
         cfg = self._egg_config
         model: "YOLO" = self._model_registry.model
-        device = self._model_registry.device
+        # device intentionally not passed to model() per call — the registry
+        # already moved the model to the right device at startup, and passing
+        # device= forces ultralytics to re-resolve / re-sync each batch.
         t_start = time.time()
 
         # ── 1. Ensure BGR 3-channel ──────────────────────────────────────────
@@ -344,7 +358,7 @@ class EggInferenceService:
 
         # ── 2. Tile ───────────────────────────────────────────────────────────
         self._stage("image.tile", filename, batch_id)
-        tiles, coords = self._tile_image(image)
+        tiles, coords = self._tile_image(image, cfg)
 
         # ── 3. Batch inference ────────────────────────────────────────────────
         self._stage("image.detect", filename, batch_id)
@@ -368,7 +382,6 @@ class EggInferenceService:
                 batch_tiles,
                 verbose=False,
                 conf=cfg.confidence_threshold,
-                device=device,
             )
 
             stride = self._computed_stride
@@ -376,17 +389,50 @@ class EggInferenceService:
             tile_size = cfg.tile_size
             edge_margin = cfg.edge_margin
 
-            for res, (y_off, x_off) in zip(results, batch_coords):
+            # Batch the GPU→CPU sync: cat all per-tile tensors and copy them
+            # to CPU once per inference batch. The previous code did 3 × N
+            # syncs (xyxy, conf, cls) per batch, defeating the GPU batching.
+            batch_xyxy_t = []
+            batch_confs_t = []
+            batch_cls_t = []
+            slice_lengths: list[int] = []
+            for res in results:
                 if res.boxes is None or len(res.boxes) == 0:
+                    slice_lengths.append(0)
                     continue
+                n = len(res.boxes)
+                slice_lengths.append(n)
+                batch_xyxy_t.append(res.boxes.xyxy)
+                batch_confs_t.append(res.boxes.conf)
+                cls_attr = getattr(res.boxes, "cls", None)
+                if cls_attr is not None:
+                    batch_cls_t.append(cls_attr)
+                else:
+                    import torch
 
-                xyxy = res.boxes.xyxy.cpu().numpy()
-                confs = res.boxes.conf.cpu().numpy()
-                cls_ids = (
-                    res.boxes.cls.cpu().numpy().astype(np.int32)
-                    if getattr(res.boxes, "cls", None) is not None
-                    else np.zeros(len(xyxy), dtype=np.int32)
-                )
+                    batch_cls_t.append(
+                        torch.zeros(n, dtype=torch.int32, device=res.boxes.xyxy.device)
+                    )
+
+            if batch_xyxy_t:
+                import torch
+
+                cat_xyxy = torch.cat(batch_xyxy_t, dim=0).cpu().numpy()
+                cat_confs = torch.cat(batch_confs_t, dim=0).cpu().numpy()
+                cat_cls = torch.cat(batch_cls_t, dim=0).cpu().numpy().astype(np.int32)
+            else:
+                cat_xyxy = np.empty((0, 4), dtype=np.float32)
+                cat_confs = np.empty(0, dtype=np.float32)
+                cat_cls = np.empty(0, dtype=np.int32)
+
+            cursor = 0
+            for n, (y_off, x_off) in zip(slice_lengths, batch_coords):
+                if n == 0:
+                    continue
+                xyxy = cat_xyxy[cursor : cursor + n]
+                confs = cat_confs[cursor : cursor + n]
+                cls_ids = cat_cls[cursor : cursor + n]
+                cursor += n
                 if xyxy.size == 0:
                     continue
 
@@ -523,17 +569,25 @@ class EggInferenceService:
         batch_dir = self._get_storage_dir() / batch_id
         batch_dir.mkdir(parents=True, exist_ok=True)
 
+        # Compression level 1: ~3× faster than the OpenCV default (3) for ~10%
+        # larger files. The overlay PNG is the inference hot path's biggest
+        # serial cost.
+        png_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+
         overlay_filename = f"{filename}_overlay.png"
         overlay_path = batch_dir / overlay_filename
-        cv2.imwrite(str(overlay_path), overlay)
+        cv2.imwrite(str(overlay_path), overlay, png_params)
 
-        # Persist the un-annotated source image so the frontend can render its
-        # own bbox overlays on top of it. `image` is the normalized BGR array
-        # (pre-drawing), and `overlay = image.copy()` above means drawing on
-        # `overlay` never mutates `image`.
-        raw_filename = f"{filename}_raw.png"
+        # Persist the un-annotated source image. When the original upload bytes
+        # are available we write them through unchanged (saves a PNG re-encode
+        # on the inference hot path); otherwise fall back to writing the
+        # decoded BGR array as PNG.
+        raw_filename = f"{filename}_raw{raw_suffix}"
         raw_path = batch_dir / raw_filename
-        cv2.imwrite(str(raw_path), image)
+        if raw_image_data is not None:
+            raw_path.write_bytes(raw_image_data)
+        else:
+            cv2.imwrite(str(raw_path), image, png_params)
 
         # ── 10. Build result ─────────────────────────────────────────────────
         overlay_url = f"/inference/results/{batch_id}/{filename}/overlay.png"
@@ -555,6 +609,7 @@ class EggInferenceService:
         image_data: bytes,
         filename: str,
         batch_id: str,
+        raw_suffix: str = ".png",
     ) -> DetectionResult:
         """Run inference on a single image.
 
@@ -602,7 +657,9 @@ class EggInferenceService:
         async with self._semaphore:
             result = await loop.run_in_executor(
                 self._executor,
-                lambda: self._run_inference(image, filename, batch_id),
+                lambda: self._run_inference(
+                    image, filename, batch_id, image_data, raw_suffix
+                ),
             )
 
         # Structured log — see logging.mdc "What to log" table
@@ -625,7 +682,7 @@ class EggInferenceService:
 
     async def process_batch(
         self,
-        images: list[tuple[bytes, str]],
+        images: list[tuple[bytes, str]] | list[tuple[bytes, str, str]],
         batch_id: str,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> BatchDetectionResult:
@@ -652,15 +709,19 @@ class EggInferenceService:
         total = len(images)
         completed = 0
 
-        async def _one(image_data: bytes, fname: str) -> DetectionResult:
-            nonlocal completed
-            r = await self.process_single(image_data, fname, batch_id)
+        # Process sequentially. asyncio.gather over images would queue every
+        # decoded ndarray in memory while waiting for the inference semaphore;
+        # since the semaphore already serializes work, gather buys no
+        # throughput and costs O(N) RAM.
+        results: list[DetectionResult] = []
+        for item in images:
+            image_data, fname, *rest = item  # type: ignore[misc]
+            raw_suffix = rest[0] if rest else ".png"
+            r = await self.process_single(image_data, fname, batch_id, raw_suffix)
+            results.append(r)
             completed += 1
             if on_progress is not None:
                 on_progress(completed, total)
-            return r
-
-        results = await asyncio.gather(*(_one(b, f) for b, f in images))
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)

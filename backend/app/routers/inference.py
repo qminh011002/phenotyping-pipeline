@@ -33,6 +33,7 @@ router = APIRouter(prefix="/inference", tags=["inference"])
 ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"})
 MAX_BATCH_SIZE = 50  # max number of files per batch request
 MAX_IMAGE_BYTES = 100 * 1024 * 1024  # 100 MB per image
+MAX_TOTAL_BATCH_BYTES = 1024 * 1024 * 1024  # 1 GB cap across an entire batch
 
 
 def _check_size(file: UploadFile) -> None:
@@ -75,8 +76,8 @@ async def _verify_batch_ownership(
         )
 
 
-def _validate_extension(filename: str) -> str:
-    """Return the filename stem (without extension), raising 400 on invalid extension."""
+def _validate_extension(filename: str) -> tuple[str, str]:
+    """Return (stem, suffix.lower()), raising 400 on invalid extension."""
     stem = PurePath(filename).stem
     suffix = PurePath(filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -87,7 +88,7 @@ def _validate_extension(filename: str) -> str:
                 f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             ),
         )
-    return stem
+    return stem, suffix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,7 +125,7 @@ async def run_single_inference(
     Only the overlay URL reference is returned — never base64 image data.
     """
     # Validate extension
-    stem = _validate_extension(file.filename or "unknown")
+    stem, suffix = _validate_extension(file.filename or "unknown")
 
     # Verify ownership of the supplied batch (if any) before doing any work.
     await _verify_batch_ownership(batch_id, db, user.id)
@@ -158,7 +159,9 @@ async def run_single_inference(
 
     # Delegate to service
     try:
-        result = await inference_svc.process_single(data, stem, resolved_batch_id)
+        result = await inference_svc.process_single(
+            data, stem, resolved_batch_id, raw_suffix=suffix
+        )
     except InvalidImageError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -216,7 +219,7 @@ async def run_single_neonate_inference(
     ] = None,
 ) -> DetectionResult:
     """Run neonate detection on a single uploaded image."""
-    stem = _validate_extension(file.filename or "unknown")
+    stem, suffix = _validate_extension(file.filename or "unknown")
     await _verify_batch_ownership(batch_id, db, user.id)
 
     registry = get_model_registry()
@@ -245,7 +248,9 @@ async def run_single_neonate_inference(
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
     try:
-        result = await inference_svc.process_single(data, stem, resolved_batch_id)
+        result = await inference_svc.process_single(
+            data, stem, resolved_batch_id, raw_suffix=suffix
+        )
     except InvalidImageError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
@@ -306,9 +311,20 @@ async def run_batch_neonate_inference(
             detail=f"Batch size {len(files)} exceeds the maximum of {MAX_BATCH_SIZE}.",
         )
 
-    validated: list[tuple[bytes, str]] = []
+    # Validate model availability *before* buffering any bytes, so a misbehaving
+    # client can't trigger a multi-GB read just to get a 503.
+    registry = get_model_registry()
+    if not registry.neonate_model_loaded:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Neonate model not loaded. Check the 'neonate' section of config.yaml.",
+        )
+
+    validated: list[tuple[bytes, str, str]] = []
+    total_bytes = 0
     for file in files:
-        stem = _validate_extension(file.filename or "unknown")
+        stem, suffix = _validate_extension(file.filename or "unknown")
+        _check_size(file)
 
         try:
             data = await file.read()
@@ -323,14 +339,20 @@ async def run_batch_neonate_inference(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Uploaded file is empty: {file.filename!r}",
             )
-        validated.append((data, stem))
-
-    registry = get_model_registry()
-    if not registry.neonate_model_loaded:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Neonate model not loaded. Check the 'neonate' section of config.yaml.",
-        )
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"{file.filename!r} exceeds {MAX_IMAGE_BYTES // (1024 * 1024)} MB",
+            )
+        total_bytes += len(data)
+        if total_bytes > MAX_TOTAL_BATCH_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    f"Batch exceeds {MAX_TOTAL_BATCH_BYTES // (1024 * 1024)} MB total"
+                ),
+            )
+        validated.append((data, stem, suffix))
 
     batch_id = str(uuid.uuid4())
 
@@ -400,10 +422,21 @@ async def run_batch_inference(
             detail=f"Batch size {len(files)} exceeds the maximum of {MAX_BATCH_SIZE}.",
         )
 
+    # Check model is ready *before* buffering uploads, so misbehaving clients
+    # can't push hundreds of MB through just to get a 503.
+    registry = get_model_registry()
+    if not registry.model_loaded:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Model not loaded. The server may still be starting up.",
+        )
+
     # Validate all extensions before processing (fail-fast)
-    validated: list[tuple[bytes, str]] = []
+    validated: list[tuple[bytes, str, str]] = []
+    total_bytes = 0
     for i, file in enumerate(files):
-        stem = _validate_extension(file.filename or f"file_{i}")
+        stem, suffix = _validate_extension(file.filename or f"file_{i}")
+        _check_size(file)
 
         try:
             data = await file.read()
@@ -418,15 +451,20 @@ async def run_batch_inference(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Uploaded file is empty: {file.filename!r}",
             )
-        validated.append((data, stem))
-
-    # Check model is ready
-    registry = get_model_registry()
-    if not registry.model_loaded:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Model not loaded. The server may still be starting up.",
-        )
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"{file.filename!r} exceeds {MAX_IMAGE_BYTES // (1024 * 1024)} MB",
+            )
+        total_bytes += len(data)
+        if total_bytes > MAX_TOTAL_BATCH_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    f"Batch exceeds {MAX_TOTAL_BATCH_BYTES // (1024 * 1024)} MB total"
+                ),
+            )
+        validated.append((data, stem, suffix))
 
     batch_id = str(uuid.uuid4())
 

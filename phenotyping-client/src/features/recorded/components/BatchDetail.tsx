@@ -12,6 +12,7 @@
 //     the user can flip through neighbours after landing.
 
 import { memo, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -84,19 +85,51 @@ function formatElapsed(seconds: number | null): string {
     return `${m}m ${s}s`;
 }
 
+const batchDateFormatter = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+});
+const batchTimeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+});
+
 function formatDate(isoString: string): string {
-    return new Date(isoString).toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-    });
+    return batchDateFormatter.format(new Date(isoString));
 }
 
 function formatTime(isoString: string): string {
-    return new Date(isoString).toLocaleTimeString(undefined, {
-        hour: '2-digit',
-        minute: '2-digit',
-    });
+    return batchTimeFormatter.format(new Date(isoString));
+}
+
+const imageVisibilityCallbacks = new Map<Element, () => void>();
+let sharedImageObserver: IntersectionObserver | null = null;
+
+function observeImageVisibility(element: Element, onVisible: () => void): () => void {
+    if (!sharedImageObserver) {
+        sharedImageObserver = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const callback = imageVisibilityCallbacks.get(entry.target);
+                    if (!callback) continue;
+                    imageVisibilityCallbacks.delete(entry.target);
+                    sharedImageObserver?.unobserve(entry.target);
+                    callback();
+                }
+            },
+            { rootMargin: '400px 0px' },
+        );
+    }
+
+    imageVisibilityCallbacks.set(element, onVisible);
+    sharedImageObserver.observe(element);
+
+    return () => {
+        imageVisibilityCallbacks.delete(element);
+        sharedImageObserver?.unobserve(element);
+    };
 }
 
 interface StatCardProps {
@@ -143,17 +176,7 @@ const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardP
         if (seen) return;
         const el = cardRef.current;
         if (!el) return;
-        const io = new IntersectionObserver(
-            (entries) => {
-                if (entries.some((e) => e.isIntersecting)) {
-                    setSeen(true);
-                    io.disconnect();
-                }
-            },
-            { rootMargin: '400px 0px' },
-        );
-        io.observe(el);
-        return () => io.disconnect();
+        return observeImageVisibility(el, () => setSeen(true));
     }, [seen]);
 
     const overlaySrc = image.overlay_path ? getAnalysesOverlayUrl(batchId, image.id) : null;
@@ -353,9 +376,7 @@ export function BatchDetail() {
     const [searchParams] = useSearchParams();
     const batchId = searchParams.get('batch');
     const navigate = useNavigate();
-    const [detail, setDetail] = useState<AnalysisBatchDetail | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const queryClient = useQueryClient();
     // Page state for the processed-images grid. Page size is derived from the
     // measured grid width (see gridRef / columns below) so that exactly two
     // rows render per page regardless of viewport size.
@@ -365,35 +386,15 @@ export function BatchDetail() {
     const [transitioning, setTransitioning] = useState(false);
     const [downloadOpen, setDownloadOpen] = useState(false);
 
-    const fetchAbortRef = useRef<AbortController | null>(null);
-    function fetchBatch(signal?: AbortSignal) {
-        if (!batchId) return;
-        setLoading(true);
-        setError(null);
-        // Card grid doesn't render bboxes, so skip the heavy annotations
-        // payload here. ResultViewer re-fetches with annotations on open.
-        getAnalysisDetail(batchId, signal, { includeAnnotations: false })
-            .then((data) => {
-                if (signal?.aborted) return;
-                setDetail(data);
-            })
-            .catch((err) => {
-                if (signal?.aborted) return;
-                if (err instanceof DOMException && err.name === 'AbortError') return;
-                setError(String(err));
-            })
-            .finally(() => {
-                if (!signal?.aborted) setLoading(false);
-            });
-    }
-
-    useEffect(() => {
-        fetchAbortRef.current?.abort();
-        const controller = new AbortController();
-        fetchAbortRef.current = controller;
-        fetchBatch(controller.signal);
-        return () => controller.abort();
-    }, [batchId]);
+    const detailQuery = useQuery({
+        queryKey: ['analysis-detail', batchId, { includeAnnotations: false }],
+        enabled: Boolean(batchId),
+        queryFn: ({ signal }) =>
+            getAnalysisDetail(batchId as string, signal, { includeAnnotations: false }),
+    });
+    const detail = detailQuery.data ?? null;
+    const loading = detailQuery.isPending;
+    const error = detailQuery.error ? String(detailQuery.error) : null;
 
     // Measure the grid so we can derive "how many cards fit per row" and
     // page-size the list to exactly two rows. These constants must stay in
@@ -457,11 +458,7 @@ export function BatchDetail() {
                 includeAnnotations: true,
             });
         } catch (err) {
-            toast.error(
-                err instanceof Error
-                    ? err.message
-                    : 'Failed to load batch annotations',
-            );
+            toast.error(err instanceof Error ? err.message : 'Failed to load batch annotations');
             return null;
         }
     }
@@ -484,9 +481,7 @@ export function BatchDetail() {
         }
         // requestAnimationFrame paints the LoadingScreen before React Router
         // tears this view down, avoiding a blank flash.
-        requestAnimationFrame(() =>
-            navigate(`/analyze/results/${full.id}/images/${image.id}`),
-        );
+        requestAnimationFrame(() => navigate(`/analyze/results/${full.id}/images/${image.id}`));
     }
 
     async function openAllImages() {
@@ -559,7 +554,7 @@ export function BatchDetail() {
                     <ErrorState
                         message={error}
                         title="Could not load this analysis batch"
-                        onRetry={fetchBatch}
+                        onRetry={() => void detailQuery.refetch()}
                         onBack={() => navigate('/recorded')}
                     />
                 </div>
@@ -605,7 +600,17 @@ export function BatchDetail() {
                                 onSave={async (next) => {
                                     try {
                                         const updated = await renameBatch(detail.id, next);
-                                        setDetail(updated);
+                                        queryClient.setQueryData(
+                                            [
+                                                'analysis-detail',
+                                                detail.id,
+                                                { includeAnnotations: false },
+                                            ],
+                                            updated,
+                                        );
+                                        void queryClient.invalidateQueries({
+                                            queryKey: ['recorded-batches'],
+                                        });
                                         toast.success('Batch renamed');
                                     } catch (err) {
                                         toast.error(
@@ -617,7 +622,7 @@ export function BatchDetail() {
                                     }
                                 }}
                                 ariaLabel="Rename batch"
-                                className="max-w-full"
+                                className="max-w-fit"
                             />
                         </h1>
                     </div>

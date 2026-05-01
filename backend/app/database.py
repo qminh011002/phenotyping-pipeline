@@ -30,15 +30,27 @@ class DatabaseSettings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/phenotyping"
     )
+    # Per-process pool. With N uvicorn workers the cluster-wide cap is
+    # N × (db_pool_size + db_max_overflow); keep that under the postgres
+    # ``max_connections`` setting (with headroom for psql, migrations, etc.).
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
 
 
 class Database:
     """Async database engine and session manager."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        pool_size: int = 10,
+        max_overflow: int = 20,
+    ) -> None:
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
         self._database_url = database_url
+        self._pool_size = pool_size
+        self._max_overflow = max_overflow
 
     def init(self) -> None:
         """Create the async engine and session factory. Call from lifespan startup."""
@@ -46,8 +58,8 @@ class Database:
             self._database_url,
             echo=False,
             pool_pre_ping=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=self._pool_size,
+            max_overflow=self._max_overflow,
         )
         self._session_factory = async_sessionmaker(
             bind=self._engine,
@@ -94,7 +106,11 @@ def get_db() -> Database:
     global _db
     if _db is None:
         settings = DatabaseSettings()
-        _db = Database(settings.database_url)
+        _db = Database(
+            settings.database_url,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+        )
     return _db
 
 

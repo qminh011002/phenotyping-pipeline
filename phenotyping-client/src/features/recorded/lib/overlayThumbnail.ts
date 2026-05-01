@@ -21,8 +21,8 @@
 //   fetching until they're about to be visible, so opening a 200-image
 //   batch doesn't kick off 200 simultaneous fetches.
 
-import { useEffect, useRef, useState } from "react";
-import { http } from "@/services/http";
+import { useEffect, useRef, useState } from 'react';
+import { http } from '@/services/http';
 
 const THUMB_MAX_EDGE = 300;
 const THUMB_QUALITY = 0.4;
@@ -30,28 +30,28 @@ const THUMB_CONCURRENCY = 4;
 const CACHE_MAX = 200;
 
 interface CacheEntry {
-  url: string; // object URL for the downscaled JPEG
-  refCount: number;
+    url: string; // object URL for the downscaled JPEG
+    refCount: number;
 }
 
 // Map preserves insertion order; we evict from the front when oversized.
 const cache = new Map<string, Promise<CacheEntry>>();
 
 function touch(srcUrl: string, value: Promise<CacheEntry>) {
-  // Re-insert to bump LRU position.
-  cache.delete(srcUrl);
-  cache.set(srcUrl, value);
+    // Re-insert to bump LRU position.
+    cache.delete(srcUrl);
+    cache.set(srcUrl, value);
 }
 
 async function evictIfNeeded() {
-  if (cache.size <= CACHE_MAX) return;
-  for (const [key, valuePromise] of cache) {
-    if (cache.size <= CACHE_MAX) break;
-    const entry = await valuePromise.catch(() => null);
-    if (!entry || entry.refCount > 0) continue;
-    URL.revokeObjectURL(entry.url);
-    cache.delete(key);
-  }
+    if (cache.size <= CACHE_MAX) return;
+    for (const [key, valuePromise] of cache) {
+        if (cache.size <= CACHE_MAX) break;
+        const entry = await valuePromise.catch(() => null);
+        if (!entry || entry.refCount > 0) continue;
+        URL.revokeObjectURL(entry.url);
+        cache.delete(key);
+    }
 }
 
 // Tiny semaphore — queue of resolver functions waiting for a slot.
@@ -59,79 +59,76 @@ let active = 0;
 const waiters: Array<() => void> = [];
 
 function acquire(): Promise<void> {
-  if (active < THUMB_CONCURRENCY) {
-    active++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    waiters.push(() => {
-      active++;
-      resolve();
+    if (active < THUMB_CONCURRENCY) {
+        active++;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        waiters.push(() => {
+            active++;
+            resolve();
+        });
     });
-  });
 }
 
 function release(): void {
-  active--;
-  const next = waiters.shift();
-  if (next) next();
+    active--;
+    const next = waiters.shift();
+    if (next) next();
 }
 
 async function buildThumbnail(srcUrl: string): Promise<CacheEntry> {
-  await acquire();
-  try {
-    // No per-caller AbortSignal here on purpose: the cache is shared across all
-    // consumers of this URL, so a single caller's unmount must not abort the
-    // underlying fetch (and poison the cached promise for everyone else). The
-    // hook short-circuits its own state via a `cancelled` flag instead.
-    const blob = await http.getBlob(srcUrl);
-    let objectUrl: string;
+    await acquire();
     try {
-      const bitmap = await createImageBitmap(blob);
-      const scale = Math.min(
-        1,
-        THUMB_MAX_EDGE / Math.max(bitmap.width, bitmap.height),
-      );
-      const w = Math.max(1, Math.round(bitmap.width * scale));
-      const h = Math.max(1, Math.round(bitmap.height * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("canvas 2d context unavailable");
-      ctx.drawImage(bitmap, 0, 0, w, h);
-      bitmap.close?.();
-      const out: Blob | null = await new Promise((resolve) =>
-        canvas.toBlob(resolve, "image/jpeg", THUMB_QUALITY),
-      );
-      if (!out) throw new Error("toBlob returned null");
-      objectUrl = URL.createObjectURL(out);
-    } catch {
-      // Fallback: hand the raw blob back so the row at least shows *something*.
-      // Still cheaper than letting <img src=remoteUrl> decode repeatedly.
-      objectUrl = URL.createObjectURL(blob);
+        // No per-caller AbortSignal here on purpose: the cache is shared across all
+        // consumers of this URL, so a single caller's unmount must not abort the
+        // underlying fetch (and poison the cached promise for everyone else). The
+        // hook short-circuits its own state via a `cancelled` flag instead.
+        const blob = await http.getBlob(srcUrl);
+        let objectUrl: string;
+        try {
+            const bitmap = await createImageBitmap(blob);
+            const scale = Math.min(1, THUMB_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+            const w = Math.max(1, Math.round(bitmap.width * scale));
+            const h = Math.max(1, Math.round(bitmap.height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('canvas 2d context unavailable');
+            ctx.drawImage(bitmap, 0, 0, w, h);
+            bitmap.close?.();
+            const out: Blob | null = await new Promise((resolve) =>
+                canvas.toBlob(resolve, 'image/jpeg', THUMB_QUALITY),
+            );
+            if (!out) throw new Error('toBlob returned null');
+            objectUrl = URL.createObjectURL(out);
+        } catch {
+            // Fallback: hand the raw blob back so the row at least shows *something*.
+            // Still cheaper than letting <img src=remoteUrl> decode repeatedly.
+            objectUrl = URL.createObjectURL(blob);
+        }
+        return { url: objectUrl, refCount: 0 };
+    } finally {
+        release();
     }
-    return { url: objectUrl, refCount: 0 };
-  } finally {
-    release();
-  }
 }
 
 function getOrCreate(srcUrl: string): Promise<CacheEntry> {
-  const existing = cache.get(srcUrl);
-  if (existing) {
-    touch(srcUrl, existing);
-    return existing;
-  }
-  const fresh = buildThumbnail(srcUrl);
-  cache.set(srcUrl, fresh);
-  // Drop rejected promises so the next consumer can retry — otherwise an
-  // aborted first mount (common under StrictMode) poisons the cache forever.
-  fresh.catch(() => {
-    if (cache.get(srcUrl) === fresh) cache.delete(srcUrl);
-  });
-  void evictIfNeeded();
-  return fresh;
+    const existing = cache.get(srcUrl);
+    if (existing) {
+        touch(srcUrl, existing);
+        return existing;
+    }
+    const fresh = buildThumbnail(srcUrl);
+    cache.set(srcUrl, fresh);
+    // Drop rejected promises so the next consumer can retry — otherwise an
+    // aborted first mount (common under StrictMode) poisons the cache forever.
+    fresh.catch(() => {
+        if (cache.get(srcUrl) === fresh) cache.delete(srcUrl);
+    });
+    void evictIfNeeded();
+    return fresh;
 }
 
 /**
@@ -142,48 +139,48 @@ function getOrCreate(srcUrl: string): Promise<CacheEntry> {
  * IntersectionObserver).
  */
 export function useOverlayThumbnail(
-  srcUrl: string | null,
-  enabled: boolean = true,
+    srcUrl: string | null,
+    enabled: boolean = true,
 ): { thumbUrl: string | null; error: boolean } {
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-  const lastSrcRef = useRef<string | null>(null);
+    const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+    const [error, setError] = useState(false);
+    const lastSrcRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!srcUrl || !enabled) {
-      setThumbUrl(null);
-      setError(false);
-      return;
-    }
-    let cancelled = false;
-    lastSrcRef.current = srcUrl;
-    setError(false);
-    getOrCreate(srcUrl)
-      .then((entry) => {
-        if (cancelled || lastSrcRef.current !== srcUrl) return;
-        entry.refCount++;
-        setThumbUrl(entry.url);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(true);
-      });
-    return () => {
-      cancelled = true;
-      // Decrement on unmount — when refCount hits 0 we *could* revoke the
-      // object URL and drop the cache entry, but navigating back to the
-      // same batch is common so we keep thumbnails around for the page
-      // lifetime. They're tiny JPEGs and the tab discards them on close.
-      const settled = cache.get(srcUrl);
-      if (!settled) return;
-      settled
-        .then((entry) => {
-          entry.refCount = Math.max(0, entry.refCount - 1);
-        })
-        .catch(() => {});
-    };
-  }, [srcUrl, enabled]);
+    useEffect(() => {
+        if (!srcUrl || !enabled) {
+            setThumbUrl(null);
+            setError(false);
+            return;
+        }
+        let cancelled = false;
+        lastSrcRef.current = srcUrl;
+        setError(false);
+        getOrCreate(srcUrl)
+            .then((entry) => {
+                if (cancelled || lastSrcRef.current !== srcUrl) return;
+                entry.refCount++;
+                setThumbUrl(entry.url);
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                if (err instanceof DOMException && err.name === 'AbortError') return;
+                setError(true);
+            });
+        return () => {
+            cancelled = true;
+            // Decrement on unmount — when refCount hits 0 we *could* revoke the
+            // object URL and drop the cache entry, but navigating back to the
+            // same batch is common so we keep thumbnails around for the page
+            // lifetime. They're tiny JPEGs and the tab discards them on close.
+            const settled = cache.get(srcUrl);
+            if (!settled) return;
+            settled
+                .then((entry) => {
+                    entry.refCount = Math.max(0, entry.refCount - 1);
+                })
+                .catch(() => {});
+        };
+    }, [srcUrl, enabled]);
 
-  return { thumbUrl, error };
+    return { thumbUrl, error };
 }

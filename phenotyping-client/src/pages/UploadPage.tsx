@@ -610,20 +610,14 @@ export default function UploadPage() {
         navigate('/analyze/processing');
     }
 
-    const totalBytes = useMemo(
-        () => files.reduce((sum, f) => sum + f.file.size, 0),
-        [files],
-    );
+    const totalBytes = useMemo(() => files.reduce((sum, f) => sum + f.file.size, 0), [files]);
     const hasFiles = files.length > 0;
     const pageSize = Math.max(gridColumns * MAX_GRID_ROWS, 1);
     const pageCount = Math.max(1, Math.ceil(files.length / pageSize));
     const currentPage = Math.min(page, pageCount);
     const pageStart = (currentPage - 1) * pageSize;
     const pageEnd = Math.min(pageStart + pageSize, files.length);
-    const pageFiles = useMemo(
-        () => files.slice(pageStart, pageEnd),
-        [files, pageStart, pageEnd],
-    );
+    const pageFiles = useMemo(() => files.slice(pageStart, pageEnd), [files, pageStart, pageEnd]);
     const showAddMoreCard = currentPage === pageCount && pageFiles.length < pageSize;
 
     // Clamp page when files change (removals etc.)

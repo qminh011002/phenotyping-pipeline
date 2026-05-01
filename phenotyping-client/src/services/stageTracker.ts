@@ -2,26 +2,29 @@
 // label for the currently-running batch into the processing store so the UI
 // can display the current phase of inference.
 
-import { getBaseUrl } from "./http";
-import { getRunningBatchId } from "./processingManager";
-import { useProcessingStore } from "@/stores/processingStore";
+import { getBaseUrl } from './http';
+import { getRunningBatchId } from './processingManager';
+import { useProcessingStore } from '@/stores/processingStore';
 
 const STAGE_LABELS: Record<string, string> = {
-    "image.decode": "Decoding image",
-    "image.tile": "Slicing into tiles",
-    "image.detect": "Detecting objects",
-    "image.dedup": "Merging detections",
-    "image.draw": "Drawing overlay",
-    "image.save": "Saving overlay",
+    'image.decode': 'Decoding image',
+    'image.tile': 'Slicing into tiles',
+    'image.detect': 'Detecting objects',
+    'image.dedup': 'Merging detections',
+    'image.draw': 'Drawing overlay',
+    'image.save': 'Saving overlay',
 };
 
-const STAGE_LOG_MESSAGES: Record<string, (filename: string, index: number, total: number) => string> = {
-    "image.decode": (filename) => `decode image for ${filename}`,
-    "image.tile": (filename, index, total) => `tile ${index}/${total} for ${filename}`,
-    "image.detect": (filename) => `run detector for ${filename}`,
-    "image.dedup": (filename) => `deduplicate detections for ${filename}`,
-    "image.draw": (filename) => `draw overlay boxes for ${filename}`,
-    "image.save": (filename) => `save result assets for ${filename}`,
+const STAGE_LOG_MESSAGES: Record<
+    string,
+    (filename: string, index: number, total: number) => string
+> = {
+    'image.decode': (filename) => `decode image for ${filename}`,
+    'image.tile': (filename, index, total) => `tile ${index}/${total} for ${filename}`,
+    'image.detect': (filename) => `run detector for ${filename}`,
+    'image.dedup': (filename) => `deduplicate detections for ${filename}`,
+    'image.draw': (filename) => `draw overlay boxes for ${filename}`,
+    'image.save': (filename) => `save result assets for ${filename}`,
 };
 
 interface StageEvent {
@@ -34,10 +37,11 @@ interface StageEvent {
 function composeStageText(code: string, filename?: string): string {
     const base = STAGE_LABELS[code] ?? code;
     const state = useProcessingStore.getState();
-    const index = state.processedCount + state.images.filter((i) => i.status === "error").length + 1;
+    const index =
+        state.processedCount + state.images.filter((i) => i.status === 'error').length + 1;
     const total = state.totalImages;
-    const indexPart = total > 0 ? ` (${Math.min(index, total)}/${total})` : "";
-    const filePart = filename ? ` — ${filename}` : "";
+    const indexPart = total > 0 ? ` (${Math.min(index, total)}/${total})` : '';
+    const filePart = filename ? ` — ${filename}` : '';
     return `${base}${filePart}${indexPart}…`;
 }
 
@@ -46,26 +50,25 @@ function currentImagePosition(filename?: string): { index: number; total: number
     const total = state.totalImages;
     if (filename) {
         const idx = state.images.findIndex((img) => {
-            const stem = img.filename.replace(/\.[^.]+$/, "");
+            const stem = img.filename.replace(/\.[^.]+$/, '');
             return img.filename === filename || stem === filename;
         });
         if (idx >= 0) return { index: idx + 1, total };
     }
     const fallback =
-        state.processedCount + state.images.filter((i) => i.status === "error").length + 1;
+        state.processedCount + state.images.filter((i) => i.status === 'error').length + 1;
     return { index: Math.min(Math.max(fallback, 1), Math.max(total, 1)), total };
 }
 
 function appendStageLog(code: string, filename?: string): void {
     const { index, total } = currentImagePosition(filename);
-    const safeName = filename ?? "current image";
-    const message =
-        STAGE_LOG_MESSAGES[code]?.(safeName, index, total) ?? `${code} for ${safeName}`;
-    useProcessingStore.getState().addLiveLog({ level: "INFO", message });
+    const safeName = filename ?? 'current image';
+    const message = STAGE_LOG_MESSAGES[code]?.(safeName, index, total) ?? `${code} for ${safeName}`;
+    useProcessingStore.getState().addLiveLog({ level: 'INFO', message });
 }
 
 function toWsUrl(base: string): string {
-    const u = base.replace(/^http/, "ws").replace(/\/$/, "");
+    const u = base.replace(/^http/, 'ws').replace(/\/$/, '');
     return `${u}/ws/stages`;
 }
 
@@ -78,9 +81,9 @@ let reconnectDelay = 500;
 const DEV = import.meta.env.DEV;
 
 function isStageEvent(value: unknown): value is StageEvent {
-    if (!value || typeof value !== "object") return false;
+    if (!value || typeof value !== 'object') return false;
     const v = value as Record<string, unknown>;
-    return typeof v.stage === "string" && typeof v.batch_id === "string";
+    return typeof v.stage === 'string' && typeof v.batch_id === 'string';
 }
 
 function clearReconnect(): void {
@@ -106,13 +109,13 @@ function openSocket(): void {
     if (opening || ws) return;
     opening = true;
     const url = toWsUrl(getBaseUrl());
-    if (DEV) console.debug("[stageTracker] connecting to", url);
+    if (DEV) console.debug('[stageTracker] connecting to', url);
     let sock: WebSocket;
     try {
         sock = new WebSocket(url);
     } catch (e) {
         opening = false;
-        if (DEV) console.warn("[stageTracker] ws construct failed:", e);
+        if (DEV) console.warn('[stageTracker] ws construct failed:', e);
         scheduleReconnect();
         return;
     }
@@ -121,33 +124,33 @@ function openSocket(): void {
     sock.onopen = () => {
         opening = false;
         reconnectDelay = 500;
-        if (DEV) console.info("[stageTracker] ✅ connected to", url);
+        if (DEV) console.info('[stageTracker] ✅ connected to', url);
     };
     sock.onmessage = (ev) => {
         let parsed: unknown;
         try {
             parsed = JSON.parse(ev.data as string);
         } catch (e) {
-            if (DEV) console.warn("[stageTracker] bad frame:", ev.data, e);
+            if (DEV) console.warn('[stageTracker] bad frame:', ev.data, e);
             return;
         }
         if (!isStageEvent(parsed)) {
-            if (DEV) console.warn("[stageTracker] invalid event shape:", parsed);
+            if (DEV) console.warn('[stageTracker] invalid event shape:', parsed);
             return;
         }
         const evt = parsed;
         const active = getRunningBatchId();
         if (!active) return;
         if (evt.batch_id !== active) return;
-        if (DEV) console.debug("[stageTracker] 📥", evt.stage, "—", evt.filename);
+        if (DEV) console.debug('[stageTracker] 📥', evt.stage, '—', evt.filename);
         useProcessingStore.getState().setStage(composeStageText(evt.stage, evt.filename));
         appendStageLog(evt.stage, evt.filename);
     };
     sock.onerror = (e) => {
-        if (DEV) console.warn("[stageTracker] ws error:", e);
+        if (DEV) console.warn('[stageTracker] ws error:', e);
     };
     sock.onclose = (e) => {
-        if (DEV) console.debug("[stageTracker] ws closed:", e.code, e.reason);
+        if (DEV) console.debug('[stageTracker] ws closed:', e.code, e.reason);
         opening = false;
         if (ws === sock) ws = null;
         scheduleReconnect();
@@ -172,8 +175,14 @@ export function stopStageTracker(): void {
         // the handshake completes (or fails) before issuing the close.
         try {
             if (sock.readyState === WebSocket.CONNECTING) {
-                sock.addEventListener("open", () => sock.close(), { once: true });
-                sock.addEventListener("error", () => {/* swallow */}, { once: true });
+                sock.addEventListener('open', () => sock.close(), { once: true });
+                sock.addEventListener(
+                    'error',
+                    () => {
+                        /* swallow */
+                    },
+                    { once: true },
+                );
             } else if (sock.readyState === WebSocket.OPEN) {
                 sock.close();
             }

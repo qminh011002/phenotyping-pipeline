@@ -19,6 +19,7 @@ import asyncio
 import io
 import logging
 import re
+import tempfile
 import zipfile
 from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
@@ -217,15 +218,16 @@ async def build_batch_archive(
     db: AsyncSession,
     storage_dir: Path,
     user_id: UUID,
-) -> tuple[str, bytes] | None:
+) -> tuple[str, "tempfile.SpooledTemporaryFile"] | None:
     """Build the ZIP archive for a batch.
 
-    Returns (filename, bytes) or None if the batch doesn't exist. Raises
-    ValueError if `image_ids` is provided but none of them belong to the batch.
+    Returns (filename, spooled_file) — the file is positioned at offset 0 and
+    the caller is responsible for closing it. Returns None when the batch
+    doesn't exist. Raises ValueError if ``image_ids`` is supplied but none
+    belong to the batch.
 
-    The whole archive is built in-memory. Typical batches are tens of images
-    × a few MB each so this is fine; if we later ship batches in the hundreds
-    of MB we should stream it through a SpooledTemporaryFile instead.
+    The archive spools to RAM up to 100 MB, then spills to disk, so peak RSS
+    is bounded regardless of how many overlays a batch holds.
     """
     batch_stmt = (
         select(AnalysisBatch)
@@ -251,9 +253,8 @@ async def build_batch_archive(
             "No completed images match the requested selection for this batch."
         )
 
-    def _build() -> bytes:
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+    def _build(out: tempfile.SpooledTemporaryFile) -> None:
+        with zipfile.ZipFile(out, mode="w", compression=zipfile.ZIP_STORED) as zf:
             stem_counts: dict[str, int] = {}
             for img in images:
                 if not img.overlay_path:
@@ -283,11 +284,16 @@ async def build_batch_archive(
             xlsx_info = zipfile.ZipInfo("summary.xlsx")
             xlsx_info.compress_type = zipfile.ZIP_DEFLATED
             zf.writestr(xlsx_info, xlsx_bytes)
-        return zip_buf.getvalue()
 
-    payload = await asyncio.to_thread(_build)
+    # Spool to RAM up to ~100 MB; spill to disk above that. Bounds peak RSS
+    # for batches with many large overlays.
+    spool: tempfile.SpooledTemporaryFile = tempfile.SpooledTemporaryFile(
+        max_size=100 * 1024 * 1024
+    )
+    await asyncio.to_thread(_build, spool)
+    spool.seek(0)
     filename = f"{_slugify(batch.name or 'batch')}.zip"
-    return filename, payload
+    return filename, spool
 
 
 async def stream_batch_archive(
@@ -308,11 +314,18 @@ async def stream_batch_archive(
     )
     if built is None:
         return None
-    filename, payload = built
+    filename, spool = built
 
     async def _iter() -> AsyncIterator[bytes]:
-        view = memoryview(payload)
-        for start in range(0, len(view), chunk_size):
-            yield bytes(view[start : start + chunk_size])
+        try:
+            while True:
+                # SpooledTemporaryFile read may touch disk once spilled, so do
+                # it in a worker thread to keep the loop responsive.
+                chunk = await asyncio.to_thread(spool.read, chunk_size)
+                if not chunk:
+                    return
+                yield chunk
+        finally:
+            spool.close()
 
     return filename, _iter()

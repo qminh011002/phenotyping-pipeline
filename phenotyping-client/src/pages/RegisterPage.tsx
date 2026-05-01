@@ -46,8 +46,8 @@ export default function RegisterPage() {
                 err instanceof ApiError && err.code === 'email_taken'
                     ? 'That email is already registered.'
                     : err instanceof Error
-                        ? err.message
-                        : 'Something went wrong.';
+                      ? err.message
+                      : 'Something went wrong.';
             toast.error('Sign-up failed', { description });
         } finally {
             setSubmitting(false);

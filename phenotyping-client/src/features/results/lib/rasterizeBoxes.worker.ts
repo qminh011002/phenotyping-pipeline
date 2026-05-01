@@ -6,7 +6,7 @@
 //
 // Stroke colors and defaults must stay in sync with rasterizeBoxes.ts.
 
-import type { BBox } from "@/types/api";
+import type { BBox } from '@/types/api';
 
 interface RasterizeRequest {
     id: number;
@@ -57,20 +57,20 @@ function rasterize(req: RasterizeRequest): ImageBitmap {
     const w = Math.max(1, Math.floor(imageWidth * ssaa));
     const h = Math.max(1, Math.floor(imageHeight * ssaa));
     const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext('2d');
     if (!ctx) return canvas.transferToImageBitmap();
 
     ctx.scale(ssaa, ssaa);
     ctx.lineWidth = strokeWidth;
 
-    const drawPass = (origin: "model" | "user", color: string): void => {
+    const drawPass = (origin: 'model' | 'user', color: string): void => {
         ctx.strokeStyle = color;
         ctx.beginPath();
         for (let i = 0; i < boxes.length; i++) {
             if (i === excludeIndex) continue;
             const b = boxes[i];
-            const isUser = b.origin === "user";
-            if ((origin === "user") !== isUser) continue;
+            const isUser = b.origin === 'user';
+            if ((origin === 'user') !== isUser) continue;
             if (!isUser && b.confidence < confidenceThreshold) continue;
             const [x1, y1, x2, y2] = b.bbox;
             const bw = x2 - x1;
@@ -81,8 +81,8 @@ function rasterize(req: RasterizeRequest): ImageBitmap {
         ctx.stroke();
     };
 
-    drawPass("model", strokeModel);
-    drawPass("user", strokeUser);
+    drawPass('model', strokeModel);
+    drawPass('user', strokeUser);
 
     // Labels — drawn last so they sit on top of strokes. Text layout + fill
     // on OffscreenCanvas is far cheaper than Konva's per-node Tag+Text layout,
@@ -93,21 +93,21 @@ function rasterize(req: RasterizeRequest): ImageBitmap {
         const lineH = labelFontSize * 1.2;
         const labelH = lineH + padding * 2;
         ctx.font = `bold ${labelFontSize}px sans-serif`;
-        ctx.textBaseline = "top";
-        const labelBg = req.labelBg ?? "rgba(255,255,255,0.95)";
-        const labelFg = req.labelFg ?? "#f59e0b";
+        ctx.textBaseline = 'top';
+        const labelBg = req.labelBg ?? 'rgba(255,255,255,0.95)';
+        const labelFg = req.labelFg ?? '#f59e0b';
 
         for (let i = 0; i < boxes.length; i++) {
             if (i === excludeIndex) continue;
             const b = boxes[i];
-            const isUser = b.origin === "user";
+            const isUser = b.origin === 'user';
             if (!isUser && b.confidence < confidenceThreshold) continue;
             const [x1, y1, x2, y2] = b.bbox;
             const bw = x2 - x1;
             const bh = y2 - y1;
             if (bw <= 0 || bh <= 0) continue;
 
-            const text = b.label || "object";
+            const text = b.label || 'object';
             const textW = ctx.measureText(text).width;
             const labelW = textW + padding * 2;
             const flipInside = y1 - labelH < 0;

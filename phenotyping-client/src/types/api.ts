@@ -1,228 +1,226 @@
 // API types — canonical definitions matching api-contract.mdc
 
-export type Organism = "egg" | "larvae" | "pupae" | "neonate";
+export type Organism = 'egg' | 'larvae' | 'pupae' | 'neonate';
 
 // ── Auth (BE-020 / FE-029) ────────────────────────────────────────────────────
 
 export interface UserOut {
-  id: string; // UUID
-  email: string;
-  name: string | null;
-  created_at: string; // ISO 8601
+    id: string; // UUID
+    email: string;
+    name: string | null;
+    created_at: string; // ISO 8601
 }
 
 export interface AuthResponse {
-  user: UserOut;
-  access_token: string;
-  refresh_token: string;
-  token_type: "bearer";
-  access_expires_in: number; // seconds
+    user: UserOut;
+    access_token: string;
+    refresh_token: string;
+    token_type: 'bearer';
+    access_expires_in: number; // seconds
 }
 
 export interface TokenPair {
-  access_token: string;
-  refresh_token: string;
-  token_type: "bearer";
-  access_expires_in: number;
+    access_token: string;
+    refresh_token: string;
+    token_type: 'bearer';
+    access_expires_in: number;
 }
 
 /** Stable error codes returned in 401 responses by the auth backend. */
 export type AuthErrorCode =
-  | "token_expired"
-  | "token_invalid"
-  | "token_revoked"
-  | "invalid_credentials"
-  | "email_taken";
+    | 'token_expired'
+    | 'token_invalid'
+    | 'token_revoked'
+    | 'invalid_credentials'
+    | 'email_taken';
 
-export type LogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR";
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR';
 
 export interface BBox {
-  label: string;
-  bbox: [number, number, number, number]; // [x1, y1, x2, y2]
-  confidence: number;
-  /** Whether this box was drawn by the user (default: undefined = model origin) */
-  origin?: "model" | "user";
-  /** ISO-8601 timestamp when the box was created or last edited */
-  edited_at?: string;
+    label: string;
+    bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+    confidence: number;
+    /** Whether this box was drawn by the user (default: undefined = model origin) */
+    origin?: 'model' | 'user';
+    /** ISO-8601 timestamp when the box was created or last edited */
+    edited_at?: string;
 }
 
 export interface DetectionResult {
-  filename: string;
-  organism: Organism;
-  count: number;
-  avg_confidence: number;
-  elapsed_seconds: number;
-  annotations: BBox[];
-  overlay_url: string; // URL to the locally saved overlay image, never base64
+    filename: string;
+    organism: Organism;
+    count: number;
+    avg_confidence: number;
+    elapsed_seconds: number;
+    annotations: BBox[];
+    overlay_url: string; // URL to the locally saved overlay image, never base64
 }
 
 export interface BatchDetectionResult {
-  results: DetectionResult[];
-  total_count: number;
-  total_elapsed_seconds: number;
+    results: DetectionResult[];
+    total_count: number;
+    total_elapsed_seconds: number;
 }
 
-export type Device = "cpu" | `cuda:${string}`;
+export type Device = 'cpu' | `cuda:${string}`;
 
 export interface EggConfig {
-  model: string;
-  device: Device;
-  tile_size: number;
-  overlap: number;
-  confidence_threshold: number;
-  min_box_area: number;
-  dedup_mode: "center_zone" | "edge_nms";
-  edge_margin: number;
-  nms_iou_threshold: number;
-  batch_size: number;
+    model: string;
+    device: Device;
+    tile_size: number;
+    overlap: number;
+    confidence_threshold: number;
+    min_box_area: number;
+    dedup_mode: 'center_zone' | 'edge_nms';
+    edge_margin: number;
+    nms_iou_threshold: number;
+    batch_size: number;
 }
 
 export interface LogEntry {
-  timestamp: string;
-  level: LogLevel;
-  message: string;
-  context: Record<string, unknown>;
+    timestamp: string;
+    level: LogLevel;
+    message: string;
+    context: Record<string, unknown>;
 }
 
-export type ModelStatus = "loaded" | "missing" | "error";
+export type ModelStatus = 'loaded' | 'missing' | 'error';
 
 export interface HealthResponse {
-  status: "ok" | "degraded";
-  /** Egg-only legacy flag retained for older callers; prefer `models_status.egg`. */
-  model_loaded: boolean;
-  device: Device;
-  cuda_available: boolean;
-  uptime_seconds: number;
-  version: string;
-  /** Per-organism load state. Frontend uses this to gate the Project Type cards. */
-  models_status: Partial<Record<Organism, ModelStatus>>;
+    status: 'ok' | 'degraded';
+    /** Egg-only legacy flag retained for older callers; prefer `models_status.egg`. */
+    model_loaded: boolean;
+    device: Device;
+    cuda_available: boolean;
+    uptime_seconds: number;
+    version: string;
+    /** Per-organism load state. Frontend uses this to gate the Project Type cards. */
+    models_status: Partial<Record<Organism, ModelStatus>>;
 }
 
 // ── Analyses ─────────────────────────────────────────────────────────────────
 
 export interface AnalysisImageSummary {
-  id: string; // UUID
-  original_filename: string;
-  status: string;
-  count: number | null;
-  avg_confidence: number | null;
-  elapsed_secs: number | null;
-  overlay_path: string | null;
-  error_message: string | null;
-  created_at: string; // ISO 8601
-  /** Model-produced annotations at inference time (read-only baseline). */
-  annotations?: BBox[] | null;
-  /** User-edited annotations; if present, supersedes annotations for display. */
-  edited_annotations?: BBox[] | null;
+    id: string; // UUID
+    original_filename: string;
+    status: string;
+    count: number | null;
+    avg_confidence: number | null;
+    elapsed_secs: number | null;
+    overlay_path: string | null;
+    error_message: string | null;
+    created_at: string; // ISO 8601
+    /** Model-produced annotations at inference time (read-only baseline). */
+    annotations?: BBox[] | null;
+    /** User-edited annotations; if present, supersedes annotations for display. */
+    edited_annotations?: BBox[] | null;
 }
 
 export interface AnalysisImageDetail extends AnalysisImageSummary {
-  /** Full image detail includes edited_annotations explicitly. */
+    /** Full image detail includes edited_annotations explicitly. */
 }
 
 export interface AnalysisBatchSummary {
-  id: string; // UUID
-  user_id: string | null; // owner; null only on legacy pre-BE-021 rows
-  name: string;
-  created_at: string; // ISO 8601
-  completed_at: string | null;
-  status: string;
-  organism_type: string;
-  mode: string;
-  device: string;
-  total_image_count: number;
-  total_count: number | null;
-  avg_confidence: number | null;
-  total_elapsed_secs: number | null;
-  processed_image_count: number;
-  failed_at: string | null;
-  failure_reason: string | null;
-  /** Class names defined on the Analyze page; frozen for the batch. */
-  classes: string[];
+    id: string; // UUID
+    user_id: string | null; // owner; null only on legacy pre-BE-021 rows
+    name: string;
+    created_at: string; // ISO 8601
+    completed_at: string | null;
+    status: string;
+    organism_type: string;
+    mode: string;
+    device: string;
+    total_image_count: number;
+    total_count: number | null;
+    avg_confidence: number | null;
+    total_elapsed_secs: number | null;
+    processed_image_count: number;
+    failed_at: string | null;
+    failure_reason: string | null;
+    /** Class names defined on the Analyze page; frozen for the batch. */
+    classes: string[];
 }
 
 export interface AnalysisBatchDetail extends AnalysisBatchSummary {
-  config_snapshot: Record<string, unknown>;
-  notes: string | null;
-  images: AnalysisImageSummary[];
+    config_snapshot: Record<string, unknown>;
+    notes: string | null;
+    images: AnalysisImageSummary[];
 }
 
 export interface AnalysisListResponse {
-  items: AnalysisBatchSummary[];
-  total: number;
-  page: number;
-  page_size: number;
+    items: AnalysisBatchSummary[];
+    total: number;
+    page: number;
+    page_size: number;
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export interface DashboardStats {
-  total_analyses: number;
-  total_images_processed: number;
-  total_eggs_counted: number;
-  avg_confidence: number | null;
-  avg_processing_time: number | null;
-  recent_analyses: AnalysisBatchSummary[];
+    total_analyses: number;
+    total_images_processed: number;
+    total_eggs_counted: number;
+    avg_confidence: number | null;
+    avg_processing_time: number | null;
+    recent_analyses: AnalysisBatchSummary[];
 }
 
 // ── Custom Models ────────────────────────────────────────────────────────────
 
 export interface CustomModelResponse {
-  id: string;
-  organism: Organism;
-  original_filename: string;
-  file_size_bytes: number;
-  uploaded_at: string;
-  is_valid: boolean;
+    id: string;
+    organism: Organism;
+    original_filename: string;
+    file_size_bytes: number;
+    uploaded_at: string;
+    is_valid: boolean;
 }
 
 export interface CustomModelListResponse {
-  models: CustomModelResponse[];
+    models: CustomModelResponse[];
 }
 
 export interface OrganismAssignment {
-  organism: Organism;
-  /** True if the active model is the default-folder file (no custom assigned). */
-  is_default: boolean;
-  /** True if at least one .pt exists in `data/models/<organism>/default/`. */
-  has_default: boolean;
-  /** Filename of the active model (custom > default). `null` when neither is installed. */
-  model_filename: string | null;
-  /** Filename of the default-folder model, if any. */
-  default_filename: string | null;
-  custom_model: CustomModelResponse | null;
+    organism: Organism;
+    /** True if the active model is the default-folder file (no custom assigned). */
+    is_default: boolean;
+    /** True if at least one .pt exists in `data/models/<organism>/default/`. */
+    has_default: boolean;
+    /** Filename of the active model (custom > default). `null` when neither is installed. */
+    model_filename: string | null;
+    /** Filename of the default-folder model, if any. */
+    default_filename: string | null;
+    custom_model: CustomModelResponse | null;
 }
 
 export interface AssignmentsResponse {
-  assignments: Record<Organism, OrganismAssignment>;
+    assignments: Record<Organism, OrganismAssignment>;
 }
 
 export interface AssignResultResponse {
-  organism: Organism;
-  custom_model_id: string | null;
-  model_filename: string | null;
+    organism: Organism;
+    custom_model_id: string | null;
+    model_filename: string | null;
 }
 
 // ── Log streaming ─────────────────────────────────────────────────────────────
 
-export type LogStreamMessage =
-  | { type: "log"; data: LogEntry }
-  | { type: "heartbeat"; data: null };
+export type LogStreamMessage = { type: 'log'; data: LogEntry } | { type: 'heartbeat'; data: null };
 
 // ── Active batch / fail batch ─────────────────────────────────────────────────
 
 export interface ActiveBatchResponse {
-  active: boolean;
-  batch: AnalysisBatchDetail | null;
+    active: boolean;
+    batch: AnalysisBatchDetail | null;
 }
 
 export interface FailBatchRequest {
-  reason: string;
+    reason: string;
 }
 
 export interface FailBatchResponse {
-  id: string;
-  status: string;
-  failed_at: string | null;
-  failure_reason: string | null;
+    id: string;
+    status: string;
+    failed_at: string | null;
+    failure_reason: string | null;
 }

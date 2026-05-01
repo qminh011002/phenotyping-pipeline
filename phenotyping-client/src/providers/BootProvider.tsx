@@ -14,33 +14,33 @@
 // only slow first paint if blocked here.
 
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { Button } from "@/components/ui/button";
-import { LoadingScreen } from "@/components/LoadingScreen";
-import { getHealth } from "@/services/api";
-import { me, refresh as refreshTokens } from "@/services/auth";
-import { loadRefreshToken, useAuthStore } from "@/stores/authStore";
-import type { HealthResponse, ModelStatus, Organism } from "@/types/api";
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
+import { Button } from '@/components/ui/button';
+import { LoadingScreen } from '@/components/LoadingScreen';
+import { getHealth } from '@/services/api';
+import { me, refresh as refreshTokens } from '@/services/auth';
+import { loadRefreshToken, useAuthStore } from '@/stores/authStore';
+import type { HealthResponse, ModelStatus, Organism } from '@/types/api';
 
-type BootPhase = "loading" | "ready" | "error";
+type BootPhase = 'loading' | 'ready' | 'error';
 
 interface BootState {
-  phase: BootPhase;
-  modelsStatus: Partial<Record<Organism, ModelStatus>>;
-  health: HealthResponse | null;
-  error: string | null;
-  retry: () => void;
-  /** Re-fetch /health without showing the splash again — useful after
-   *  uploading/assigning a model so AnalyzePage updates without a reload. */
-  refresh: () => Promise<void>;
+    phase: BootPhase;
+    modelsStatus: Partial<Record<Organism, ModelStatus>>;
+    health: HealthResponse | null;
+    error: string | null;
+    retry: () => void;
+    /** Re-fetch /health without showing the splash again — useful after
+     *  uploading/assigning a model so AnalyzePage updates without a reload. */
+    refresh: () => Promise<void>;
 }
 
 const BootContext = createContext<BootState | null>(null);
@@ -48,108 +48,110 @@ const BootContext = createContext<BootState | null>(null);
 const BOOT_TIMEOUT_MS = 10_000;
 
 export function BootProvider({ children }: { children: ReactNode }) {
-  const [phase, setPhase] = useState<BootPhase>("loading");
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const attemptIdRef = useRef(0);
+    const [phase, setPhase] = useState<BootPhase>('loading');
+    const [health, setHealth] = useState<HealthResponse | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const attemptIdRef = useRef(0);
 
-  const runBoot = useCallback(async (): Promise<void> => {
-    const id = ++attemptIdRef.current;
-    setPhase("loading");
-    setError(null);
+    const runBoot = useCallback(async (): Promise<void> => {
+        const id = ++attemptIdRef.current;
+        setPhase('loading');
+        setError(null);
 
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), BOOT_TIMEOUT_MS);
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), BOOT_TIMEOUT_MS);
 
-    try {
-      const data = await getHealth(controller.signal);
-      if (attemptIdRef.current !== id) return;
-      setHealth(data);
+        try {
+            const data = await getHealth(controller.signal);
+            if (attemptIdRef.current !== id) return;
+            setHealth(data);
 
-      // Silent auth bootstrap — try the persisted refresh token before the
-      // router renders so protected routes don't flash /login then snap back.
-      // Failure here is normal (no token, or token expired/revoked) — fall
-      // through to "anon" and let RequireAuth send the user to /login.
-      if (loadRefreshToken()) {
-        const tokens = await refreshTokens();
-        if (tokens) {
-          try {
-            const user = await me(tokens.access_token);
-            useAuthStore.getState().setSession(user, tokens.access_token, tokens.refresh_token);
-          } catch {
-            useAuthStore.getState().clear();
-          }
-        } else {
-          useAuthStore.getState().clear();
+            // Silent auth bootstrap — try the persisted refresh token before the
+            // router renders so protected routes don't flash /login then snap back.
+            // Failure here is normal (no token, or token expired/revoked) — fall
+            // through to "anon" and let RequireAuth send the user to /login.
+            if (loadRefreshToken()) {
+                const tokens = await refreshTokens();
+                if (tokens) {
+                    try {
+                        const user = await me(tokens.access_token);
+                        useAuthStore
+                            .getState()
+                            .setSession(user, tokens.access_token, tokens.refresh_token);
+                    } catch {
+                        useAuthStore.getState().clear();
+                    }
+                } else {
+                    useAuthStore.getState().clear();
+                }
+            } else {
+                useAuthStore.getState().setStatus('anon');
+            }
+
+            setPhase('ready');
+        } catch (err) {
+            if (attemptIdRef.current !== id) return;
+            const aborted = err instanceof DOMException && err.name === 'AbortError';
+            const msg = aborted
+                ? `Backend did not respond within ${Math.round(BOOT_TIMEOUT_MS / 1000)}s.`
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            setError(msg);
+            setPhase('error');
+        } finally {
+            window.clearTimeout(timeoutId);
         }
-      } else {
-        useAuthStore.getState().setStatus("anon");
-      }
+    }, []);
 
-      setPhase("ready");
-    } catch (err) {
-      if (attemptIdRef.current !== id) return;
-      const aborted = err instanceof DOMException && err.name === "AbortError";
-      const msg = aborted
-        ? `Backend did not respond within ${Math.round(BOOT_TIMEOUT_MS / 1000)}s.`
-        : err instanceof Error
-          ? err.message
-          : String(err);
-      setError(msg);
-      setPhase("error");
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
-  }, []);
-
-  // Refresh = re-fetch /health silently (no splash, just update cached value).
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const data = await getHealth();
-      setHealth(data);
-    } catch {
-      /* keep whatever we last had */
-    }
-  }, []);
-
-  useEffect(() => {
-    void runBoot();
-  }, [runBoot]);
-
-  const value = useMemo<BootState>(
-    () => ({
-      phase,
-      health,
-      modelsStatus: health?.models_status ?? {},
-      error,
-      retry: () => void runBoot(),
-      refresh,
-    }),
-    [phase, health, error, runBoot, refresh],
-  );
-
-  if (phase === "loading") {
-    return <LoadingScreen status="Connecting to backend…" />;
-  }
-  if (phase === "error") {
-    return (
-      <LoadingScreen
-        status={`Cannot reach backend — ${error ?? "unknown error"}`}
-        action={
-          <Button onClick={() => void runBoot()} variant="default">
-            Retry
-          </Button>
+    // Refresh = re-fetch /health silently (no splash, just update cached value).
+    const refresh = useCallback(async (): Promise<void> => {
+        try {
+            const data = await getHealth();
+            setHealth(data);
+        } catch {
+            /* keep whatever we last had */
         }
-      />
+    }, []);
+
+    useEffect(() => {
+        void runBoot();
+    }, [runBoot]);
+
+    const value = useMemo<BootState>(
+        () => ({
+            phase,
+            health,
+            modelsStatus: health?.models_status ?? {},
+            error,
+            retry: () => void runBoot(),
+            refresh,
+        }),
+        [phase, health, error, runBoot, refresh],
     );
-  }
-  return <BootContext.Provider value={value}>{children}</BootContext.Provider>;
+
+    if (phase === 'loading') {
+        return <LoadingScreen status="Connecting to backend…" />;
+    }
+    if (phase === 'error') {
+        return (
+            <LoadingScreen
+                status={`Cannot reach backend — ${error ?? 'unknown error'}`}
+                action={
+                    <Button onClick={() => void runBoot()} variant="default">
+                        Retry
+                    </Button>
+                }
+            />
+        );
+    }
+    return <BootContext.Provider value={value}>{children}</BootContext.Provider>;
 }
 
 export function useBoot(): BootState {
-  const ctx = useContext(BootContext);
-  if (ctx === null) {
-    throw new Error("useBoot must be used inside <BootProvider>");
-  }
-  return ctx;
+    const ctx = useContext(BootContext);
+    if (ctx === null) {
+        throw new Error('useBoot must be used inside <BootProvider>');
+    }
+    return ctx;
 }

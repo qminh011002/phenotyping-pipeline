@@ -144,11 +144,11 @@ def _configure_mock_inference_service(mock_svc):
 
     def make_batch_result(*args, **kwargs):
         # args: (images_list, batch_id) from process_batch call
-        # images is list[tuple[bytes, str]] — tuple[1] is the filename string
+        # images is list[tuple[bytes, filename, suffix]] — tuple[1] is filename
         images = args[0] if args else kwargs.get("images", [])
         results = [
-            make_single_result(filename, count=3, conf=0.89)
-            for _, filename in images
+            make_single_result(item[1], count=3, conf=0.89)
+            for item in images
         ]
         return BatchDetectionResult(
             results=results,
@@ -198,7 +198,16 @@ def _build_test_app():
     _mock_registry.models_status = {"egg": "loaded"}
 
     # ── Mock log buffer ────────────────────────────────────────────────────
+    import asyncio as _asyncio
+
     _mock_log_buffer = MagicMock()
+    # The WS handler awaits subscribe() (acquires before accept now), so the
+    # mock has to be an AsyncMock that returns a (client_id, queue) tuple.
+    _mock_log_buffer.subscribe = AsyncMock(
+        return_value=("mock-client", _asyncio.Queue())
+    )
+    _mock_log_buffer.unsubscribe = AsyncMock(return_value=0)
+    _mock_log_buffer.subscriber_count = 0
 
     # ── Mock executor ──────────────────────────────────────────────────────
     _mock_executor = MagicMock()
