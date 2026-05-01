@@ -20,12 +20,9 @@ export default function NotFoundPage() {
                 <p className="mt-6 text-sm font-mono font-semibold tracking-[0.2em] text-muted-foreground">
                     404
                 </p>
-                <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-                    Page not found
-                </h1>
+                <h1 className="mt-2 text-2xl font-semibold tracking-tight">Page not found</h1>
                 <p className="mt-3 text-sm text-muted-foreground">
-                    The link you followed may be broken, or the page may have been
-                    moved.
+                    The link you followed may be broken, or the page may have been moved.
                 </p>
 
                 {location.pathname && (
@@ -35,11 +32,7 @@ export default function NotFoundPage() {
                 )}
 
                 <div className="mt-8 flex flex-col gap-2 sm:flex-row">
-                    <Button
-                        variant="outline"
-                        onClick={() => navigate(-1)}
-                        className="gap-2"
-                    >
+                    <Button variant="outline" onClick={() => navigate(-1)} className="gap-2">
                         <ArrowLeft className="h-4 w-4" />
                         Go back
                     </Button>

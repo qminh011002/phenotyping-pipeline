@@ -1,21 +1,21 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @custom-variant dark (&:is(.dark *));
 
 @font-face {
-  font-family: "Geist";
-  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
+    font-family: 'Geist';
+    src: url('../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
 }
 
 @font-face {
-  font-family: "Geist Mono";
-  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
+    font-family: 'Geist Mono';
+    src: url('../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -23,422 +23,559 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 @keyframes slideInFromRight {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
+    from {
+        transform: translateX(100%);
+    }
+    to {
+        transform: translateX(0);
+    }
 }
 @keyframes slideOutToRight {
-  from { transform: translateX(0); }
-  to   { transform: translateX(100%); }
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(100%);
+    }
 }
 @keyframes slideInFromLeft {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(0); }
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(0);
+    }
 }
 @keyframes slideOutToLeft {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-100%); }
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-100%);
+    }
 }
 @keyframes slideInFromTop {
-  from { transform: translateY(-100%); }
-  to   { transform: translateY(0); }
+    from {
+        transform: translateY(-100%);
+    }
+    to {
+        transform: translateY(0);
+    }
 }
 @keyframes slideOutToTop {
-  from { transform: translateY(0); }
-  to   { transform: translateY(-100%); }
+    from {
+        transform: translateY(0);
+    }
+    to {
+        transform: translateY(-100%);
+    }
 }
 @keyframes slideInFromBottom {
-  from { transform: translateY(100%); }
-  to   { transform: translateY(0); }
+    from {
+        transform: translateY(100%);
+    }
+    to {
+        transform: translateY(0);
+    }
 }
 @keyframes slideOutToBottom {
-  from { transform: translateY(0); }
-  to   { transform: translateY(100%); }
+    from {
+        transform: translateY(0);
+    }
+    to {
+        transform: translateY(100%);
+    }
 }
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 }
 @keyframes fadeOut {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
 }
 @keyframes zoomIn {
-  from { opacity: 0; transform: scale(0.96); }
-  to   { opacity: 1; transform: scale(1); }
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 @keyframes zoomOut {
-  from { opacity: 1; transform: scale(1); }
-  to   { opacity: 0; transform: scale(0.96); }
+    from {
+        opacity: 1;
+        transform: scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: scale(0.96);
+    }
 }
 @keyframes accordionDown {
-  from { height: 0; overflow: hidden; }
-  to   { height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height)); overflow: hidden; }
+    from {
+        height: 0;
+        overflow: hidden;
+    }
+    to {
+        height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height));
+        overflow: hidden;
+    }
 }
 @keyframes accordionUp {
-  from { height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height)); overflow: hidden; }
-  to   { height: 0; overflow: hidden; }
+    from {
+        height: var(--radix-accordion-content-height, var(--radix-collapsible-content-height));
+        overflow: hidden;
+    }
+    to {
+        height: 0;
+        overflow: hidden;
+    }
 }
 @keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Tailwind v4 @theme — animation tokens
    ═══════════════════════════════════════════════════════════════════════ */
 @theme {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Radius scale */
-  --radius-sm:   calc(var(--radius) - 4px);  /* 6px  — badges, small chips */
-  --radius-md:   calc(var(--radius) - 2px);  /* 8px  — buttons, inputs, selects */
-  --radius-lg:   var(--radius);              /* 10px — dialogs, popovers */
-  --radius-xl:   calc(var(--radius) + 4px);  /* 14px — cards, sheets on mobile */
-  --radius-full: 9999px;                     /* 9999px — pills, avatars, status dots */
+    /* Radius scale */
+    --radius-sm: calc(var(--radius) - 4px); /* 6px  — badges, small chips */
+    --radius-md: calc(var(--radius) - 2px); /* 8px  — buttons, inputs, selects */
+    --radius-lg: var(--radius); /* 10px — dialogs, popovers */
+    --radius-xl: calc(var(--radius) + 4px); /* 14px — cards, sheets on mobile */
+    --radius-full: 9999px; /* 9999px — pills, avatars, status dots */
 
-  /* Elevation / shadow ramp */
-  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    /* Elevation / shadow ramp */
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
 
-  /* Typography */
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+    /* Typography */
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-heading: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
 
-  /* Z-index scale */
-  --z-base:     0;
-  --z-sticky:   20;
-  --z-dropdown: 40;
-  --z-overlay:  50;
-  --z-modal:    60;
-  --z-popover:  70;
-  --z-toast:    80;
-  --z-tooltip:  90;
+    /* Z-index scale */
+    --z-base: 0;
+    --z-sticky: 20;
+    --z-dropdown: 40;
+    --z-overlay: 50;
+    --z-modal: 60;
+    --z-popover: 70;
+    --z-toast: 80;
+    --z-tooltip: 90;
 
-  /* Sheet slide */
-  --animate-slide-in-from-right:  slideInFromRight  300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-out-to-right:   slideOutToRight   300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-in-from-left:   slideInFromLeft   300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-out-to-left:    slideOutToLeft    300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-in-from-top:    slideInFromTop    300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-out-to-top:     slideOutToTop     300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-in-from-bottom: slideInFromBottom 300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-slide-out-to-bottom:  slideOutToBottom  300ms cubic-bezier(0.32, 0.72, 0, 1);
+    /* Sheet slide */
+    --animate-slide-in-from-right: slideInFromRight 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-out-to-right: slideOutToRight 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-in-from-left: slideInFromLeft 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-out-to-left: slideOutToLeft 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-in-from-top: slideInFromTop 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-out-to-top: slideOutToTop 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-in-from-bottom: slideInFromBottom 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-slide-out-to-bottom: slideOutToBottom 300ms cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* Fade / zoom */
-  --animate-fade-in:      fadeIn  200ms ease-out;
-  --animate-fade-out:     fadeOut 200ms ease-in;
-  --animate-zoom-in-95:   zoomIn  200ms ease-out;
-  --animate-zoom-out-95:  zoomOut 200ms ease-in;
+    /* Fade / zoom */
+    --animate-fade-in: fadeIn 200ms ease-out;
+    --animate-fade-out: fadeOut 200ms ease-in;
+    --animate-zoom-in-95: zoomIn 200ms ease-out;
+    --animate-zoom-out-95: zoomOut 200ms ease-in;
 
-  /* Accordion */
-  --animate-accordion-down: accordionDown 300ms cubic-bezier(0.32, 0.72, 0, 1);
-  --animate-accordion-up:  accordionUp  300ms cubic-bezier(0.32, 0.72, 0, 1);
+    /* Accordion */
+    --animate-accordion-down: accordionDown 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    --animate-accordion-up: accordionUp 300ms cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* Motion duration tokens */
-  --duration-fast:   150ms;
-  --duration-base:   200ms;
-  --duration-medium: 300ms;
-  --duration-slow:   500ms;
+    /* Motion duration tokens */
+    --duration-fast: 150ms;
+    --duration-base: 200ms;
+    --duration-medium: 300ms;
+    --duration-slow: 500ms;
 
-  /* Motion easing tokens */
-  --ease-out:      cubic-bezier(0.32, 0.72, 0, 1);
-  --ease-in:       cubic-bezier(0.64, 0, 0.78, 0);
-  --ease-in-out:   cubic-bezier(0.65, 0, 0.35, 1);
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+    /* Motion easing tokens */
+    --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-in: cubic-bezier(0.64, 0, 0.78, 0);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Custom @utility classes shadcn components depend on
    ═══════════════════════════════════════════════════════════════════════ */
-@utility animate-in          { animation-fill-mode: both; animation-duration: 200ms; }
-@utility animate-out         { animation-fill-mode: both; animation-duration: 200ms; }
-@utility fade-in-0           { animation-name: fadeIn; }
-@utility fade-out-0          { animation-name: fadeOut; }
-@utility zoom-in-95          { animation-name: zoomIn; }
-@utility zoom-out-95         { animation-name: zoomOut; }
-@utility duration-200        { animation-duration: 200ms; }
-@utility duration-300        { animation-duration: 300ms; }
-@utility duration-500        { animation-duration: 500ms; }
-@utility slide-in-from-right  { animation-name: slideInFromRight; }
-@utility slide-out-to-right   { animation-name: slideOutToRight; }
-@utility slide-in-from-left   { animation-name: slideInFromLeft; }
-@utility slide-out-to-left    { animation-name: slideOutToLeft; }
-@utility slide-in-from-top    { animation-name: slideInFromTop; }
-@utility slide-out-to-top     { animation-name: slideOutToTop; }
-@utility slide-in-from-bottom { animation-name: slideInFromBottom; }
-@utility slide-out-to-bottom  { animation-name: slideOutToBottom; }
-@utility animate-accordion-down { animation-name: accordionDown; }
-@utility animate-accordion-up  { animation-name: accordionUp; }
-@utility slide-in-from-top-2     { animation-name: slideInFromTop; }
-@utility slide-in-from-bottom-2  { animation-name: slideInFromBottom; }
-@utility slide-in-from-left-2    { animation-name: slideInFromLeft; }
-@utility slide-in-from-right-2   { animation-name: slideInFromRight; }
+@utility animate-in {
+    animation-fill-mode: both;
+    animation-duration: 200ms;
+}
+@utility animate-out {
+    animation-fill-mode: both;
+    animation-duration: 200ms;
+}
+@utility fade-in-0 {
+    animation-name: fadeIn;
+}
+@utility fade-out-0 {
+    animation-name: fadeOut;
+}
+@utility zoom-in-95 {
+    animation-name: zoomIn;
+}
+@utility zoom-out-95 {
+    animation-name: zoomOut;
+}
+@utility duration-200 {
+    animation-duration: 200ms;
+}
+@utility duration-300 {
+    animation-duration: 300ms;
+}
+@utility duration-500 {
+    animation-duration: 500ms;
+}
+@utility slide-in-from-right {
+    animation-name: slideInFromRight;
+}
+@utility slide-out-to-right {
+    animation-name: slideOutToRight;
+}
+@utility slide-in-from-left {
+    animation-name: slideInFromLeft;
+}
+@utility slide-out-to-left {
+    animation-name: slideOutToLeft;
+}
+@utility slide-in-from-top {
+    animation-name: slideInFromTop;
+}
+@utility slide-out-to-top {
+    animation-name: slideOutToTop;
+}
+@utility slide-in-from-bottom {
+    animation-name: slideInFromBottom;
+}
+@utility slide-out-to-bottom {
+    animation-name: slideOutToBottom;
+}
+@utility animate-accordion-down {
+    animation-name: accordionDown;
+}
+@utility animate-accordion-up {
+    animation-name: accordionUp;
+}
+@utility slide-in-from-top-2 {
+    animation-name: slideInFromTop;
+}
+@utility slide-in-from-bottom-2 {
+    animation-name: slideInFromBottom;
+}
+@utility slide-in-from-left-2 {
+    animation-name: slideInFromLeft;
+}
+@utility slide-in-from-right-2 {
+    animation-name: slideInFromRight;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    Skeleton shimmer
    ═══════════════════════════════════════════════════════════════════════ */
 @utility animate-shimmer {
-  animation: shimmer 2s infinite linear;
-  background: linear-gradient(
-    to right,
-    oklch(0.97 0 0) 0%,
-    oklch(0.922 0 0) 20%,
-    oklch(0.97 0 0) 40%,
-    oklch(0.97 0 0) 100%
-  );
-  background-size: 200% 100%;
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(
+        to right,
+        oklch(0.97 0 0) 0%,
+        oklch(0.922 0 0) 20%,
+        oklch(0.97 0 0) 40%,
+        oklch(0.97 0 0) 100%
+    );
+    background-size: 200% 100%;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Design tokens
    ═══════════════════════════════════════════════════════════════════════ */
 :root {
-  /* Radius: base 10px scale */
-  --radius: 0.625rem;
+    /* Radius: base 10px scale */
+    --radius: 0.625rem;
 
-  /* Neutral base + Green primary (shadcn Maia) */
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.723 0.219 149.579);
-  --primary-foreground: oklch(0.982 0.018 155.826);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.723 0.219 149.579);
+    /* Neutral base + Green primary (shadcn Maia) */
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.723 0.219 149.579);
+    --primary-foreground: oklch(0.982 0.018 155.826);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.723 0.219 149.579);
 
-  /* Emerald chart palette */
-  --chart-1: oklch(0.696 0.17 162.48);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+    /* Emerald chart palette */
+    --chart-1: oklch(0.696 0.17 162.48);
+    --chart-2: oklch(0.6 0.118 184.704);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
 
-  /* Sidebar tokens */
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.723 0.219 149.579);
-  --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.723 0.219 149.579);
+    /* Sidebar tokens */
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.723 0.219 149.579);
+    --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.723 0.219 149.579);
 
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-heading: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
 }
 
 .dark {
-  --radius: 0.625rem;
+    --radius: 0.625rem;
 
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.696 0.17 162.48);
-  --primary-foreground: oklch(0.393 0.095 152.535);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.527 0.154 150.069);
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.696 0.17 162.48);
+    --primary-foreground: oklch(0.393 0.095 152.535);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.527 0.154 150.069);
 
-  --chart-1: oklch(0.696 0.17 162.48);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+    --chart-1: oklch(0.696 0.17 162.48);
+    --chart-2: oklch(0.696 0.17 162.48);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
 
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.696 0.17 162.48);
-  --sidebar-primary-foreground: oklch(0.393 0.095 152.535);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.527 0.154 150.069);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.696 0.17 162.48);
+    --sidebar-primary-foreground: oklch(0.393 0.095 152.535);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.527 0.154 150.069);
 
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-heading: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
 }
 
 *,
 *::before,
 *::after {
-  border-color: var(--border);
+    border-color: var(--border);
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans);
-  font-optical-sizing: auto;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading);
-  letter-spacing: -0.01em;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.01em;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Sonner toast overrides
    ═══════════════════════════════════════════════════════════════════════════ */
 .toaster {
-  --width: min(24rem, calc(100vw - 2rem));
-  --border-radius: calc(var(--radius) + 0.375rem);
-  font-family: var(--font-sans);
+    --width: min(24rem, calc(100vw - 2rem));
+    --border-radius: calc(var(--radius) + 0.375rem);
+    font-family: var(--font-sans);
 }
 
-.toaster [data-sonner-toast][data-styled="true"] {
-  width: var(--width);
-  border-color: var(--border);
-  background: var(--card);
-  color: var(--card-foreground);
-  box-shadow: var(--shadow-lg);
+.toaster [data-sonner-toast][data-styled='true'] {
+    width: var(--width);
+    border-color: var(--border);
+    background: var(--card);
+    color: var(--card-foreground);
+    box-shadow: var(--shadow-lg);
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-content] {
-  min-width: 0;
+.toaster [data-sonner-toast][data-styled='true'] [data-content] {
+    min-width: 0;
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-description] {
-  overflow-wrap: break-word;
+.toaster [data-sonner-toast][data-styled='true'] [data-description] {
+    overflow-wrap: break-word;
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-button] {
-  height: 2rem;
+.toaster [data-sonner-toast][data-styled='true'] [data-button] {
+    height: 2rem;
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-close-button] {
-  top: 0.75rem;
-  right: 0.75rem;
-  left: auto;
-  transform: none;
-  height: 1.75rem;
-  width: 1.75rem;
-  border-radius: calc(var(--radius) - 2px);
-  border-color: var(--border);
-  background: var(--card);
-  color: var(--muted-foreground);
-  box-shadow: none;
+.toaster [data-sonner-toast][data-styled='true'] [data-close-button] {
+    top: 0.75rem;
+    right: 0.75rem;
+    left: auto;
+    transform: none;
+    height: 1.75rem;
+    width: 1.75rem;
+    border-radius: calc(var(--radius) - 2px);
+    border-color: var(--border);
+    background: var(--card);
+    color: var(--muted-foreground);
+    box-shadow: none;
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-close-button]:hover {
-  border-color: var(--border);
-  background: var(--accent);
-  color: var(--accent-foreground);
+.toaster [data-sonner-toast][data-styled='true'] [data-close-button]:hover {
+    border-color: var(--border);
+    background: var(--accent);
+    color: var(--accent-foreground);
 }
 
-.toaster [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent);
+.toaster [data-sonner-toast][data-styled='true'] [data-close-button]:focus-visible {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Dark mode shimmer — reads from dark theme tokens
    ═══════════════════════════════════════════════════════════════════════════ */
 .dark .animate-shimmer {
-  animation: shimmer 2s infinite linear;
-  background: linear-gradient(
-    to right,
-    oklch(0.269 0 0) 0%,
-    oklch(0.32 0 0) 20%,
-    oklch(0.269 0 0) 40%,
-    oklch(0.269 0 0) 100%
-  );
-  background-size: 200% 100%;
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(
+        to right,
+        oklch(0.269 0 0) 0%,
+        oklch(0.32 0 0) 20%,
+        oklch(0.269 0 0) 40%,
+        oklch(0.269 0 0) 100%
+    );
+    background-size: 200% 100%;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Custom scrollbar — slim, themed, matches design tokens in light + dark
    ═══════════════════════════════════════════════════════════════════════════ */
 @layer base {
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 9999px;
-    border: 2px solid var(--background);
-    transition: background-color 150ms ease-out;
-  }
-  ::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
-  /* Firefox */
-  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 9999px;
+        border: 2px solid var(--background);
+        transition: background-color 150ms ease-out;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: var(--muted-foreground);
+    }
+    /* Firefox */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Progress indeterminate bar
    ═══════════════════════════════════════════════════════════════════════════ */
 @keyframes progress-indeterminate {
-  0%   { transform: translateX(-150%); }
-  50%  { transform: translateX(0%); }
-  100% { transform: translateX(250%); }
+    0% {
+        transform: translateX(-150%);
+    }
+    50% {
+        transform: translateX(0%);
+    }
+    100% {
+        transform: translateX(250%);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Reduced Motion — collapse all CSS and Framer animations
    ═══════════════════════════════════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
 }

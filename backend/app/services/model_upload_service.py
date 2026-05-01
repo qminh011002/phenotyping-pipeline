@@ -175,9 +175,7 @@ class ModelUploadService:
 
             ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Checkpoint load failed for %s: %s", path.name, exc
-            )
+            logger.warning("Checkpoint load failed for %s: %s", path.name, exc)
             return False
 
         try:

@@ -35,6 +35,7 @@ _MAX_SUBSCRIBERS = 32
 class SubscriberLimitReached(Exception):
     """Raised by :meth:`LogBuffer.subscribe` when the cap is hit."""
 
+
 _logger = logging.getLogger(__name__)
 
 

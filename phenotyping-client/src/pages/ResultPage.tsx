@@ -4,8 +4,8 @@
 //   /analyze/results/:batchId                    (canonicalizes to first image)
 //   /analyze/results                             (sessionStorage fallback)
 
-import { ResultViewer } from "@/features/results/components/ResultViewer";
+import { ResultViewer } from '@/features/results/components/ResultViewer';
 
 export default function ResultPage() {
-  return <ResultViewer />;
+    return <ResultViewer />;
 }

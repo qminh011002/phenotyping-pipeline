@@ -195,9 +195,9 @@ class AnalysisService:
             new_count = prev_count + (result.count or 0)
             batch_row.total_count = new_count
 
-            batch_row.total_elapsed_secs = (
-                batch_row.total_elapsed_secs or 0.0
-            ) + (result.elapsed_seconds or 0.0)
+            batch_row.total_elapsed_secs = (batch_row.total_elapsed_secs or 0.0) + (
+                result.elapsed_seconds or 0.0
+            )
 
             new_conf = result.avg_confidence
             if new_conf is not None and (result.count or 0) > 0:

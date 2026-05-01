@@ -622,7 +622,7 @@ export function BatchDetail() {
                                     }
                                 }}
                                 ariaLabel="Rename batch"
-                                className="max-w-full"
+                                className="max-w-fit"
                             />
                         </h1>
                     </div>

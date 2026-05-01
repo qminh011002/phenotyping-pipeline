@@ -38,8 +38,8 @@ export default function LoginPage() {
                 err instanceof ApiError && err.code === 'invalid_credentials'
                     ? 'Email or password is incorrect.'
                     : err instanceof Error
-                        ? err.message
-                        : 'Something went wrong.';
+                      ? err.message
+                      : 'Something went wrong.';
             toast.error('Sign-in failed', { description });
         } finally {
             setSubmitting(false);

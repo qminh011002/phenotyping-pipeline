@@ -17,7 +17,9 @@ export default function ModelsPage() {
                                     <Cpu className="size-6" />
                                 </div>
                                 <div className="min-w-0">
-                                    <p className="text-sm font-medium text-primary">Model library</p>
+                                    <p className="text-sm font-medium text-primary">
+                                        Model library
+                                    </p>
                                     <h1 className="mt-1 text-2xl font-semibold tracking-normal">
                                         Detection Models
                                     </h1>

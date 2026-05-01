@@ -419,9 +419,7 @@ class EggInferenceService:
 
                 cat_xyxy = torch.cat(batch_xyxy_t, dim=0).cpu().numpy()
                 cat_confs = torch.cat(batch_confs_t, dim=0).cpu().numpy()
-                cat_cls = (
-                    torch.cat(batch_cls_t, dim=0).cpu().numpy().astype(np.int32)
-                )
+                cat_cls = torch.cat(batch_cls_t, dim=0).cpu().numpy().astype(np.int32)
             else:
                 cat_xyxy = np.empty((0, 4), dtype=np.float32)
                 cat_confs = np.empty(0, dtype=np.float32)

@@ -59,6 +59,7 @@ def _stream_to_tempfile(src, max_bytes: int) -> tuple[Path, int]:
         tmp.close()
     return Path(tmp.name), total
 
+
 router = APIRouter(prefix="/models", tags=["models"])
 
 
