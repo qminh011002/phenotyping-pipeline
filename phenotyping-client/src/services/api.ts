@@ -81,22 +81,30 @@ export async function inferSingle(
 // ── Overlay URLs ───────────────────────────────────────────────────────────────
 
 /**
- * Return the absolute URL for a recorded overlay image from the analyses DB.
+ * Return the URL for a recorded overlay image from the analyses DB.
  * Uses the /analyses/{batch_id}/images/{image_id}/overlay endpoint.
  * Call this for overlays of saved batches (from the Recorded page / detail view).
+ *
+ * Returns a base-relative path. Callers must route it through `http.getBlob`
+ * (or another helper that prepends the base via `_url`); `<img src>` won't
+ * work because the route requires Bearer auth.
  */
 export function getAnalysesOverlayUrl(batchId: string, imageId: string): string {
-    return `${getBaseUrl().replace(/\/$/, '')}/analyses/${batchId}/images/${imageId}/overlay`;
+    return `/analyses/${batchId}/images/${imageId}/overlay`;
 }
 
 /**
- * Return the absolute URL for a recorded raw (un-annotated) image from the
- * analyses DB. Uses /analyses/{batch_id}/images/{image_id}/raw. Use this when
+ * Return the URL for a recorded raw (un-annotated) image from the analyses
+ * DB. Uses /analyses/{batch_id}/images/{image_id}/raw. Use this when
  * rendering client-side bbox overlays so we don't stack them on top of the
  * server-rendered annotated PNG.
+ *
+ * Returns a base-relative path. Callers must route it through `http.getBlob`
+ * (or another helper that prepends the base via `_url`); `<img src>` won't
+ * work because the route requires Bearer auth.
  */
 export function getAnalysesRawUrl(batchId: string, imageId: string): string {
-    return `${getBaseUrl().replace(/\/$/, '')}/analyses/${batchId}/images/${imageId}/raw`;
+    return `/analyses/${batchId}/images/${imageId}/raw`;
 }
 
 /**
