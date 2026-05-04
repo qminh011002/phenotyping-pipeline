@@ -167,14 +167,33 @@ export function ResultViewer({ className }: ResultViewerProps) {
                     // Hydrate cache from sessionStorage if the user came straight
                     // from /analyze/processing — annotations are already in RAM,
                     // no need to round-trip the network for them.
+                    //
+                    // edited_annotations comes from the *stored* batch detail
+                    // (populated by openBatchInResults / processing flow).
+                    // ``detail.images[i].edited_annotations`` from the network
+                    // call is always null here because we requested
+                    // includeAnnotations:false. If the stored detail is also
+                    // missing, leave the cache entry alone so the lazy fetch
+                    // can pull the authoritative value from the backend.
                     const stored = loadProcessingResults();
+                    const storedDetail = loadBatchDetail();
+                    const storedEditedByName = new Map<string, BBox[] | null | undefined>(
+                        (storedDetail?.images ?? []).map((i) => [
+                            i.original_filename,
+                            i.edited_annotations,
+                        ]),
+                    );
                     for (const r of stored) {
                         const img = detail.images.find((i) => i.original_filename === r.filename);
                         if (img && !imageDetailCache.current.has(img.id)) {
+                            const storedEdited = storedEditedByName.get(r.filename);
+                            // ``undefined`` ⇒ no info from sessionStorage; skip caching
+                            // so the lazy-fetch effect populates from the backend.
+                            if (storedEdited === undefined) continue;
                             imageDetailCache.current.set(img.id, {
                                 ...img,
                                 annotations: r.result.annotations as unknown as null,
-                                edited_annotations: img.edited_annotations,
+                                edited_annotations: storedEdited,
                             } as AnalysisImageDetail);
                         }
                     }
