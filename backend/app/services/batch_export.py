@@ -1,16 +1,18 @@
-"""Build a ZIP archive of a batch's overlay images + an .xlsx summary.
+"""Build a ZIP archive of a batch's reviewed images + an .xlsx summary.
 
 The archive is streamed back to the client so we never hold the whole zip in
 memory at once. Per-image inclusion is decided by the caller (the download
 dialog sends the subset of image IDs the user ticked).
 
-Current image source: overlay PNG (written to disk at inference time). Once
-we have a persisted, edited overlay per image we'll switch this to whichever
-is newest — but for now the overlay is the only rendered output on disk.
+Image source: the raw upload with the operator's reviewed boxes drawn on top
+— matching what the user saw in the ResultViewer when they clicked Finish.
+Edited boxes win when present; otherwise the model's annotations are drawn.
+We deliberately do NOT export the script-generated overlay PNG (which carries
+the inference-time Configuration/Result text boards), because that is not
+what the operator reviewed.
 
 Summary columns reflect the *edited* count/average confidence when the
-operator has saved edits, otherwise the model's output. This matches the
-numbers the operator sees in the ResultViewer.
+operator has saved edits, otherwise the model's output.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 from uuid import UUID
 
+import cv2
+import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -212,6 +216,86 @@ def _resolve_overlay_path(overlay_path: str, storage_dir: Path) -> Path:
     return p
 
 
+def _find_raw_path(overlay_path: Path) -> Path | None:
+    """Locate the raw upload that sits next to the overlay PNG.
+
+    The inference service writes ``{filename}_raw{original_suffix}`` alongside
+    ``{filename}_overlay.png``; the suffix preserves the original upload's
+    extension so we glob for it.
+    """
+    raw_stem = overlay_path.name.replace("_overlay.png", "_raw")
+    candidates = sorted(overlay_path.parent.glob(f"{raw_stem}.*"))
+    return candidates[0] if candidates else None
+
+
+def _boxes_for_render(image: AnalysisImage) -> list[dict]:
+    """Pick which annotation list to draw — edits win, fall back to model."""
+    edited = image.edited_annotations
+    if isinstance(edited, list) and len(edited) > 0:
+        return [b for b in edited if isinstance(b, dict)]
+    annotations = image.annotations
+    if isinstance(annotations, list):
+        return [b for b in annotations if isinstance(b, dict)]
+    return []
+
+
+def _coerce_bbox(box: dict) -> tuple[int, int, int, int] | None:
+    """Pull (x1, y1, x2, y2) out of an annotation dict, in pixel coordinates."""
+    raw = box.get("bbox")
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (int(round(float(v))) for v in raw)
+    except (TypeError, ValueError):
+        return None
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    return x1, y1, x2, y2
+
+
+def _render_reviewed_png(raw_path: Path, boxes: list[dict]) -> bytes | None:
+    """Draw `boxes` on the raw image and return PNG-encoded bytes.
+
+    Box style mirrors the inference overlay: 1-px green rectangle with the
+    confidence printed just above the top-left corner. User-drawn boxes that
+    don't carry a numeric confidence are drawn without a label.
+
+    Returns None when the raw image can't be decoded.
+    """
+    data = np.fromfile(str(raw_path), dtype=np.uint8)
+    if data.size == 0:
+        return None
+    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+
+    color = (0, 255, 0)
+    for box in boxes:
+        coords = _coerce_bbox(box)
+        if coords is None:
+            continue
+        x1, y1, x2, y2 = coords
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, 1)
+        conf = box.get("confidence")
+        if isinstance(conf, (int, float)) and box.get("origin") != "user":
+            cv2.putText(
+                image,
+                f"{float(conf):.2f}",
+                (x1, max(y1 - 5, 0)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                color,
+                1,
+            )
+
+    ok, buf = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    if not ok:
+        return None
+    return buf.tobytes()
+
+
 async def build_batch_archive(
     batch_id: UUID,
     image_ids: list[UUID] | None,
@@ -259,26 +343,57 @@ async def build_batch_archive(
             for img in images:
                 if not img.overlay_path:
                     continue
-                src = _resolve_overlay_path(img.overlay_path, storage_dir)
-                if not src.exists():
+                overlay_src = _resolve_overlay_path(img.overlay_path, storage_dir)
+                raw_src = _find_raw_path(overlay_src)
+
+                rendered: bytes | None = None
+                if raw_src is not None and raw_src.exists():
+                    rendered = _render_reviewed_png(raw_src, _boxes_for_render(img))
+
+                if rendered is None:
+                    # Fall back to the script overlay if we can't render the
+                    # reviewed view (raw missing, decode failure, …) so the
+                    # export still produces something useful.
+                    if not overlay_src.exists():
+                        logger.warning(
+                            "Skipping image during export — no raw or overlay on disk",
+                            extra={
+                                "context": {
+                                    "batch_id": str(batch_id),
+                                    "image_id": str(img.id),
+                                    "overlay_path": str(overlay_src),
+                                }
+                            },
+                        )
+                        continue
                     logger.warning(
-                        "Skipping missing overlay during export",
+                        "Falling back to script overlay during export",
                         extra={
                             "context": {
                                 "batch_id": str(batch_id),
                                 "image_id": str(img.id),
-                                "path": str(src),
+                                "raw_path": str(raw_src) if raw_src else None,
                             }
                         },
                     )
-                    continue
 
                 stem = Path(img.original_filename).stem
-                ext = src.suffix.lower() or ".png"
                 count = stem_counts.get(stem, 0)
-                candidate = f"{stem}{ext}" if count == 0 else f"{stem}_{count}{ext}"
+                if rendered is not None:
+                    arc_ext = ".png"
+                else:
+                    arc_ext = overlay_src.suffix.lower() or ".png"
+                candidate = (
+                    f"{stem}{arc_ext}" if count == 0 else f"{stem}_{count}{arc_ext}"
+                )
                 stem_counts[stem] = count + 1
-                zf.write(src, arcname=f"images/{candidate}")
+
+                if rendered is not None:
+                    info = zipfile.ZipInfo(f"images/{candidate}")
+                    info.compress_type = zipfile.ZIP_STORED
+                    zf.writestr(info, rendered)
+                else:
+                    zf.write(overlay_src, arcname=f"images/{candidate}")
 
             xlsx_bytes = _build_xlsx(batch, images)
             xlsx_info = zipfile.ZipInfo("summary.xlsx")
