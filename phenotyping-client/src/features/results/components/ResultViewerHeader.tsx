@@ -1,31 +1,19 @@
-import { ArrowLeft, Check, ChevronRight, Loader2, Pencil } from 'lucide-react';
+import { ArrowLeft, Check, Copy, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { DetectionResult } from '@/types/api';
 
 import { ResultNavigation } from './ResultNavigation';
 
-interface BatchDetailLike {
-    id: string;
-    name: string;
-    status?: string;
-}
-
-interface BatchSummaryLike {
-    total_count: number;
-    total_elapsed_seconds: number;
-}
-
 interface ResultViewerHeaderProps {
-    batchDetail: BatchDetailLike | null;
-    batchSummary: BatchSummaryLike | null;
+    batchName: string | null;
+    batchStatus?: string;
+    filename: string;
     currentIndex: number;
-    currentResult: DetectionResult;
-    results: DetectionResult[];
-    canEdit: boolean;
-    editMode: boolean;
+    total: number;
+    canEdit?: boolean;
+    editMode?: boolean;
     isDirty: boolean;
     /** True when the batch has already been saved to Records — hides Finish. */
     isSaved: boolean;
@@ -33,18 +21,17 @@ interface ResultViewerHeaderProps {
     finishing: boolean;
     onBack: () => void;
     onNavigate: (index: number) => void;
-    // Kept for API compatibility; rename is no longer available from this header.
-    onRename?: (next: string) => Promise<void>;
     onFinish: () => void;
 }
 
 export function ResultViewerHeader({
-    batchDetail,
+    batchName,
+    batchStatus,
+    filename,
     currentIndex,
-    currentResult,
-    results,
-    canEdit,
-    editMode,
+    total,
+    canEdit = true,
+    editMode = true,
     isDirty,
     isSaved,
     finishing,
@@ -52,8 +39,9 @@ export function ResultViewerHeader({
     onNavigate,
     onFinish,
 }: ResultViewerHeaderProps) {
-    const isBatch = results.length > 1;
-    const filename = currentResult.filename;
+    const isBatch = total > 1;
+    const isDraft = !isSaved && batchStatus === 'draft';
+    const showDirtyHint = canEdit && editMode && isDirty;
 
     async function copyFilename() {
         try {
@@ -65,44 +53,29 @@ export function ResultViewerHeader({
     }
 
     return (
-        <header className="bg-card grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b px-6 py-3">
-            {/* Left — back + breadcrumb + filename */}
-            <div className="flex items-center gap-3 min-w-0">
+        <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2">
+            {/* Left — back + batch name + filename */}
+            <div className="flex min-w-0 items-center gap-2.5">
                 <Button
                     variant="ghost"
                     size="icon"
                     onClick={onBack}
-                    title="Back to home"
+                    title="Back"
                     className="h-8 w-8 shrink-0"
                 >
                     <ArrowLeft className="h-4 w-4" />
                 </Button>
 
-                <div className="flex min-w-0 flex-col gap-0.5">
-                    <div className="flex items-center gap-1.5 text-sm min-w-0">
+                <div className="flex min-w-0 flex-col">
+                    <div className="flex min-w-0 items-center gap-2 text-sm leading-tight">
                         <span
-                            className="truncate font-semibold text-foreground"
-                            title={batchDetail?.name ?? ''}
+                            className="truncate font-semibold tracking-tight text-foreground"
+                            title={batchName ?? ''}
                         >
-                            {batchDetail?.name ?? 'Untitled batch'}
+                            {batchName ?? 'Untitled batch'}
                         </span>
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span
-                            className={cn(
-                                'inline-flex items-center gap-1 font-semibold tracking-wide',
-                                canEdit && editMode
-                                    ? 'text-green-500 dark:text-green-400'
-                                    : 'text-muted-foreground',
-                            )}
-                        >
-                            <Pencil className="h-3.5 w-3.5" />
-                            ANNOTATE
-                            {canEdit && editMode && isDirty && (
-                                <span className="ml-0.5 text-green-500 dark:text-green-400">•</span>
-                            )}
-                        </span>
-                        {!isSaved && batchDetail?.status === 'draft' && (
-                            <span className="ml-1 inline-flex items-center rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                        {isDraft && (
+                            <span className="inline-flex shrink-0 items-center rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
                                 Draft
                             </span>
                         )}
@@ -113,13 +86,14 @@ export function ResultViewerHeader({
                         onClick={copyFilename}
                         title="Click to copy filename"
                         className={cn(
-                            'max-w-full truncate text-left font-mono text-xs text-muted-foreground',
-                            'rounded-sm px-0.5 -mx-0.5 select-all',
-                            'hover:text-foreground hover:bg-accent/40',
+                            'group flex max-w-full items-center gap-1 -mx-0.5 px-0.5',
+                            'rounded-sm text-left font-mono text-[11px] leading-snug text-muted-foreground',
+                            'hover:text-foreground',
                             'focus:outline-none focus-visible:ring-[2px] focus-visible:ring-ring/60 focus-visible:text-foreground',
                         )}
                     >
-                        {filename}
+                        <span className="truncate">{filename}</span>
+                        <Copy className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
                     </button>
                 </div>
             </div>
@@ -128,20 +102,29 @@ export function ResultViewerHeader({
             <div className="flex items-center justify-center">
                 {isBatch && (
                     <ResultNavigation
-                        results={results}
+                        total={total}
                         currentIndex={currentIndex}
                         onNavigate={onNavigate}
                     />
                 )}
             </div>
 
-            {/* Right — actions */}
-            <div className="flex items-center justify-end gap-2">
-                <Button size="sm" onClick={onFinish} disabled={finishing} className="gap-2">
+            {/* Right — status hint + Save */}
+            <div className="flex items-center justify-end gap-3">
+                {showDirtyHint && (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                        <span className="relative flex h-1.5 w-1.5">
+                            <span className="absolute inset-0 animate-ping rounded-full bg-amber-500/70" />
+                            <span className="relative h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        </span>
+                        Auto-saving
+                    </span>
+                )}
+                <Button size="sm" onClick={onFinish} disabled={finishing} className="h-8 gap-1.5">
                     {finishing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                        <Check className="h-4 w-4" />
+                        <Check className="h-3.5 w-3.5" />
                     )}
                     {finishing ? 'Saving…' : isSaved ? 'Save' : 'Finish'}
                 </Button>

@@ -48,6 +48,7 @@ class NeonateInferenceService:
         self._stride: int | None = None
 
         max_concurrent = 1 if model_registry.neonate_device == "cpu" else 2
+        self._max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
     # ── Config ────────────────────────────────────────────────────────────────
@@ -241,6 +242,7 @@ class NeonateInferenceService:
                 batch_tiles,
                 verbose=False,
                 conf=cfg.confidence_threshold,
+                half=False,
             )
 
             # Batch the GPU→CPU sync — see egg.py for the rationale.
@@ -500,17 +502,50 @@ class NeonateInferenceService:
         total = len(images)
         completed = 0
 
-        # Sequential processing — the inference semaphore already serializes,
-        # so eager gather just held every decoded ndarray in RAM.
-        results: list[DetectionResult] = []
-        for item in images:
-            image_data, fname, *rest = item  # type: ignore[misc]
-            raw_suffix = rest[0] if rest else ".png"
-            r = await self.process_single(image_data, fname, batch_id, raw_suffix)
-            results.append(r)
-            completed += 1
-            if on_progress is not None:
-                on_progress(completed, total)
+        if self._max_concurrent <= 1 or total <= 1:
+            results: list[DetectionResult] = []
+            for item in images:
+                image_data, fname, *rest = item  # type: ignore[misc]
+                raw_suffix = rest[0] if rest else ".png"
+                r = await self.process_single(image_data, fname, batch_id, raw_suffix)
+                results.append(r)
+                completed += 1
+                if on_progress is not None:
+                    on_progress(completed, total)
+        else:
+            results_slots: list[DetectionResult | None] = [None] * total
+            next_index = 0
+            first_error: Exception | None = None
+
+            async def _worker() -> None:
+                nonlocal completed, first_error, next_index
+                while first_error is None:
+                    idx = next_index
+                    next_index += 1
+                    if idx >= total:
+                        return
+                    image_data, fname, *rest = images[idx]  # type: ignore[misc]
+                    raw_suffix = rest[0] if rest else ".png"
+                    try:
+                        result = await self.process_single(
+                            image_data, fname, batch_id, raw_suffix
+                        )
+                    except Exception as exc:
+                        first_error = exc
+                        return
+                    results_slots[idx] = result
+                    completed += 1
+                    if on_progress is not None:
+                        on_progress(completed, total)
+
+            workers = [
+                asyncio.create_task(_worker())
+                for _ in range(min(self._max_concurrent, total))
+            ]
+            await asyncio.gather(*workers)
+            if first_error is not None:
+                raise first_error
+            results = [r for r in results_slots if r is not None]
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)

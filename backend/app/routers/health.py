@@ -37,6 +37,13 @@ async def get_health() -> HealthResponse:
         registry = get_model_registry()
         models_status = registry.models_status
         any_loaded = any(s == "loaded" for s in models_status.values())
+        devices_per_organism = {
+            organism: registry.device_for(organism) for organism in models_status
+        }
+        cuda_device_count = int(getattr(registry, "cuda_device_count", 0))
+        cuda_device_name = getattr(registry, "cuda_device_name", None)
+        if not isinstance(cuda_device_name, str):
+            cuda_device_name = None
         return HealthResponse(
             status="ok" if any_loaded else "degraded",
             model_loaded=registry.model_loaded,
@@ -45,6 +52,9 @@ async def get_health() -> HealthResponse:
             uptime_seconds=registry.uptime_seconds,
             version="0.1.0",
             models_status=models_status,
+            cuda_device_count=cuda_device_count,
+            cuda_device_name=cuda_device_name,
+            devices_per_organism=devices_per_organism,
         )
     except Exception as exc:
         logger.exception("GET /health failed: %s", exc)
@@ -56,6 +66,9 @@ async def get_health() -> HealthResponse:
             uptime_seconds=0.0,
             version="0.1.0",
             models_status={},
+            cuda_device_count=0,
+            cuda_device_name=None,
+            devices_per_organism={},
         )
 
 

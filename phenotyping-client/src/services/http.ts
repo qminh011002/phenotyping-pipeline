@@ -62,6 +62,43 @@ function _authHeader(): Record<string, string> {
 }
 
 let _refreshInFlight: Promise<boolean> | null = null;
+const ACCESS_REFRESH_SKEW_SECONDS = 5;
+
+function _isAuthEndpoint(url: string): boolean {
+    return new URL(url).pathname.startsWith('/auth/');
+}
+
+function _isPublicEndpoint(url: string): boolean {
+    const path = new URL(url).pathname;
+    return path === '/health' || path === '/ping';
+}
+
+function _decodeJwtPayload(token: string): Record<string, unknown> | null {
+    const [, payload] = token.split('.');
+    if (!payload) return null;
+    try {
+        const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+        return JSON.parse(globalThis.atob(padded)) as Record<string, unknown>;
+    } catch {
+        return null;
+    }
+}
+
+function _accessTokenNeedsRefresh(token: string | null): boolean {
+    if (!token) return true;
+    const payload = _decodeJwtPayload(token);
+    const exp = payload?.exp;
+    if (typeof exp !== 'number') return false;
+    const nowSeconds = Date.now() / 1000;
+    return exp <= nowSeconds + ACCESS_REFRESH_SKEW_SECONDS;
+}
+
+function _shouldRefreshBeforeRequest(url: string): boolean {
+    if (_isAuthEndpoint(url) || _isPublicEndpoint(url)) return false;
+    if (!loadRefreshToken()) return false;
+    return _accessTokenNeedsRefresh(getAccessToken());
+}
 
 /**
  * Run a single-flight refresh.
@@ -192,6 +229,13 @@ async function _doFetchFormData(
 
 /** Wrap a fetch and apply 401 → refresh-and-retry once. */
 async function _withRefresh(doFetch: () => Promise<Response>, url: string): Promise<Response> {
+    if (_shouldRefreshBeforeRequest(url)) {
+        const ok = await _refreshAccess();
+        if (!ok && !getAccessToken()) {
+            throw new ApiError(401, 'Session expired', 'token_expired');
+        }
+    }
+
     let response: Response;
     try {
         response = await doFetch();
@@ -207,7 +251,7 @@ async function _withRefresh(doFetch: () => Promise<Response>, url: string): Prom
 
     // Don't try to refresh on /auth/* itself — those endpoints failing means
     // the credentials were bad, not that we need a new access token.
-    if (url.includes('/auth/')) return response;
+    if (_isAuthEndpoint(url)) return response;
 
     const parsed = await _parseError(response.clone());
     if (parsed.code === 'token_invalid' || parsed.code === 'token_revoked') {

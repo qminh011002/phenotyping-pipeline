@@ -12,7 +12,14 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.deps import get_pipeline_config
-from app.schemas.config import ConfigUpdateRequest, EggConfig
+from app.schemas.config import (
+    ConfigUpdateRequest,
+    EggConfig,
+    LarvaeConfig,
+    LarvaeConfigUpdateRequest,
+    PupaeConfig,
+    PupaeConfigUpdateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,4 +113,95 @@ async def update_config(update: ConfigUpdateRequest) -> EggConfig:
             },
         )
 
+    return merged
+
+
+@router.get(
+    "/larvae",
+    response_model=LarvaeConfig,
+    summary="Get current larvae inference configuration",
+)
+async def get_larvae_config() -> LarvaeConfig:
+    try:
+        cfg = get_pipeline_config()
+        return await asyncio.to_thread(cfg.get_larvae_config)
+    except Exception as exc:
+        logger.exception("GET /config/larvae failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read larvae config: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/larvae",
+    response_model=LarvaeConfig,
+    summary="Partial update of larvae inference configuration",
+)
+async def update_larvae_config(update: LarvaeConfigUpdateRequest) -> LarvaeConfig:
+    cfg_mgr = get_pipeline_config()
+    payload = update.model_dump(exclude_none=True)
+    # ``sam_enabled`` is a flat field on the request but lives under
+    # ``larvae.sam.enabled`` in YAML — route it through the dedicated patch.
+    sam_enabled = payload.pop("sam_enabled", None)
+    try:
+        merged = await asyncio.to_thread(cfg_mgr.update_larvae, payload)
+        if sam_enabled is not None:
+            merged = await asyncio.to_thread(
+                cfg_mgr.update_larvae_sam, {"enabled": sam_enabled}
+            )
+    except Exception as exc:
+        logger.exception("PUT /config/larvae failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist larvae config: {exc}",
+        ) from exc
+
+    logger.info(
+        "Larvae config updated: %s",
+        update.model_dump(exclude_none=True),
+    )
+    return merged
+
+
+@router.get(
+    "/pupae",
+    response_model=PupaeConfig,
+    summary="Get current pupae inference configuration",
+)
+async def get_pupae_config() -> PupaeConfig:
+    try:
+        cfg = get_pipeline_config()
+        return await asyncio.to_thread(cfg.get_pupae_config)
+    except Exception as exc:
+        logger.exception("GET /config/pupae failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read pupae config: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/pupae",
+    response_model=PupaeConfig,
+    summary="Partial update of pupae inference configuration",
+)
+async def update_pupae_config(update: PupaeConfigUpdateRequest) -> PupaeConfig:
+    cfg_mgr = get_pipeline_config()
+    payload = update.model_dump(exclude_none=True)
+    sam_enabled = payload.pop("sam_enabled", None)
+    try:
+        merged = await asyncio.to_thread(cfg_mgr.update_pupae, payload)
+        if sam_enabled is not None:
+            merged = await asyncio.to_thread(
+                cfg_mgr.update_pupae_sam, {"enabled": sam_enabled}
+            )
+    except Exception as exc:
+        logger.exception("PUT /config/pupae failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist pupae config: {exc}",
+        ) from exc
+
+    logger.info("Pupae config updated: %s", update.model_dump(exclude_none=True))
     return merged

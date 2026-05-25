@@ -3,17 +3,16 @@
 import { useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import type { DetectionResult } from '@/types/api';
 
 interface ResultNavigationProps {
-    results: DetectionResult[];
+    total: number;
     currentIndex: number;
     onNavigate: (index: number) => void;
 }
 
-export function ResultNavigation({ results, currentIndex, onNavigate }: ResultNavigationProps) {
+export function ResultNavigation({ total, currentIndex, onNavigate }: ResultNavigationProps) {
     const hasPrev = currentIndex > 0;
-    const hasNext = currentIndex < results.length - 1;
+    const hasNext = currentIndex < total - 1;
 
     // Keyboard navigation
     useEffect(() => {
@@ -29,30 +28,33 @@ export function ResultNavigation({ results, currentIndex, onNavigate }: ResultNa
     }, [currentIndex, hasPrev, hasNext, onNavigate]);
 
     return (
-        <div className="flex items-center gap-3">
+        <div className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5">
             <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 disabled={!hasPrev}
                 onClick={() => onNavigate(currentIndex - 1)}
                 title="Previous (←)"
-                className="h-8 w-8"
+                aria-label="Previous image"
+                className="h-7 w-7"
             >
                 <ChevronLeft className="h-4 w-4" />
             </Button>
 
-            <span className="text-sm tabular-nums font-medium">
-                Image <span className="font-mono">{currentIndex + 1}</span> of{' '}
-                <span className="font-mono">{results.length}</span>
+            <span className="px-2 text-xs font-medium text-foreground tabular-nums">
+                <span className="font-mono">{currentIndex + 1}</span>
+                <span className="text-muted-foreground"> / </span>
+                <span className="font-mono">{total}</span>
             </span>
 
             <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 disabled={!hasNext}
                 onClick={() => onNavigate(currentIndex + 1)}
                 title="Next (→)"
-                className="h-8 w-8"
+                aria-label="Next image"
+                className="h-7 w-7"
             >
                 <ChevronRight className="h-4 w-4" />
             </Button>

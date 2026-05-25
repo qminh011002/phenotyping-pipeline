@@ -4,6 +4,7 @@
 import { CheckCircle2, Cpu, Database, Upload } from 'lucide-react';
 
 import { ModelsSection } from '@/features/settings/components/ModelsSection';
+import { SamModelsSection } from '@/features/settings/components/SamModelsSection';
 
 export default function ModelsPage() {
     return (
@@ -58,6 +59,8 @@ export default function ModelsPage() {
                     </section>
 
                     <ModelsSection showHeader={false} />
+
+                    <SamModelsSection />
                 </div>
             </div>
         </div>

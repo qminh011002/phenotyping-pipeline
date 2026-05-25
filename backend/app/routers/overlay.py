@@ -36,6 +36,11 @@ def _resolve_overlay_path(storage_dir: Path, batch_id: str, filename: str) -> Pa
     return (batch_dir / overlay_name).resolve()
 
 
+def _resolve_warped_path(storage_dir: Path, batch_id: str, filename: str) -> Path:
+    """{storage_dir}/{batch_id}/{filename}_warped.png — warped raw, no marks."""
+    return (storage_dir / batch_id / f"{filename}_warped.png").resolve()
+
+
 @router.get(
     "/{batch_id}/{filename}/overlay.png",
     summary="Serve the overlay PNG for a processed image",
@@ -108,4 +113,59 @@ async def get_overlay(
         path=overlay_path,
         media_type="image/png",
         filename=overlay_path.name,
+    )
+
+
+@router.get(
+    "/{batch_id}/{filename}/warped.png",
+    summary="Serve the perspective-warped raw image (no marks)",
+    responses={
+        200: {"content": {"image/png": {}}, "description": "Warped raw PNG"},
+        404: {"description": "Warped file not found on disk"},
+    },
+)
+async def get_warped(
+    batch_id: str,
+    filename: str,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> FileResponse:
+    """Serve the warped raw PNG written by larvae inference. The polygon
+    editor uses this as its backing image so the cyan SVG polygons aren't
+    double-drawn on top of overlay marks.
+    """
+    try:
+        bid = _uuid.UUID(batch_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid batch_id",
+        ) from exc
+    stmt = (
+        select(AnalysisBatch.id)
+        .where(AnalysisBatch.id == bid)
+        .where(AnalysisBatch.user_id == user.id)
+    )
+    if (await db.execute(stmt)).scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Warped image not found for batch {batch_id}.",
+        )
+
+    storage_dir = Path(get_cached_storage_dir()).resolve()
+    warped_path = _resolve_warped_path(storage_dir, batch_id, filename)
+    if storage_dir not in warped_path.parents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid warped path",
+        )
+    if not warped_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Warped image not found: {warped_path}",
+        )
+    return FileResponse(
+        path=warped_path,
+        media_type="image/png",
+        filename=warped_path.name,
     )

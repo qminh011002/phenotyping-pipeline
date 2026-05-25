@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from pathlib import PurePath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import select as _select
 
 from app.database import AsyncSession, get_session
 from app.deps import (
@@ -20,6 +18,13 @@ from app.deps import (
     AnnotatedNeonateInferenceService,
     CurrentUser,
     get_model_registry,
+)
+from app.routers.inference_utils import (
+    check_upload_size_hint,
+    map_inference_error,
+    parse_and_verify_optional_batch,
+    read_image_upload,
+    validate_image_extension,
 )
 from app.schemas.detection import BatchDetectionResult, DetectionResult
 from app.services.inference.egg import InvalidImageError
@@ -29,66 +34,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/inference", tags=["inference"])
 
-# Allowed image extensions (case-insensitive)
-ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"})
 MAX_BATCH_SIZE = 50  # max number of files per batch request
-MAX_IMAGE_BYTES = 100 * 1024 * 1024  # 100 MB per image
 MAX_TOTAL_BATCH_BYTES = 1024 * 1024 * 1024  # 1 GB cap across an entire batch
-
-
-def _check_size(file: UploadFile) -> None:
-    """Reject uploads larger than MAX_IMAGE_BYTES based on Content-Length."""
-    size = getattr(file, "size", None)
-    if size is not None and size > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large (max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)",
-        )
-
-
-async def _verify_batch_ownership(
-    batch_id_str: str | None, db: AsyncSession, user_id
-) -> None:
-    """If a batch_id is supplied, confirm it belongs to ``user_id``.
-
-    404 (not 403) so we don't leak whether a batch exists for another user.
-    """
-    if not batch_id_str:
-        return
-    try:
-        bid = uuid.UUID(batch_id_str)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid batch_id",
-        ) from exc
-    from app.models.analysis import AnalysisBatch
-
-    stmt = (
-        _select(AnalysisBatch.id)
-        .where(AnalysisBatch.id == bid)
-        .where(AnalysisBatch.user_id == user_id)
-    )
-    if (await db.execute(stmt)).scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Analysis batch {bid} not found.",
-        )
-
-
-def _validate_extension(filename: str) -> tuple[str, str]:
-    """Return (stem, suffix.lower()), raising 400 on invalid extension."""
-    stem = PurePath(filename).stem
-    suffix = PurePath(filename).suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Unsupported file type {suffix!r}. "
-                f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-            ),
-        )
-    return stem, suffix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -125,10 +72,10 @@ async def run_single_inference(
     Only the overlay URL reference is returned — never base64 image data.
     """
     # Validate extension
-    stem, suffix = _validate_extension(file.filename or "unknown")
+    stem, suffix = validate_image_extension(file.filename or "unknown")
 
     # Verify ownership of the supplied batch (if any) before doing any work.
-    await _verify_batch_ownership(batch_id, db, user.id)
+    await parse_and_verify_optional_batch(batch_id, db, user.id)
 
     # Check model is ready
     registry = get_model_registry()
@@ -138,22 +85,7 @@ async def run_single_inference(
             detail="Model not loaded. The server may still be starting up.",
         )
 
-    # Read upload bytes
-    _check_size(file)
-    try:
-        data = await file.read()
-    except Exception as exc:
-        logger.error("Failed to read upload for %s: %s", file.filename, exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read uploaded file: {file.filename!r}",
-        ) from exc
-
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty.",
-        )
+    data = await read_image_upload(file)
 
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
@@ -162,16 +94,8 @@ async def run_single_inference(
         result = await inference_svc.process_single(
             data, stem, resolved_batch_id, raw_suffix=suffix
         )
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except ModelNotLoadedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
+    except (InvalidImageError, ModelNotLoadedError) as exc:
+        raise map_inference_error(exc) from exc
     except Exception as exc:
         logger.exception(
             "Inference failed for %s",
@@ -219,8 +143,8 @@ async def run_single_neonate_inference(
     ] = None,
 ) -> DetectionResult:
     """Run neonate detection on a single uploaded image."""
-    stem, suffix = _validate_extension(file.filename or "unknown")
-    await _verify_batch_ownership(batch_id, db, user.id)
+    stem, suffix = validate_image_extension(file.filename or "unknown")
+    await parse_and_verify_optional_batch(batch_id, db, user.id)
 
     registry = get_model_registry()
     if not registry.neonate_model_loaded:
@@ -229,21 +153,7 @@ async def run_single_neonate_inference(
             detail="Neonate model not loaded. Check the 'neonate' section of config.yaml.",
         )
 
-    _check_size(file)
-    try:
-        data = await file.read()
-    except Exception as exc:
-        logger.error("Failed to read upload for %s: %s", file.filename, exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read uploaded file: {file.filename!r}",
-        ) from exc
-
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty.",
-        )
+    data = await read_image_upload(file)
 
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
@@ -251,14 +161,8 @@ async def run_single_neonate_inference(
         result = await inference_svc.process_single(
             data, stem, resolved_batch_id, raw_suffix=suffix
         )
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    except ModelNotLoadedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        ) from exc
+    except (InvalidImageError, ModelNotLoadedError) as exc:
+        raise map_inference_error(exc) from exc
     except Exception as exc:
         logger.exception(
             "Neonate inference failed for %s",
@@ -323,27 +227,9 @@ async def run_batch_neonate_inference(
     validated: list[tuple[bytes, str, str]] = []
     total_bytes = 0
     for file in files:
-        stem, suffix = _validate_extension(file.filename or "unknown")
-        _check_size(file)
-
-        try:
-            data = await file.read()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to read {file.filename!r}: {exc}",
-            ) from exc
-
-        if not data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Uploaded file is empty: {file.filename!r}",
-            )
-        if len(data) > MAX_IMAGE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"{file.filename!r} exceeds {MAX_IMAGE_BYTES // (1024 * 1024)} MB",
-            )
+        stem, suffix = validate_image_extension(file.filename or "unknown")
+        check_upload_size_hint(file)
+        data = await read_image_upload(file)
         total_bytes += len(data)
         if total_bytes > MAX_TOTAL_BATCH_BYTES:
             raise HTTPException(
@@ -358,14 +244,8 @@ async def run_batch_neonate_inference(
 
     try:
         result = await inference_svc.process_batch(validated, batch_id)
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    except ModelNotLoadedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        ) from exc
+    except (InvalidImageError, ModelNotLoadedError) as exc:
+        raise map_inference_error(exc) from exc
     except Exception as exc:
         logger.exception(
             "Neonate batch inference failed (%d files)",
@@ -435,27 +315,9 @@ async def run_batch_inference(
     validated: list[tuple[bytes, str, str]] = []
     total_bytes = 0
     for i, file in enumerate(files):
-        stem, suffix = _validate_extension(file.filename or f"file_{i}")
-        _check_size(file)
-
-        try:
-            data = await file.read()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to read {file.filename!r}: {exc}",
-            ) from exc
-
-        if not data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Uploaded file is empty: {file.filename!r}",
-            )
-        if len(data) > MAX_IMAGE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"{file.filename!r} exceeds {MAX_IMAGE_BYTES // (1024 * 1024)} MB",
-            )
+        stem, suffix = validate_image_extension(file.filename or f"file_{i}")
+        check_upload_size_hint(file)
+        data = await read_image_upload(file)
         total_bytes += len(data)
         if total_bytes > MAX_TOTAL_BATCH_BYTES:
             raise HTTPException(
@@ -471,16 +333,8 @@ async def run_batch_inference(
     # Delegate to service
     try:
         result = await inference_svc.process_batch(validated, batch_id)
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except ModelNotLoadedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
+    except (InvalidImageError, ModelNotLoadedError) as exc:
+        raise map_inference_error(exc) from exc
     except Exception as exc:
         logger.exception(
             "Batch inference failed (%d files)",

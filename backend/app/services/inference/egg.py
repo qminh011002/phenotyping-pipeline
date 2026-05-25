@@ -70,6 +70,7 @@ class EggInferenceService:
         self._stride: int | None = None
 
         max_concurrent = 1 if model_registry.device == "cpu" else 2
+        self._max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
     # ── Config resolution ─────────────────────────────────────────────────────
@@ -374,6 +375,11 @@ class EggInferenceService:
         names_map = getattr(model, "names", None) or {}
         default_label = next(iter(names_map.values()), "egg") if names_map else "egg"
 
+        stride = int(cfg.tile_size * (1 - cfg.overlap))
+        half = stride // 2
+        tile_size = cfg.tile_size
+        edge_margin = cfg.edge_margin
+
         for i in range(0, len(tiles), cfg.batch_size):
             batch_tiles = tiles[i : i + cfg.batch_size]
             batch_coords = coords[i : i + cfg.batch_size]
@@ -382,12 +388,8 @@ class EggInferenceService:
                 batch_tiles,
                 verbose=False,
                 conf=cfg.confidence_threshold,
+                half=False,
             )
-
-            stride = self._computed_stride
-            half = stride // 2
-            tile_size = cfg.tile_size
-            edge_margin = cfg.edge_margin
 
             # Batch the GPU→CPU sync: cat all per-tile tensors and copy them
             # to CPU once per inference batch. The previous code did 3 × N
@@ -709,19 +711,50 @@ class EggInferenceService:
         total = len(images)
         completed = 0
 
-        # Process sequentially. asyncio.gather over images would queue every
-        # decoded ndarray in memory while waiting for the inference semaphore;
-        # since the semaphore already serializes work, gather buys no
-        # throughput and costs O(N) RAM.
-        results: list[DetectionResult] = []
-        for item in images:
-            image_data, fname, *rest = item  # type: ignore[misc]
-            raw_suffix = rest[0] if rest else ".png"
-            r = await self.process_single(image_data, fname, batch_id, raw_suffix)
-            results.append(r)
-            completed += 1
-            if on_progress is not None:
-                on_progress(completed, total)
+        if self._max_concurrent <= 1 or total <= 1:
+            results: list[DetectionResult] = []
+            for item in images:
+                image_data, fname, *rest = item  # type: ignore[misc]
+                raw_suffix = rest[0] if rest else ".png"
+                r = await self.process_single(image_data, fname, batch_id, raw_suffix)
+                results.append(r)
+                completed += 1
+                if on_progress is not None:
+                    on_progress(completed, total)
+        else:
+            results_slots: list[DetectionResult | None] = [None] * total
+            next_index = 0
+            first_error: Exception | None = None
+
+            async def _worker() -> None:
+                nonlocal completed, first_error, next_index
+                while first_error is None:
+                    idx = next_index
+                    next_index += 1
+                    if idx >= total:
+                        return
+                    image_data, fname, *rest = images[idx]  # type: ignore[misc]
+                    raw_suffix = rest[0] if rest else ".png"
+                    try:
+                        result = await self.process_single(
+                            image_data, fname, batch_id, raw_suffix
+                        )
+                    except Exception as exc:
+                        first_error = exc
+                        return
+                    results_slots[idx] = result
+                    completed += 1
+                    if on_progress is not None:
+                        on_progress(completed, total)
+
+            workers = [
+                asyncio.create_task(_worker())
+                for _ in range(min(self._max_concurrent, total))
+            ]
+            await asyncio.gather(*workers)
+            if first_error is not None:
+                raise first_error
+            results = [r for r in results_slots if r is not None]
 
         total_elapsed = time.time() - total_start
         total_count = sum(r.count for r in results)

@@ -5,6 +5,7 @@ import { PauseCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
+import { cn } from '@/lib/utils';
 import {
     loadBatchDetail,
     loadProcessingFiles,
@@ -38,7 +39,7 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
     const rowVirtualizer = useVirtualizer({
         count: logs.length,
         getScrollElement: () => scrollRef.current,
-        estimateSize: () => 28,
+        estimateSize: () => 24,
         overscan: 12,
     });
 
@@ -48,22 +49,25 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
     }, [logs.length, rowVirtualizer]);
 
     return (
-        <section className="mt-8 w-[min(48rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border bg-card text-left shadow-sm">
-            <div className="flex h-14 items-center gap-3 border-b bg-muted/20 px-6">
-                <span className="relative flex items-center h-3.5 w-3.5" aria-hidden>
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-40" />
-                    <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-green-500" />
+        <section className="mt-8 w-[min(52rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-card text-left">
+            <div className="flex h-10 items-center gap-2 border-b border-border bg-muted/30 px-4">
+                <span className="relative flex h-2 w-2" aria-hidden>
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                 </span>
-                <span className="text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    Live Log
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Live log
+                </span>
+                <span className="ml-auto font-mono text-[11px] text-muted-foreground tabular-nums">
+                    {logs.length} {logs.length === 1 ? 'event' : 'events'}
                 </span>
             </div>
             <div
                 ref={scrollRef}
-                className="max-h-52 overflow-y-auto bg-black px-6 py-4 font-mono text-sm leading-7 text-slate-300"
+                className="max-h-56 overflow-y-auto bg-muted/20 px-4 py-2.5 font-mono text-[12px] leading-6 text-foreground/90"
             >
                 {logs.length === 0 ? (
-                    <div className="text-slate-500">Waiting for processing events...</div>
+                    <div className="text-muted-foreground">Waiting for processing events…</div>
                 ) : (
                     <div
                         className="relative"
@@ -71,6 +75,12 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
                     >
                         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                             const log = logs[virtualRow.index];
+                            const levelClass =
+                                log.level === 'ERROR'
+                                    ? 'text-destructive'
+                                    : log.level === 'WARN'
+                                      ? 'text-amber-600 dark:text-amber-400'
+                                      : 'text-emerald-600 dark:text-emerald-400';
                             return (
                                 <div
                                     key={virtualRow.key}
@@ -80,20 +90,17 @@ function LiveProcessingLog({ logs }: { logs: ProcessingLogEntry[] }) {
                                     style={{ transform: `translateY(${virtualRow.start}px)` }}
                                 >
                                     <span
-                                        className={
-                                            log.level === 'ERROR'
-                                                ? 'w-12 shrink-0 font-bold text-red-400'
-                                                : log.level === 'WARN'
-                                                  ? 'w-12 shrink-0 font-bold text-yellow-400'
-                                                  : 'w-12 shrink-0 font-bold text-green-400'
-                                        }
+                                        className={cn(
+                                            'w-10 shrink-0 font-semibold',
+                                            levelClass,
+                                        )}
                                     >
                                         {log.level}
                                     </span>
-                                    <span className="shrink-0 text-slate-500 tabular-nums">
+                                    <span className="shrink-0 text-muted-foreground tabular-nums">
                                         {formatLogTime(log.timestamp)}
                                     </span>
-                                    <span className="min-w-0 break-words text-slate-300">
+                                    <span className="min-w-0 break-words text-foreground/85">
                                         {log.message}
                                     </span>
                                 </div>
@@ -121,25 +128,31 @@ function InterruptedBatch({
 }) {
     const progress = totalImages > 0 ? Math.round((processedCount / totalImages) * 100) : 0;
     return (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-background px-6 text-center">
-            <PauseCircle className="h-16 w-16 text-amber-500/70" />
-            <div className="space-y-2">
-                <p className="text-xl font-semibold">Processing interrupted</p>
-                <p className="text-base font-medium">{batchName}</p>
-                <p className="text-sm text-muted-foreground">
-                    {processedCount} of {totalImages} images completed ({progress}%).
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background px-6">
+            <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+                <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                    <PauseCircle className="h-6 w-6" />
+                </div>
+                <h2 className="mt-4 text-lg font-semibold tracking-tight">
+                    Processing interrupted
+                </h2>
+                <p className="mt-1 truncate text-sm font-medium text-foreground/80">
+                    {batchName}
                 </p>
-                <Progress value={progress} className="mx-auto h-2 w-64" />
-            </div>
-            <div className="flex gap-3">
-                {processedCount > 0 && (
-                    <Button variant="outline" onClick={onViewResults}>
-                        View Completed Results
+                <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                    {processedCount} of {totalImages} images completed · {progress}%
+                </p>
+                <Progress value={progress} className="mx-auto mt-4 h-1.5 w-full" />
+                <div className="mt-5 flex items-center justify-center gap-2">
+                    {processedCount > 0 && (
+                        <Button variant="outline" size="sm" onClick={onViewResults}>
+                            View completed results
+                        </Button>
+                    )}
+                    <Button variant="destructive" size="sm" onClick={onDiscard}>
+                        Discard &amp; start over
                     </Button>
-                )}
-                <Button variant="destructive" onClick={onDiscard}>
-                    Discard &amp; Start Over
-                </Button>
+                </div>
             </div>
         </div>
     );
@@ -156,6 +169,7 @@ export default function ProcessingPage() {
     const interruptedBatch = useProcessingStore((s) => s.interruptedBatch);
     const completedBatchId = useProcessingStore((s) => s.completedBatchId);
     const activeBatchId = useProcessingStore((s) => s.activeBatchId);
+    const organism = useProcessingStore((s) => s.organism);
     const liveLogs = useProcessingStore((s) => s.liveLogs);
 
     useEffect(() => {
@@ -185,31 +199,43 @@ export default function ProcessingPage() {
         // the processing manager.
         const stored = loadBatchDetail();
         const firstImageId = stored?.images?.[0]?.id;
-        const url = firstImageId
+        const base = firstImageId
             ? `/analyze/results/${completedBatchId}/images/${firstImageId}`
             : `/analyze/results/${completedBatchId}`;
+        const url =
+            organism === 'larvae'
+                ? `${base}?organism=larvae`
+                : organism === 'pupae'
+                  ? `${base}?organism=pupae`
+                  : base;
         navigate(url);
-    }, [completedBatchId, navigate]);
+    }, [completedBatchId, navigate, organism]);
 
-    const { doneCount, errorCount, allCompleted } = useMemo(() => {
+    const { doneCount, errorCount, needsCalibrationCount, allCompleted } = useMemo(() => {
         let done = 0;
         let err = 0;
-        let completed = 0;
+        let needsCal = 0;
+        let resting = 0;
         for (const img of storeImages) {
             if (img.status === 'done') {
                 done += 1;
-                completed += 1;
+                resting += 1;
             } else if (img.status === 'error') {
                 err += 1;
+                resting += 1;
+            } else if (img.status === 'needs_calibration') {
+                needsCal += 1;
+                resting += 1;
             }
         }
         return {
             doneCount: done,
             errorCount: err,
-            allCompleted: completed === storeImages.length,
+            needsCalibrationCount: needsCal,
+            allCompleted: resting === storeImages.length,
         };
     }, [storeImages]);
-    const processedSoFar = doneCount + errorCount;
+    const processedSoFar = doneCount + errorCount + needsCalibrationCount;
     const anyError = errorCount > 0;
     const allDone = !isProcessing && totalImages > 0 && allCompleted;
 

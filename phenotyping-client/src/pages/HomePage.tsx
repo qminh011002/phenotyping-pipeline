@@ -117,28 +117,28 @@ function KpiCard({
     loading,
 }: KpiCardProps) {
     return (
-        <Card className="border-0 bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
-            <CardContent className="px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                    <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <Card className="border border-border bg-card shadow-none transition-colors hover:bg-card/80">
+            <CardContent className="p-4">
+                <div className="flex items-center justify-between gap-3">
+                    <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         {label}
                     </p>
-                    <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted/45 text-primary">
-                        <Icon className="size-4" />
+                    <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                        <Icon className="size-3.5" />
                     </div>
                 </div>
-                <div className="mt-5 min-w-0">
+                <div className="mt-3 min-w-0">
                     {loading ? (
-                        <Skeleton className="mt-2 h-7 w-20" />
+                        <Skeleton className="h-7 w-20" />
                     ) : (
-                        <div className="text-3xl font-semibold tracking-tight tabular-nums">
+                        <div className="text-2xl font-semibold tracking-tight tabular-nums text-foreground">
                             {value != null ? (
                                 <AnimatedNumber value={value} decimals={decimals} />
                             ) : (
                                 '0'
                             )}
                             {suffix && (
-                                <span className="text-base text-muted-foreground">{suffix}</span>
+                                <span className="text-sm text-muted-foreground">{suffix}</span>
                             )}
                         </div>
                     )}
@@ -159,11 +159,11 @@ function RecentItem({ batch, onClick }: RecentItemProps) {
         <button
             type="button"
             onClick={() => onClick(batch.id)}
-            className="group flex w-full items-center gap-3 rounded-md bg-muted/35 px-3 py-3 text-left transition-colors duration-100 hover:bg-muted/60 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="group flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors duration-100 hover:bg-muted/50 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
             <StatusDot status={batch.status} />
             <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">
+                <div className="truncate text-sm font-medium text-foreground">
                     {batch.name || `${batch.organism_type} ${batch.mode}`}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
@@ -173,7 +173,7 @@ function RecentItem({ batch, onClick }: RecentItemProps) {
                         ` · ${(batch.avg_confidence * 100).toFixed(0)}% avg`}
                 </div>
             </div>
-            <span className="shrink-0 text-xs text-muted-foreground">
+            <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
                 {timeAgo(batch.created_at)}
             </span>
             <ArrowRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-all duration-150 group-hover:translate-x-0.5 group-hover:opacity-100" />
@@ -191,10 +191,12 @@ function SummaryPill({
     value: React.ReactNode;
 }) {
     return (
-        <div className="flex min-w-0 items-center gap-2 rounded-md bg-muted/35 px-3 py-2">
-            <Icon className="size-4 shrink-0 text-primary" />
+        <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-background/60 px-2.5 py-1.5">
+            <Icon className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate text-xs text-muted-foreground">{label}</span>
-            <span className="shrink-0 text-xs font-medium tabular-nums">{value}</span>
+            <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
+                {value}
+            </span>
         </div>
     );
 }
@@ -250,24 +252,24 @@ export default function HomePage() {
         <div className="flex h-full flex-col">
             <div className="flex-1 overflow-y-auto">
                 <div className="mx-auto w-full max-w-screen-2xl p-6">
-                    <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                        <div className="rounded-md bg-card/55 p-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
-                            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-                                <div className="flex min-w-0 items-center gap-4">
-                                    <div className="flex size-14 shrink-0 items-center justify-center">
+                    <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+                        <div className="rounded-lg border border-border bg-card p-5">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="flex min-w-0 items-start gap-3">
+                                    <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
                                         <img
                                             src="/assets/logo/app-icon.png"
                                             alt=""
-                                            className="h-full w-full scale-110 object-cover"
+                                            className="h-7 w-7 object-contain"
                                             aria-hidden="true"
                                         />
                                     </div>
                                     <div className="min-w-0">
-                                        <p className="text-sm font-medium text-primary">
-                                            Phenotyping
+                                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                            Workspace
                                         </p>
-                                        <h1 className="mt-1 truncate text-2xl font-semibold tracking-normal">
-                                            Analysis workspace
+                                        <h1 className="mt-1 truncate text-xl font-semibold tracking-tight">
+                                            Analysis dashboard
                                         </h1>
                                         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
                                             Monitor saved batches, review model confidence, and
@@ -277,13 +279,17 @@ export default function HomePage() {
                                 </div>
 
                                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                    <Button variant="outline" onClick={() => navigate('/recorded')}>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => navigate('/recorded')}
+                                    >
                                         <FolderOpen className="size-4" />
                                         Recorded
                                     </Button>
-                                    <Button onClick={() => navigate('/analyze')}>
+                                    <Button size="sm" onClick={() => navigate('/analyze')}>
                                         <FlaskConical className="size-4" />
-                                        Start Analysis
+                                        Start analysis
                                     </Button>
                                 </div>
                             </div>
@@ -311,27 +317,24 @@ export default function HomePage() {
                             </div>
                         </div>
 
-                        <div className="rounded-md bg-primary p-5 text-primary-foreground shadow-sm">
-                            <div className="flex items-start justify-between gap-4">
-                                <div>
-                                    <p className="text-sm font-medium opacity-80">Next run</p>
-                                    <h2 className="mt-2 text-2xl font-semibold tracking-normal">
-                                        Create a new analysis
-                                    </h2>
-                                    <p className="mt-2 text-sm opacity-80">
-                                        Choose a project type, upload images, and continue into
-                                        review.
-                                    </p>
-                                </div>
-                                <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary-foreground/15">
-                                    <ArrowRight className="size-5" />
-                                </div>
+                        <div className="flex flex-col justify-between rounded-lg border border-border bg-card p-5">
+                            <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
+                                    Next run
+                                </p>
+                                <h2 className="mt-1 text-xl font-semibold tracking-tight">
+                                    Create a new analysis
+                                </h2>
+                                <p className="mt-1.5 text-sm text-muted-foreground">
+                                    Pick an organism, upload images, and continue into review.
+                                </p>
                             </div>
                             <Button
-                                className="mt-5 w-full bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+                                size="sm"
+                                className="mt-5 w-full"
                                 onClick={() => navigate('/analyze')}
                             >
-                                Start Analysis
+                                Start analysis
                                 <ArrowRight className="size-4" />
                             </Button>
                         </div>
@@ -375,15 +378,15 @@ export default function HomePage() {
                     </div>
 
                     <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.85fr)]">
-                        <Card className="border-0 bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
+                        <Card className="border border-border bg-card shadow-none">
                             <CardHeader className="gap-0 pb-2">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
-                                        <CardTitle className="flex items-center gap-2 text-base">
-                                            <BarChart3 className="size-4 text-primary" />
+                                        <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                                            <BarChart3 className="size-4 text-muted-foreground" />
                                             Analysis activity
                                         </CardTitle>
-                                        <p className="mt-1 text-sm text-muted-foreground">
+                                        <p className="mt-1 text-xs text-muted-foreground">
                                             Image volume and detection counts from the latest saved
                                             batches.
                                         </p>
@@ -446,27 +449,27 @@ export default function HomePage() {
                             </CardContent>
                         </Card>
 
-                        <Card className="border-0 bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
+                        <Card className="border border-border bg-card shadow-none">
                             <CardHeader className="pb-2">
-                                <CardTitle className="flex items-center gap-2 text-base">
-                                    <Images className="size-4 text-primary" />
+                                <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                                    <Images className="size-4 text-muted-foreground" />
                                     Recent batches
                                 </CardTitle>
                             </CardHeader>
-                            <CardContent className="space-y-2">
+                            <CardContent className="space-y-1 px-2 pb-3">
                                 {loading ? (
                                     <>
-                                        <Skeleton className="h-14 w-full rounded-md" />
-                                        <Skeleton className="h-14 w-full rounded-md" />
-                                        <Skeleton className="h-14 w-full rounded-md" />
-                                        <Skeleton className="h-14 w-full rounded-md" />
+                                        <Skeleton className="h-12 w-full rounded-md" />
+                                        <Skeleton className="h-12 w-full rounded-md" />
+                                        <Skeleton className="h-12 w-full rounded-md" />
+                                        <Skeleton className="h-12 w-full rounded-md" />
                                     </>
                                 ) : error ? (
-                                    <p className="rounded-md bg-muted/35 px-3 py-8 text-center text-sm text-muted-foreground">
+                                    <p className="rounded-md bg-muted/30 px-3 py-8 text-center text-sm text-muted-foreground">
                                         Recent batches are unavailable.
                                     </p>
                                 ) : stats?.recent_analyses.length === 0 ? (
-                                    <p className="rounded-md bg-muted/35 px-3 py-8 text-center text-sm text-muted-foreground">
+                                    <p className="rounded-md bg-muted/30 px-3 py-8 text-center text-sm text-muted-foreground">
                                         No analyses yet.
                                     </p>
                                 ) : (
@@ -485,13 +488,13 @@ export default function HomePage() {
                     </div>
 
                     <div className="mt-4 grid gap-4 lg:grid-cols-3">
-                        <Card className="border-0 bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] lg:col-span-2">
+                        <Card className="border border-border bg-card shadow-none lg:col-span-2">
                             <CardHeader className="pb-2">
-                                <CardTitle className="flex items-center gap-2 text-base">
-                                    <Activity className="size-4 text-primary" />
+                                <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                                    <Activity className="size-4 text-muted-foreground" />
                                     Confidence pulse
                                 </CardTitle>
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-xs text-muted-foreground">
                                     Average confidence across the latest saved batches.
                                 </p>
                             </CardHeader>
@@ -531,9 +534,9 @@ export default function HomePage() {
                             </CardContent>
                         </Card>
 
-                        <Card className="border-0 bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
+                        <Card className="border border-border bg-card shadow-none">
                             <CardHeader className="pb-2">
-                                <CardTitle className="text-base">Top recent batch</CardTitle>
+                                <CardTitle className="text-sm font-semibold">Top recent batch</CardTitle>
                             </CardHeader>
                             <CardContent>
                                 {loading ? (
@@ -543,30 +546,30 @@ export default function HomePage() {
                                         <Skeleton className="h-9 w-full" />
                                     </div>
                                 ) : bestRecent ? (
-                                    <div className="space-y-4">
+                                    <div className="space-y-3">
                                         <div>
-                                            <p className="truncate text-lg font-semibold">
+                                            <p className="truncate text-base font-semibold tracking-tight">
                                                 {bestRecent.name || bestRecent.organism_type}
                                             </p>
-                                            <p className="mt-1 text-sm text-muted-foreground">
+                                            <p className="mt-0.5 text-xs text-muted-foreground">
                                                 {bestRecent.total_image_count} images ·{' '}
                                                 {timeAgo(bestRecent.created_at)}
                                             </p>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div className="rounded-md bg-muted/35 p-3">
-                                                <p className="text-xs text-muted-foreground">
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div className="rounded-md border border-border bg-muted/30 px-2.5 py-2">
+                                                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                                                     Detections
                                                 </p>
-                                                <p className="mt-1 text-xl font-semibold tabular-nums">
+                                                <p className="mt-0.5 text-lg font-semibold tabular-nums">
                                                     {formatCompact(bestRecent.total_count)}
                                                 </p>
                                             </div>
-                                            <div className="rounded-md bg-muted/35 p-3">
-                                                <p className="text-xs text-muted-foreground">
+                                            <div className="rounded-md border border-border bg-muted/30 px-2.5 py-2">
+                                                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                                                     Confidence
                                                 </p>
-                                                <p className="mt-1 text-xl font-semibold tabular-nums">
+                                                <p className="mt-0.5 text-lg font-semibold tabular-nums">
                                                     {bestRecent.avg_confidence != null
                                                         ? `${Math.round(bestRecent.avg_confidence * 100)}%`
                                                         : '0%'}
@@ -575,6 +578,7 @@ export default function HomePage() {
                                         </div>
                                         <Button
                                             variant="outline"
+                                            size="sm"
                                             className="w-full"
                                             onClick={() => handleRecentClick(bestRecent.id)}
                                         >
@@ -583,7 +587,7 @@ export default function HomePage() {
                                         </Button>
                                     </div>
                                 ) : (
-                                    <div className="rounded-md bg-muted/35 px-3 py-8 text-center text-sm text-muted-foreground">
+                                    <div className="rounded-md bg-muted/30 px-3 py-8 text-center text-sm text-muted-foreground">
                                         Run a batch to highlight your strongest recent result.
                                     </div>
                                 )}

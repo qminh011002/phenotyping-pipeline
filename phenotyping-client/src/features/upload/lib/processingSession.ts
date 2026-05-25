@@ -11,6 +11,7 @@ const KEY_DB_BATCH_ID = 'phenotyping_processing_db_batch_id';
 const KEY_BATCH_SUMMARY = 'phenotyping_processing_batch_summary';
 const KEY_BATCH_DETAIL = 'phenotyping_processing_batch_detail';
 const KEY_CONFIG = 'phenotyping_processing_config';
+const KEY_LARVAE_CONFIG = 'phenotyping_processing_larvae_config';
 const KEY_CLASSES = 'phenotyping_processing_classes';
 
 export interface StoredFile {
@@ -211,6 +212,23 @@ export function loadProcessingConfig(): Record<string, unknown> | null {
     }
 }
 
+// Larvae config has no backend GET/PUT endpoint (yet) — the LarvaeConfigPanel
+// edits an in-browser snapshot that flows into config_snapshot at batch
+// creation time. Persisted across the upload page so the user's tweaks survive
+// a navigation back-and-forth.
+export function storeLarvaeProcessingConfig(config: Record<string, unknown>): void {
+    sessionStorage.setItem(KEY_LARVAE_CONFIG, JSON.stringify(config));
+}
+
+export function loadLarvaeProcessingConfig(): Record<string, unknown> | null {
+    try {
+        const raw = sessionStorage.getItem(KEY_LARVAE_CONFIG);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
 // ── Clear session ───────────────────────────────────────────────────────────
 
 export function clearProcessingSession(): void {
@@ -224,6 +242,7 @@ export function clearProcessingSession(): void {
     sessionStorage.removeItem(KEY_BATCH_SUMMARY);
     sessionStorage.removeItem(KEY_BATCH_DETAIL);
     sessionStorage.removeItem(KEY_CONFIG);
+    sessionStorage.removeItem(KEY_LARVAE_CONFIG);
     sessionStorage.removeItem(KEY_CLASSES);
 }
 

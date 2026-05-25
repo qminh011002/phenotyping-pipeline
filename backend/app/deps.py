@@ -16,8 +16,13 @@ from app.services.app_settings_service import AppSettingsService
 
 # Imported at runtime (not in TYPE_CHECKING) because the Annotated aliases
 # below need to resolve these classes at module-load time.
+from app.services.inference.calibration import CalibrationService
 from app.services.inference.egg import EggInferenceService
+from app.services.inference.larvae import LarvaeInferenceService
+from app.services.inference.measurement import LarvaeMeasurementService
 from app.services.inference.neonate import NeonateInferenceService
+from app.services.inference.pupae import PupaeInferenceService
+from app.services.inference.sam_refine import SamRefinementService
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -32,6 +37,11 @@ _log_buffer: "LogBuffer | None" = None
 _executor: ThreadPoolExecutor | None = None
 _inference_service: EggInferenceService | None = None
 _neonate_inference_service: NeonateInferenceService | None = None
+_larvae_inference_service: LarvaeInferenceService | None = None
+_pupae_inference_service: PupaeInferenceService | None = None
+_calibration_service: CalibrationService | None = None
+_larvae_measurement_service: LarvaeMeasurementService | None = None
+_sam_refinement_service: SamRefinementService | None = None
 
 
 def _set_model_registry(registry: ModelRegistry) -> None:
@@ -64,6 +74,66 @@ def _set_neonate_inference_service(svc: NeonateInferenceService) -> None:
     _neonate_inference_service = svc
 
 
+def _set_larvae_inference_service(svc: LarvaeInferenceService) -> None:
+    """Called by main.py lifespan to register the larvae inference service."""
+    global _larvae_inference_service
+    _larvae_inference_service = svc
+
+
+def _set_pupae_inference_service(svc: PupaeInferenceService) -> None:
+    """Called by main.py lifespan to register the pupae inference service."""
+    global _pupae_inference_service
+    _pupae_inference_service = svc
+
+
+def _set_calibration_service(svc: CalibrationService) -> None:
+    """Called by main.py lifespan to register the calibration service."""
+    global _calibration_service
+    _calibration_service = svc
+
+
+def _set_larvae_measurement_service(svc: LarvaeMeasurementService) -> None:
+    """Called by main.py lifespan to register the measurement service."""
+    global _larvae_measurement_service
+    _larvae_measurement_service = svc
+
+
+def _set_sam_refinement_service(svc: SamRefinementService) -> None:
+    """Called by main.py lifespan to register the SAM refinement service."""
+    global _sam_refinement_service
+    _sam_refinement_service = svc
+
+
+def get_sam_refinement_service() -> SamRefinementService:
+    """Return the SamRefinementService singleton initialized at startup."""
+    if _sam_refinement_service is None:
+        raise RuntimeError(
+            "SamRefinementService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _sam_refinement_service
+
+
+def get_calibration_service() -> CalibrationService:
+    """Return the CalibrationService singleton initialized at startup."""
+    if _calibration_service is None:
+        raise RuntimeError(
+            "CalibrationService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _calibration_service
+
+
+def get_larvae_measurement_service() -> LarvaeMeasurementService:
+    """Return the LarvaeMeasurementService singleton initialized at startup."""
+    if _larvae_measurement_service is None:
+        raise RuntimeError(
+            "LarvaeMeasurementService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _larvae_measurement_service
+
+
 def get_neonate_inference_service() -> NeonateInferenceService:
     """Return the NeonateInferenceService singleton initialized at startup."""
     if _neonate_inference_service is None:
@@ -72,6 +142,26 @@ def get_neonate_inference_service() -> NeonateInferenceService:
             "This should only be called after the application lifespan startup."
         )
     return _neonate_inference_service
+
+
+def get_larvae_inference_service() -> LarvaeInferenceService:
+    """Return the LarvaeInferenceService singleton initialized at startup."""
+    if _larvae_inference_service is None:
+        raise RuntimeError(
+            "LarvaeInferenceService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _larvae_inference_service
+
+
+def get_pupae_inference_service() -> PupaeInferenceService:
+    """Return the PupaeInferenceService singleton initialized at startup."""
+    if _pupae_inference_service is None:
+        raise RuntimeError(
+            "PupaeInferenceService has not been initialized. "
+            "This should only be called after the application lifespan startup."
+        )
+    return _pupae_inference_service
 
 
 @lru_cache
@@ -182,6 +272,26 @@ AnnotatedEggInferenceService = Annotated[
 AnnotatedNeonateInferenceService = Annotated[
     NeonateInferenceService,
     Depends(get_neonate_inference_service),
+]
+
+AnnotatedLarvaeInferenceService = Annotated[
+    LarvaeInferenceService,
+    Depends(get_larvae_inference_service),
+]
+
+AnnotatedPupaeInferenceService = Annotated[
+    PupaeInferenceService,
+    Depends(get_pupae_inference_service),
+]
+
+AnnotatedCalibrationService = Annotated[
+    CalibrationService,
+    Depends(get_calibration_service),
+]
+
+AnnotatedLarvaeMeasurementService = Annotated[
+    LarvaeMeasurementService,
+    Depends(get_larvae_measurement_service),
 ]
 
 

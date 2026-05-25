@@ -32,6 +32,9 @@ dependencies = [
     "torch>=2.4.0",                    # app/services/model_registry.py — pinned explicitly even though ultralytics also depends on it
     "opencv-python-headless>=4.10.0.84", # app/services/inference — `import cv2` (use -headless: no GUI deps)
     "numpy>=2.0.0",                    # app/services/inference — vectorized box ops
+    "scipy>=1.13.0",                   # app/services/inference/centerline — Dijkstra fallback + interp1d
+    "scikit-image>=0.24.0",            # app/services/inference/centerline — medial_axis skeleton
+    "networkx>=3.0",                   # app/services/inference/centerline — hybrid skeleton-graph ops (prune, MST, shortest path)
 
     # ── Auth ─────────────────────────────────────────────────────────────────
     "pyjwt>=2.9.0",                    # app/services/auth.py — `import jwt`

@@ -16,22 +16,22 @@ export function LoadingScreen({
     children,
 }: LoadingScreenProps) {
     return (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
-            <h1 className="text-5xl font-bold tracking-tight text-primary">{title}</h1>
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background px-6">
+            <h1 className="text-3xl font-semibold tracking-tight text-primary">{title}</h1>
             <img
                 src="/assets/gif/worm_cute_antennae.gif"
                 alt=""
                 aria-hidden
-                className="h-24 w-auto [image-rendering:pixelated]"
+                className="mt-2 h-20 w-auto [image-rendering:pixelated]"
             />
-            <p className="mt-6 font-mono text-sm text-muted-foreground">{status}</p>
+            <p className="mt-5 text-sm font-medium text-foreground">{status}</p>
             {counter && (
-                <p className="mt-2 font-mono text-xs tabular-nums text-muted-foreground">
+                <p className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
                     {counter}
                 </p>
             )}
             {children}
-            {action && <div className="mt-8">{action}</div>}
+            {action && <div className="mt-6">{action}</div>}
         </div>
     );
 }

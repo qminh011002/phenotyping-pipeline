@@ -31,6 +31,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     import logging as _logging
 
+    # ── Determinism (parity with phenotyping_pipeline) ───────────────────────
+    # Force every YOLO/SAM inference to be byte-reproducible across runs and
+    # platforms. Without these flags, cuDNN picks the fastest conv kernel on
+    # the first batch (auto-tune) which is non-deterministic, and FP16 paths
+    # introduce sub-pixel mask jitter that propagates into polygon points and
+    # bbox coordinates → divergence from the reference pipeline output.
+    #
+    # Seeded once at process start so every request shares the same RNG state.
+    import os as _os
+    import random as _random
+
+    import numpy as _np
+
+    _os.environ.setdefault("PYTHONHASHSEED", "0")
+    _os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")  # required by torch
+    _random.seed(0)
+    _np.random.seed(0)
+    try:
+        import torch as _torch
+
+        _torch.manual_seed(0)
+        _torch.cuda.manual_seed_all(0)
+        _torch.use_deterministic_algorithms(True, warn_only=True)
+        _torch.backends.cudnn.deterministic = True
+        _torch.backends.cudnn.benchmark = False
+    except (ImportError, AttributeError):
+        # torch not available in some test environments — fine to skip.
+        pass
+
     # ── Startup ──────────────────────────────────────────────────────────────
     # Create LogBuffer first — needed for configure_logging
     from concurrent.futures import ThreadPoolExecutor
@@ -115,8 +144,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _set_mr(registry)
 
-    # Create ThreadPoolExecutor sized by device
-    device = registry.device
+    # Create ThreadPoolExecutor sized by the loaded model devices. Older code
+    # only looked at egg.device; larvae/pupae can be on GPU even when egg is CPU.
+    loaded_devices = [
+        registry.device_for(org)
+        for org, model_status in registry.models_status.items()
+        if model_status == "loaded"
+    ]
+    device = "cuda" if any(d != "cpu" for d in loaded_devices) else "cpu"
     n_workers = 1 if device == "cpu" else 2
     executor = ThreadPoolExecutor(
         max_workers=n_workers, thread_name_prefix="inference_worker"
@@ -149,6 +184,58 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         executor=executor,
     )
     _set_neonate_inference_service(neonate_svc)
+
+    # Create CalibrationService (shares the inference executor) — must be
+    # constructed before LarvaeInferenceService since the latter consumes it.
+    from app.deps import _set_calibration_service
+    from app.services.inference.calibration import CalibrationService
+
+    calibration_svc = CalibrationService(executor=executor)
+    _set_calibration_service(calibration_svc)
+
+    # Create SamRefinementService (lazy-loads weights on first refine call)
+    from app.deps import _set_sam_refinement_service
+    from app.services.inference.sam_refine import SamRefinementService
+
+    sam_weights_dir = storage.root / "sam"
+    sam_weights_dir.mkdir(parents=True, exist_ok=True)
+    sam_svc = SamRefinementService(executor=executor, weights_dir=sam_weights_dir)
+    _set_sam_refinement_service(sam_svc)
+
+    # Create LarvaeInferenceService (segmentation; same executor/log buffer)
+    from app.deps import _set_larvae_inference_service
+    from app.services.inference.larvae import LarvaeInferenceService
+
+    larvae_svc = LarvaeInferenceService(
+        model_registry=registry,
+        pipeline_config=pipeline_config,
+        log_buffer=log_buffer,
+        executor=executor,
+        calibration_service=calibration_svc,
+        sam_service=sam_svc,
+    )
+    _set_larvae_inference_service(larvae_svc)
+
+    # Create PupaeInferenceService — same shape as larvae (polygon + MWIS + SAM)
+    from app.deps import _set_pupae_inference_service
+    from app.services.inference.pupae import PupaeInferenceService
+
+    pupae_svc = PupaeInferenceService(
+        model_registry=registry,
+        pipeline_config=pipeline_config,
+        log_buffer=log_buffer,
+        executor=executor,
+        calibration_service=calibration_svc,
+        sam_service=sam_svc,
+    )
+    _set_pupae_inference_service(pupae_svc)
+
+    # Create LarvaeMeasurementService (shares the inference executor)
+    from app.deps import _set_larvae_measurement_service
+    from app.services.inference.measurement import LarvaeMeasurementService
+
+    measurement_svc = LarvaeMeasurementService(executor=executor)
+    _set_larvae_measurement_service(measurement_svc)
 
     # Initialize database (INF-003)
     from app.config import AppSettings
@@ -248,8 +335,11 @@ from app.routers import config, health, inference, logs, stages  # noqa: E402
 from app.routers.analyses import router as analysis_router  # noqa: E402
 from app.routers.auth import router as auth_router  # noqa: E402
 from app.routers.dashboard import router as dashboard_router  # noqa: E402
+from app.routers.larvae import router as larvae_router  # noqa: E402
 from app.routers.models import router as models_router  # noqa: E402
 from app.routers.overlay import router as overlay_router  # noqa: E402
+from app.routers.pupae import router as pupae_router  # noqa: E402
+from app.routers.sam_models import router as sam_models_router  # noqa: E402
 from app.routers.settings import router as settings_router  # noqa: E402
 
 app.include_router(health.router)
@@ -259,7 +349,10 @@ app.include_router(config.router)
 app.include_router(inference.router)
 app.include_router(auth_router)
 app.include_router(analysis_router)
+app.include_router(larvae_router)
+app.include_router(pupae_router)
 app.include_router(dashboard_router)
 app.include_router(models_router)
 app.include_router(overlay_router)
+app.include_router(sam_models_router)
 app.include_router(settings_router)

@@ -38,6 +38,8 @@ export function ProjectTypeCard({
               ? 'Model file found. Restart the backend so it can be loaded for inference.'
               : `Drop a .pt file into backend/data/models/${id}/default/ and restart, or upload one in Models.`;
 
+    const Icon = type.icon;
+
     return (
         <button
             type="button"
@@ -46,32 +48,45 @@ export function ProjectTypeCard({
             aria-pressed={selected}
             aria-disabled={!enabled}
             className={cn(
-                'group relative flex min-h-[96px] w-full items-start justify-between gap-5 px-6 py-5 text-left transition-colors',
+                'group relative flex min-h-[96px] w-full items-start gap-4 px-5 py-4 text-left transition-colors',
                 'border border-transparent focus:outline-none not-first:border-t-0 first:rounded-t-lg last:rounded-b-lg focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
                 enabled
                     ? selected
-                        ? 'border-l-green-600! bg-green-50/70 text-green-700 dark:bg-green-950/20 dark:text-green-300'
-                        : 'text-foreground hover:bg-muted/45 cursor-pointer'
-                    : 'bg-muted/10 text-muted-foreground/45 cursor-not-allowed',
+                        ? 'bg-primary/5 text-foreground'
+                        : 'text-foreground hover:bg-muted/40 cursor-pointer'
+                    : 'bg-muted/10 text-muted-foreground/50 cursor-not-allowed',
             )}
         >
             {selected && (
-                <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-green-600" />
+                <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-primary" />
             )}
 
-            <div className="min-w-0 flex flex-col gap-1.5">
+            <span
+                className={cn(
+                    'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md border',
+                    selected
+                        ? 'border-primary/30 bg-primary/10 text-primary'
+                        : enabled
+                          ? 'border-border bg-muted/40 text-muted-foreground'
+                          : 'border-border/60 bg-muted/20 text-muted-foreground/50',
+                )}
+            >
+                <Icon className="size-4" />
+            </span>
+
+            <div className="min-w-0 flex flex-1 flex-col gap-1">
                 <div className="flex items-center gap-2">
                     <span
                         className={cn(
-                            'text-base font-semibold',
-                            selected && 'text-green-700 dark:text-green-300',
-                            !enabled && 'text-muted-foreground/55',
+                            'text-[15px] font-semibold tracking-tight',
+                            selected && 'text-primary',
+                            !enabled && 'text-muted-foreground/60',
                         )}
                     >
                         {label}
                     </span>
                     {!available && (
-                        <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-0.5 text-[10px] font-semibold text-muted-foreground/65">
+                        <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                             Soon
                         </span>
                     )}
@@ -95,8 +110,7 @@ export function ProjectTypeCard({
                 </div>
                 <span
                     className={cn(
-                        'max-w-xl text-sm leading-6 text-muted-foreground',
-                        selected && 'text-muted-foreground',
+                        'max-w-xl text-[13px] leading-5 text-muted-foreground',
                         !enabled && 'text-muted-foreground/55',
                     )}
                 >
@@ -104,7 +118,7 @@ export function ProjectTypeCard({
                 </span>
             </div>
 
-            <div className="flex max-w-[250px] shrink-0 flex-wrap items-center justify-end gap-2 pt-0.5">
+            <div className="flex max-w-[280px] shrink-0 flex-wrap items-center justify-end gap-1.5 pt-0.5">
                 {badges.map((b) => {
                     const BIcon = b.icon;
                     return (
@@ -112,12 +126,12 @@ export function ProjectTypeCard({
                             key={b.label}
                             variant="outline"
                             className={cn(
-                                'h-8 rounded-lg bg-background/80 px-3 text-xs font-semibold shadow-sm',
+                                'h-6 rounded-md px-2 text-[11px] font-medium gap-1',
                                 selected
-                                    ? 'border-green-200 text-green-700 dark:border-green-800 dark:text-green-300'
+                                    ? 'border-primary/30 bg-primary/10 text-primary'
                                     : enabled
-                                      ? 'text-muted-foreground'
-                                      : 'border-border/50 bg-background/35 text-muted-foreground/45 shadow-none',
+                                      ? 'border-border bg-background text-muted-foreground'
+                                      : 'border-border/60 bg-background/40 text-muted-foreground/45',
                             )}
                         >
                             <BIcon className="h-3 w-3" />

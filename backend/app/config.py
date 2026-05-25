@@ -20,7 +20,14 @@ import yaml
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.schemas.config import ConfigUpdateRequest, EggConfig, NeonateConfig
+from app.schemas.config import (
+    ConfigUpdateRequest,
+    EggConfig,
+    LarvaeConfig,
+    NeonateConfig,
+    PupaeConfig,
+    PupaeConfigUpdateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,19 +88,76 @@ class AppSettings(BaseSettings):
 # Built-in fallback used when neither the backend's nor the pipeline's config.yaml
 # is available — keeps the server up so the frontend can render a proper
 # "model not installed" UI instead of crashing.
+_BBOX_FALLBACK: dict[str, Any] = {
+    "device": "cpu",
+    "tile_size": 512,
+    "overlap": 0.5,
+    "confidence_threshold": 0.4,
+    "min_box_area": 100,
+    "dedup_mode": "center_zone",
+    "edge_margin": 3,
+    "nms_iou_threshold": 0.4,
+    "batch_size": 24,
+}
+
+_LARVAE_FALLBACK: dict[str, Any] = {
+    "device": "cpu",
+    "tile_size": 512,
+    "overlap": 0.5,
+    "confidence_threshold": 0.4,
+    "min_mask_size": 100,
+    "edge_margin": 5,
+    # Pipeline parity: phenotyping_pipeline/infer_larvae.py hardcodes
+    # `solve_maximum_weight_independent_set(..., overlap_threshold=0.3)` and
+    # ignores its own YAML `overlap_threshold` value. To reproduce the
+    # pipeline's actual dedup behaviour we use 0.3 here.
+    "mwis_overlap_threshold": 0.3,
+    "mwis_score_metric": "confidence_x_area",
+    "batch_size": 24,
+    "calibration_object_w_mm": 405.0,
+    "calibration_object_h_mm": 317.0,
+    "enable_weight": False,
+    "sam": {
+        "enabled": True,
+        "model": "mobile_sam.pt",
+        "crop_padding": 50,
+        "confidence_threshold": 0.3,
+        "device": None,
+        "min_area_ratio": 0.6,
+        "max_area_ratio": 1.3,
+        "min_iou_vs_yolo": 0.5,
+    },
+}
+
+_PUPAE_FALLBACK: dict[str, Any] = {
+    "device": "cpu",
+    "tile_size": 1024,
+    "overlap": 0.5,
+    "confidence_threshold": 0.7,
+    "min_mask_size": 1500,
+    "edge_margin": 5,
+    "mwis_overlap_threshold": 0.3,
+    "mwis_score_metric": "confidence_x_area",
+    "batch_size": 24,
+    "calibration_object_w_mm": 405.0,
+    "calibration_object_h_mm": 317.0,
+    "sam": {
+        "enabled": True,
+        "model": "mobile_sam.pt",
+        "crop_padding": 50,
+        "confidence_threshold": 0.5,
+        "device": None,
+        "min_area_ratio": 0.6,
+        "max_area_ratio": 1.3,
+        "min_iou_vs_yolo": 0.5,
+    },
+}
+
 _BUILTIN_FALLBACK: dict[str, Any] = {
-    organism: {
-        "device": "cpu",
-        "tile_size": 512,
-        "overlap": 0.5,
-        "confidence_threshold": 0.4,
-        "min_box_area": 100,
-        "dedup_mode": "center_zone",
-        "edge_margin": 3,
-        "nms_iou_threshold": 0.4,
-        "batch_size": 24,
-    }
-    for organism in ("egg", "larvae", "pupae", "neonate")
+    "egg": dict(_BBOX_FALLBACK),
+    "larvae": dict(_LARVAE_FALLBACK),
+    "pupae": dict(_PUPAE_FALLBACK),
+    "neonate": dict(_BBOX_FALLBACK),
 }
 
 
@@ -111,6 +175,7 @@ class PipelineConfigManager:
         self._config_path = data_dir / "inference_config.yaml"
         self._lock = threading.RLock()
         self._cached_config: dict[str, Any] | None = None
+        self._cached_mtime: float | None = None
         self._ensure_seeded()
 
     # ── Seeding & persistence ──────────────────────────────────────────────────
@@ -166,10 +231,31 @@ class PipelineConfigManager:
                 tmp_path.unlink()
             raise
 
+    def _file_mtime(self) -> float | None:
+        try:
+            return self._config_path.stat().st_mtime
+        except OSError:
+            return None
+
     def _get_raw(self) -> dict[str, Any]:
+        """Return the parsed YAML — reloaded if the file has changed on disk.
+
+        Direct edits to ``inference_config.yaml`` (editor, linter, scripted)
+        used to require a backend restart because the in-memory cache was only
+        invalidated by our own ``update_*`` writers. We now mtime-check on
+        every read; if the file is newer than our last load, drop the cache
+        and reparse so external edits take effect immediately.
+        """
         with self._lock:
-            if self._cached_config is None:
+            current_mtime = self._file_mtime()
+            if (
+                self._cached_config is None
+                or current_mtime is None
+                or self._cached_mtime is None
+                or current_mtime > self._cached_mtime
+            ):
                 self._cached_config = self._load_yaml()
+                self._cached_mtime = current_mtime
             return self._cached_config
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -180,14 +266,26 @@ class PipelineConfigManager:
     def get_neonate_config(self) -> NeonateConfig:
         return self._validate_section("neonate", NeonateConfig)
 
-    def get_inference_config(self, organism: str) -> EggConfig | NeonateConfig:
+    def get_larvae_config(self) -> LarvaeConfig:
+        return self._validate_section("larvae", LarvaeConfig)
+
+    def get_pupae_config(self) -> PupaeConfig:
+        return self._validate_section("pupae", PupaeConfig)
+
+    def get_inference_config(
+        self, organism: str
+    ) -> EggConfig | LarvaeConfig | NeonateConfig | PupaeConfig:
         """Polymorphic accessor used by ModelRegistry for device selection.
 
-        ``larvae``/``pupae`` reuse the ``EggConfig`` shape since the pipeline
-        config keeps them in lockstep; only ``device`` is read from this path.
+        ``pupae`` now uses ``PupaeConfig`` (polygon + MWIS) since the pupae
+        weight is a YOLO-seg model — same shape as larvae.
         """
         if organism == "neonate":
             return self.get_neonate_config()
+        if organism == "larvae":
+            return self.get_larvae_config()
+        if organism == "pupae":
+            return self.get_pupae_config()
         return self._validate_section(organism, EggConfig)
 
     def _validate_section(self, organism: str, schema: type[Any]) -> Any:
@@ -214,6 +312,76 @@ class PipelineConfigManager:
             raw["egg"] = merged.model_dump(exclude_none=True)
             self._save_yaml(raw)
             self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_larvae(self, updates: dict[str, Any]) -> LarvaeConfig:
+        """Patch top-level fields of the ``larvae`` section in inference_config.yaml.
+
+        Only fields present in ``updates`` are overwritten; the SAM subsection
+        and other knobs are preserved as-is.
+        """
+        with self._lock:
+            raw = self._load_yaml()
+            larvae_section = dict(raw.get("larvae", {}))
+            for k, v in updates.items():
+                larvae_section[k] = v
+            merged = LarvaeConfig.model_validate(larvae_section)
+            raw["larvae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_larvae_sam(self, updates: dict[str, Any]) -> LarvaeConfig:
+        """Patch the ``larvae.sam`` subsection in inference_config.yaml.
+
+        Only the fields present in ``updates`` are overwritten; the rest of the
+        SAM block (and the rest of the larvae section) is preserved as-is.
+        """
+        with self._lock:
+            raw = self._load_yaml()
+            larvae_section = dict(raw.get("larvae", {}))
+            sam_section = dict(larvae_section.get("sam", {}))
+            for k, v in updates.items():
+                sam_section[k] = v
+            larvae_section["sam"] = sam_section
+            merged = LarvaeConfig.model_validate(larvae_section)
+            raw["larvae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_pupae(self, updates: dict[str, Any]) -> PupaeConfig:
+        """Patch top-level fields of the ``pupae`` section."""
+        PupaeConfigUpdateRequest.model_validate(updates)
+        with self._lock:
+            raw = self._load_yaml()
+            pupae_section = dict(raw.get("pupae", {}))
+            for k, v in updates.items():
+                pupae_section[k] = v
+            merged = PupaeConfig.model_validate(pupae_section)
+            raw["pupae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_pupae_sam(self, updates: dict[str, Any]) -> PupaeConfig:
+        """Patch the ``pupae.sam`` subsection."""
+        with self._lock:
+            raw = self._load_yaml()
+            pupae_section = dict(raw.get("pupae", {}))
+            sam_section = dict(pupae_section.get("sam", {}))
+            for k, v in updates.items():
+                sam_section[k] = v
+            pupae_section["sam"] = sam_section
+            merged = PupaeConfig.model_validate(pupae_section)
+            raw["pupae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
             return merged
 
     @property

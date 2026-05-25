@@ -45,6 +45,8 @@ _DEFAULT_NAME_PREFIX = "Batch of "
 # Zombie-batch auto-fail threshold
 _ZOMBIE_TIMEOUT = timedelta(hours=24)
 
+_POLYGON_ORGANISMS = frozenset({"larvae", "pupae"})
+
 
 def _default_batch_name_for_count(total_image_count: int, created_at: datetime) -> str:
     """Timestamped default used at batch-create time for any N (including 1).
@@ -75,6 +77,68 @@ class AnalysisService:
     their path/URL references are persisted.
     """
 
+    # ── Model snapshot helpers ─────────────────────────────────────────────────
+
+    async def _lookup_detection_model_name(
+        self, db: AsyncSession, organism: str
+    ) -> str | None:
+        """Return the active detection model filename for ``organism``.
+
+        Used to snapshot which YOLO weights ran a batch so the result viewer
+        shows the historical model rather than whatever is active now.
+        """
+        from app.deps import get_model_upload_service
+
+        try:
+            svc = get_model_upload_service()
+            raw = await svc.get_assignments(db)
+            entry = raw.get(organism)
+            if entry is None:
+                return None
+            # ``model_filename`` resolves to custom > default > None.
+            return entry.get("model_filename")
+        except RuntimeError:
+            # Service not initialised (e.g. test context).
+            return None
+
+    def _lookup_sam_model_name(self, organism: str) -> str | None:
+        """Return the active SAM filename from the pipeline config."""
+        from app.deps import get_pipeline_config
+
+        try:
+            cfg_mgr = get_pipeline_config()
+            cfg = (
+                cfg_mgr.get_pupae_config()
+                if organism == "pupae"
+                else cfg_mgr.get_larvae_config()
+            )
+            return cfg.sam.model
+        except RuntimeError:
+            return None
+
+    def _parse_polygon_annotations(
+        self,
+        organism: str,
+        annotations: list[dict],
+        image_id: UUID,
+    ) -> list[object]:
+        """Validate polygon annotations for larvae/pupae persistence."""
+        from app.schemas.larvae import LarvaeAnnotation
+        from app.schemas.pupae import PupaeAnnotation
+
+        ann_cls = PupaeAnnotation if organism == "pupae" else LarvaeAnnotation
+        parsed: list[object] = []
+        for ann in annotations:
+            try:
+                parsed.append(ann_cls.model_validate(ann))
+            except Exception:  # noqa: BLE001 — log + skip individual bad rows
+                logger.warning(
+                    "Skipping malformed %s annotation",
+                    organism,
+                    extra={"context": {"image_id": str(image_id)}},
+                )
+        return parsed
+
     # ── Batch lifecycle ────────────────────────────────────────────────────────
 
     async def create_batch(
@@ -97,6 +161,24 @@ class AnalysisService:
             # unless the operator renames.
             name = _default_batch_name_for_count(data.total_image_count, now)
 
+        # Snapshot the model names that will be used to process this batch so
+        # the result viewer can show the historical (not current) selection.
+        snapshot = dict(data.config_snapshot or {})
+        try:
+            snapshot.setdefault(
+                "detection_model",
+                await self._lookup_detection_model_name(db, data.organism_type),
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort snapshot
+            logger.debug("Could not snapshot detection_model: %s", exc)
+        if data.organism_type in _POLYGON_ORGANISMS:
+            try:
+                snapshot.setdefault(
+                    "sam_model", self._lookup_sam_model_name(data.organism_type)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Could not snapshot sam_model: %s", exc)
+
         batch = AnalysisBatch(
             name=name,
             user_id=user_id,
@@ -104,7 +186,7 @@ class AnalysisService:
             organism_type=data.organism_type,
             mode=data.mode,
             device=data.device,
-            config_snapshot=data.config_snapshot,
+            config_snapshot=snapshot,
             classes=list(data.classes),
             total_image_count=data.total_image_count,
             created_at=now,
@@ -216,6 +298,46 @@ class AnalysisService:
                 stem = Path(result.filename).stem or result.filename
                 batch_row.name = stem[:200]
             await db.flush()
+
+        # Larvae/pupae batches: also persist polygon detections into the
+        # `larvae_detection` table so GET /analyses/{id}/larvae can find them.
+        # The generic `annotations` JSON column on AnalysisImage is kept for
+        # parity with egg, but the larvae read path joins on larvae_detection.
+        if batch_row is not None and batch_row.organism_type in _POLYGON_ORGANISMS:
+            if not result.annotations and result.calibration is None:
+                return image
+
+            # Imported here to avoid a circular dep at module load.
+            from app.services.larvae_persistence import save_detections
+
+            parsed = self._parse_polygon_annotations(
+                batch_row.organism_type,
+                result.annotations,
+                image.id,
+            )
+            if parsed:
+                await save_detections(
+                    image_id=image.id,
+                    annotations=parsed,
+                    model_version=None,
+                    db=db,
+                )
+
+            # Persist auto-calibration output if the inference run produced one.
+            if result.calibration is not None:
+                from app.schemas.calibration import CalibrationCorners
+                from app.services.larvae_persistence import save_calibration
+
+                try:
+                    cal_obj = CalibrationCorners.model_validate(result.calibration)
+                except Exception:  # noqa: BLE001 — log + skip a malformed payload
+                    logger.warning(
+                        "Skipping malformed calibration payload",
+                        extra={"context": {"image_id": str(image.id)}},
+                    )
+                else:
+                    cal_obj = cal_obj.model_copy(update={"image_id": str(image.id)})
+                    await save_calibration(image.id, cal_obj, db)
 
         return image
 
