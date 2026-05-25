@@ -42,7 +42,7 @@ from app.services.inference.centerline import (
 )
 
 if TYPE_CHECKING:
-    from app.schemas.config import LarvaeConfig
+    from app.schemas.config import LarvaeConfig, PupaeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,7 @@ def _measure(
     x_fit: np.ndarray,
     y_fit: np.ndarray,
     widths_fit: np.ndarray,
-    cfg: "LarvaeConfig",
+    cfg: "LarvaeConfig | PupaeConfig",
     calibration: CalibrationCorners,
 ) -> tuple[float, float, float, float, float, float]:
     """Return (length_px, min_w_px, max_w_px, avg_w_px, area_px2, volume_px3)."""
@@ -330,7 +330,13 @@ def _measure(
 
     # Volume using the per-segment chord ratio. Per the reference we use
     # widths_fit[i] (not widths_fit[:-1]) to match its iteration.
-    height_ratio = float(cfg.larva_volume_height_ratio)
+    height_ratio = float(
+        getattr(
+            cfg,
+            "larva_volume_height_ratio",
+            getattr(cfg, "pupa_volume_height_ratio", 0.6),
+        )
+    )
     volume_px3 = float(
         sum(
             _arc_volume(float(widths_fit[i]), height_ratio, float(seg_lengths[i]))
@@ -360,7 +366,7 @@ def _measure_one_polygon(
     matrix: np.ndarray | None,
     polygon: list[tuple[int, int]],
     calibration: CalibrationCorners,
-    cfg: "LarvaeConfig",
+    cfg: "LarvaeConfig | PupaeConfig",
     detection_id: str,
 ) -> LarvaeMeasurement:
     """Run the whole pipeline for a single polygon.
@@ -530,7 +536,7 @@ class LarvaeMeasurementService:
         image: np.ndarray,
         polygons: list[list[tuple[int, int]]],
         calibration: CalibrationCorners,
-        cfg: "LarvaeConfig",
+        cfg: "LarvaeConfig | PupaeConfig",
         *,
         detection_ids: list[str] | None = None,
         polygons_already_warped: bool = False,
@@ -613,7 +619,7 @@ class LarvaeMeasurementService:
         image: np.ndarray,
         polygons: list[list[tuple[int, int]]],
         calibration: CalibrationCorners,
-        cfg: "LarvaeConfig",
+        cfg: "LarvaeConfig | PupaeConfig",
         *,
         detection_ids: list[str] | None = None,
         polygons_already_warped: bool = False,

@@ -7,6 +7,7 @@ import {
     Settings,
     Check,
     ArrowLeft,
+    ArrowRight,
     ArrowUpFromLine,
     FileIcon,
     FolderIcon,
@@ -357,43 +358,46 @@ function DropZone({ isDragOver, onDrop, onPick, onPickFolder }: DropZoneProps) {
             onDragLeave={stop}
             onDrop={onDrop_}
             className={cn(
-                'flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed p-16 text-center transition-all duration-200 ease-out',
+                'flex flex-col items-center justify-center gap-5 rounded-lg border border-dashed p-14 text-center transition-colors duration-150',
                 isDragOver
-                    ? 'border-primary bg-primary/5 text-primary'
-                    : 'border-muted-foreground/30 text-muted-foreground',
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border bg-muted/20 hover:bg-muted/30',
             )}
             aria-label="Drop zone for image upload"
         >
-            <div className="rounded-full bg-muted p-4">
-                <ArrowUpFromLine className="h-7 w-7 text-foreground" />
+            <div
+                className={cn(
+                    'flex size-12 items-center justify-center rounded-full transition-colors',
+                    isDragOver
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-muted text-muted-foreground',
+                )}
+            >
+                <ArrowUpFromLine className="h-5 w-5" />
             </div>
-            <div>
-                <p className="text-base font-medium text-foreground">
-                    {isDragOver ? 'Drop images here' : 'Drag and drop file(s) to upload, or:'}
+            <div className="space-y-1">
+                <p className="text-sm font-semibold text-foreground">
+                    {isDragOver ? 'Drop images to upload' : 'Drop images here'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                    or browse a file or folder from your computer
                 </p>
             </div>
-            <div className="flex items-center gap-3">
-                <Button variant="outline" onClick={onPick}>
+            <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={onPick}>
                     <FileIcon className="mr-2 h-4 w-4" />
-                    Select File(s)
+                    Select files
                 </Button>
-                <Button variant="outline" onClick={onPickFolder}>
+                <Button variant="outline" size="sm" onClick={onPickFolder}>
                     <FolderIcon className="mr-2 h-4 w-4" />
-                    Select Folder
+                    Select folder
                 </Button>
             </div>
-            <div className="mt-2">
-                <p className="mb-2 text-xs text-muted-foreground">Supported Formats</p>
-                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-md border bg-muted/30 px-4 py-2 text-xs">
-                    <span className="flex items-center gap-1">
-                        <ImageIcon className="h-3.5 w-3.5" />
-                        <span className="font-medium">Images</span>
-                        <span className="text-muted-foreground">.jpg, .png, .bmp, .tiff</span>
-                    </span>
-                </div>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                    *Max size of 20MB per image.
-                </p>
+            <div className="mt-1 flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+                <ImageIcon className="h-3.5 w-3.5" />
+                <span>.jpg · .png · .bmp · .tiff</span>
+                <span className="text-muted-foreground/40">·</span>
+                <span>Max 20 MB per image</span>
             </div>
         </div>
     );
@@ -667,69 +671,82 @@ export default function UploadPage() {
             />
 
             <div className="flex-1 overflow-y-auto">
-                <div className="w-full px-6 py-8">
-                    {/* Breadcrumb: project name · mode */}
-                    <div className="mb-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <button
-                                type="button"
+                <div className="mx-auto w-full max-w-screen-2xl px-6 py-8">
+                    {/* Breadcrumb: project name · mode · organism */}
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+                            <Button
+                                variant="ghost"
+                                size="icon"
                                 onClick={() => navigate('/analyze')}
-                                className="flex items-center gap-1 transition-colors hover:text-foreground"
-                                aria-label="Back"
+                                aria-label="Back to project setup"
+                                className="h-8 w-8"
                             >
                                 <ArrowLeft className="h-4 w-4" />
-                            </button>
-                            <span className="font-medium text-foreground">
-                                {projectName ?? 'Untitled Project'}
+                            </Button>
+                            <span className="truncate font-medium text-foreground">
+                                {projectName ?? 'Untitled project'}
                             </span>
-                            <span className="text-muted-foreground/50">·</span>
-                            <span className="flex items-center gap-1">
+                            <span className="text-muted-foreground/40">·</span>
+                            <span className="inline-flex items-center gap-1">
                                 <ModeIcon className="h-3.5 w-3.5" />
                                 {modeLabel}
                             </span>
-                            <span className="text-muted-foreground/50">·</span>
+                            <span className="text-muted-foreground/40">·</span>
                             <span>{organismLabel}</span>
                         </div>
                         <Button
                             variant="outline"
-                            size="icon"
+                            size="sm"
                             onClick={() => setConfigOpen(true)}
                             aria-label="Open inference settings"
+                            className="h-8 gap-2"
                         >
                             <Settings className="h-4 w-4" />
+                            Inference settings
                         </Button>
                     </div>
 
                     {/* Title */}
-                    <h1 className="mb-6 flex items-center gap-2 text-2xl font-semibold tracking-tight">
-                        <ArrowUpFromLine className="h-6 w-6" />
-                        Upload
-                    </h1>
+                    <div className="mb-6 flex flex-col">
+                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                            Step 2 of 3
+                        </p>
+                        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+                            Upload images
+                        </h1>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            Add the {organismLabel.toLowerCase()} images you want to analyse. You can drag
+                            and drop or pick a folder.
+                        </p>
+                    </div>
 
                     {/* Upload progress bar */}
                     {uploadProgress && (
-                        <div className="mb-6 rounded-lg border bg-muted/30 px-6 py-5">
-                            <div className="flex flex-col items-center gap-2">
-                                <p className="text-base font-semibold text-primary">
-                                    Processing files…
-                                </p>
-                                <p
-                                    className="max-w-full truncate font-mono text-xs text-muted-foreground"
-                                    title={uploadProgress.currentName}
-                                >
-                                    {uploadProgress.currentName}
-                                </p>
+                        <div className="mb-6 rounded-lg border border-border bg-card px-5 py-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-foreground">
+                                        Processing files…
+                                    </p>
+                                    <p
+                                        className="mt-0.5 max-w-full truncate font-mono text-xs text-muted-foreground"
+                                        title={uploadProgress.currentName}
+                                    >
+                                        {uploadProgress.currentName}
+                                    </p>
+                                </div>
+                                <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                                    {uploadProgress.current} / {uploadProgress.total}
+                                </span>
                             </div>
                             <Progress
-                                className="mt-4"
+                                className="mt-3 h-1.5"
                                 value={
                                     (uploadProgress.current / Math.max(uploadProgress.total, 1)) *
                                     100
                                 }
                             />
-                            <p className="mt-2 text-right text-xs text-muted-foreground tabular-nums">
-                                {uploadProgress.current} / {uploadProgress.total}
-                            </p>
                         </div>
                     )}
 
@@ -760,50 +777,49 @@ export default function UploadPage() {
                                 setIsDragOver(false);
                             }}
                             className={cn(
-                                'rounded-lg border transition-colors',
+                                'overflow-hidden rounded-lg border bg-card transition-colors',
                                 isDragOver ? 'border-primary bg-primary/5' : 'border-border',
                             )}
                         >
                             {/* Compact header strip */}
-                            <div className="flex flex-wrap items-start justify-between gap-4 border-b bg-muted/30 px-5 py-4">
-                                <div className="flex flex-col gap-1">
-                                    <h2 className="text-base font-semibold">
-                                        Drag and drop images to upload.
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-5 py-3">
+                                <div className="flex min-w-0 items-baseline gap-3">
+                                    <h2 className="text-sm font-semibold text-foreground">
+                                        {files.length} image
+                                        {files.length !== 1 ? 's' : ''} selected
                                     </h2>
-                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                                        <span className="flex items-center gap-1">
-                                            <ImageIcon className="h-3.5 w-3.5" />
-                                            .jpg, .png, .bmp, .tiff
-                                        </span>
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground">
-                                        *Max size of 20MB per image.
-                                    </p>
+                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                        {formatBytes(totalBytes)}
+                                    </span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <Button variant="outline" size="sm" onClick={openFilePicker}>
-                                        <FileIcon className="mr-2 h-4 w-4" />
-                                        Select Files
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={openFilePicker}
+                                        className="h-8"
+                                    >
+                                        <FileIcon className="mr-1.5 h-4 w-4" />
+                                        Add files
                                     </Button>
-                                    <Button variant="outline" size="sm" onClick={openFolderPicker}>
-                                        <FolderIcon className="mr-2 h-4 w-4" />
-                                        Select Folder
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={openFolderPicker}
+                                        className="h-8"
+                                    >
+                                        <FolderIcon className="mr-1.5 h-4 w-4" />
+                                        Add folder
                                     </Button>
-                                    <Button size="sm" onClick={handleProcess}>
-                                        Process Images
-                                        <svg
-                                            className="ml-2 h-4 w-4"
-                                            fill="none"
-                                            viewBox="0 0 24 24"
-                                            stroke="currentColor"
-                                            strokeWidth={2}
-                                        >
-                                            <path
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                d="M14 5l7 7m0 0l-7 7m7-7H3"
-                                            />
-                                        </svg>
+                                    <div className="h-5 w-px bg-border" />
+                                    <Button
+                                        size="sm"
+                                        onClick={handleProcess}
+                                        className="h-8 gap-2"
+                                    >
+                                        Process {files.length} image
+                                        {files.length !== 1 ? 's' : ''}
+                                        <ArrowRight className="h-4 w-4" />
                                     </Button>
                                 </div>
                             </div>
@@ -811,7 +827,7 @@ export default function UploadPage() {
                             {/* Thumbnails — responsive square tiles that fill each row */}
                             <div
                                 ref={gridRef}
-                                className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] items-start gap-4 p-6"
+                                className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] items-start gap-4 p-5"
                             >
                                 {pageFiles.map((entry) => (
                                     <Thumbnail
@@ -829,7 +845,7 @@ export default function UploadPage() {
 
                             {/* Pagination */}
                             {pageCount > 1 && (
-                                <div className="border-t px-5 py-3">
+                                <div className="border-t border-border px-5 py-2.5">
                                     <PaginationBar
                                         page={currentPage}
                                         pageCount={pageCount}
@@ -839,7 +855,7 @@ export default function UploadPage() {
                             )}
 
                             {/* Footnote */}
-                            <div className="flex items-center justify-between border-t px-5 py-3 text-xs text-muted-foreground">
+                            <div className="flex items-center justify-between border-t border-border bg-muted/20 px-5 py-2 text-xs text-muted-foreground">
                                 <span>
                                     {files.length} image{files.length !== 1 ? 's' : ''} ·{' '}
                                     {formatBytes(totalBytes)}
@@ -849,6 +865,9 @@ export default function UploadPage() {
                                             · showing {pageStart + 1}–{pageEnd}
                                         </>
                                     )}
+                                </span>
+                                <span className="font-mono">
+                                    .jpg · .png · .bmp · .tiff
                                 </span>
                             </div>
                         </div>

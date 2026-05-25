@@ -98,6 +98,11 @@ class LarvaeMeasurement(BaseModel):
     centerline: list[tuple[float, float]] | None = None
     widths: list[float] | None = None
     weight_mg: float | None = Field(default=None, ge=0.0)
+    weight_area_ratio: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="weight_mg / area_mm2; computed on read, never stored.",
+    )
     is_stale: bool = False
     measured_at: datetime | None = None
 
@@ -127,11 +132,33 @@ class StoredLarvaeAnnotation(LarvaeAnnotation):
     detection_id: str
 
 
+class WeightStats(BaseModel):
+    """Descriptive statistics for weight_mg across a batch (skips nulls)."""
+
+    count: int = Field(ge=0)
+    total_biomass_mg: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    min: float | None = None
+    max: float | None = None
+    std: float | None = None
+    cv: float | None = None
+    p5: float | None = None
+    p25: float | None = None
+    p75: float | None = None
+    p95: float | None = None
+    iqr: float | None = None
+    skewness: float | None = None
+    kurtosis: float | None = None
+    avg_weight_area_ratio: float | None = None
+
+
 class LarvaeImageDetail(BaseModel):
     """Combined per-image payload: image meta + detections + calibration + measurements."""
 
     image_id: str
     original_filename: str
+    total_weight_mg: float | None = Field(default=None, ge=0.0)
     overlay_url: str | None = None
     # Warped raw (no marks) — backing image for the polygon editor SVG when
     # auto-calibration succeeded. Null on failed calibration; the editor then
@@ -161,6 +188,7 @@ class LarvaeBatchDetail(BaseModel):
     detection_model: str | None = None
     sam_model: str | None = None
     images: list[LarvaeImageDetail] = Field(default_factory=list)
+    weight_stats: WeightStats | None = None
 
 
 class MeasureLarvaeRequest(BaseModel):
@@ -189,3 +217,20 @@ class PolygonsUpdate(BaseModel):
 
     polygons: list[PolygonEdit] = Field(default_factory=list)
     deleted_detection_ids: list[str] = Field(default_factory=list)
+
+
+class ImageTotalWeightUpdate(BaseModel):
+    """Body for PUT /analyses/images/{image_id}/total-weight.
+
+    ``null`` clears the per-image total and blanks each measurement's weight.
+    """
+
+    total_weight_mg: float | None = Field(default=None, ge=0.0)
+
+
+class ImageTotalWeightResult(BaseModel):
+    """Response after recomputing weight distribution for one image."""
+
+    image_id: str
+    total_weight_mg: float | None
+    measurements_updated: int

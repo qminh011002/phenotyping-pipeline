@@ -66,7 +66,7 @@ function SectionHeader({
 }) {
     return (
         <div className="mb-3 flex min-h-5 items-center gap-2">
-            <h3 className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {Icon && <Icon className="h-3.5 w-3.5" />}
                 {label}
             </h3>
@@ -147,7 +147,7 @@ export function StatBoard({
     return (
         <div className="flex h-full flex-col divide-y divide-border overflow-y-auto">
             {/* ── Detections (hero) ───────────────────────────────────────── */}
-            <section className="px-5 pb-5 pt-5">
+            <section className="px-5 py-5">
                 <SectionHeader
                     label="Detections"
                     icon={Microscope}
@@ -159,12 +159,12 @@ export function StatBoard({
                         ) : null
                     }
                 />
-                <div className="flex items-baseline gap-2.5">
-                    <span className="text-5xl font-bold leading-none tracking-tight tabular-nums">
+                <div className="flex items-baseline gap-2">
+                    <span className="text-4xl font-semibold leading-none tracking-tight tabular-nums">
                         <AnimatedNumber value={visibleCount} className="tabular-nums" />
                     </span>
                     {visibleCount !== totalCount && (
-                        <span className="font-mono text-base text-muted-foreground tabular-nums">
+                        <span className="font-mono text-sm text-muted-foreground tabular-nums">
                             / {totalCount}
                         </span>
                     )}

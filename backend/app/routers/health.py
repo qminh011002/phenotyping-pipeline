@@ -42,6 +42,8 @@ async def get_health() -> HealthResponse:
         }
         cuda_device_count = int(getattr(registry, "cuda_device_count", 0))
         cuda_device_name = getattr(registry, "cuda_device_name", None)
+        if not isinstance(cuda_device_name, str):
+            cuda_device_name = None
         return HealthResponse(
             status="ok" if any_loaded else "degraded",
             model_loaded=registry.model_loaded,

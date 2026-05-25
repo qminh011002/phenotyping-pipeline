@@ -108,6 +108,9 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     const [calCorners, setCalCorners] = useState<Corners | null>(null);
     const [savingCal, setSavingCal] = useState(false);
     const [redetecting, setRedetecting] = useState(false);
+    // Ctrl/Cmd held → hide polygon overlay so the raw image is visible.
+    // Mirrors ResultViewer's ctrlHeld behavior for egg/neonate.
+    const [ctrlHeld, setCtrlHeld] = useState(false);
     // Bumped after the backend re-renders ``_warped.png`` / ``_overlay.png``
     // so the editor's blob fetch bypasses cached responses.
     const [imageCacheKey, setImageCacheKey] = useState(0);
@@ -143,6 +146,16 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         (b: string, i: string) => `/analyze/results/${b}/images/${i}`,
         [],
     );
+
+    const reloadBatch = useCallback(async () => {
+        if (!batchId) return;
+        try {
+            const detail = await getLarvaeBatch(batchId);
+            setBatch(detail);
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Could not refresh batch');
+        }
+    }, [batchId]);
 
     const currentIndex = useMemo(() => {
         if (!batch || !imageId) return 0;
@@ -540,6 +553,26 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setActiveTool(next === 'draw' ? 'addPolygon' : 'select');
     }, []);
 
+    // Ctrl/Cmd-hold → reveal raw image (hide polygon overlay). Mirrors the
+    // same gesture in ResultViewer for egg/neonate.
+    useEffect(() => {
+        const update = (e: KeyboardEvent) => setCtrlHeld(e.ctrlKey || e.metaKey);
+        const clear = () => setCtrlHeld(false);
+        const onVisibilityChange = () => {
+            if (document.visibilityState !== 'visible') setCtrlHeld(false);
+        };
+        window.addEventListener('keydown', update);
+        window.addEventListener('keyup', update);
+        window.addEventListener('blur', clear);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        return () => {
+            window.removeEventListener('keydown', update);
+            window.removeEventListener('keyup', update);
+            window.removeEventListener('blur', clear);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+        };
+    }, []);
+
     // Keyboard shortcuts
     useEffect(() => {
         function onKeyDown(e: KeyboardEvent) {
@@ -749,6 +782,11 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                         previewPolygon={smoothPreview}
                         calibrationCorners={calMode === 'corners' ? calCorners : null}
                         onCalibrationCornersChange={setCalCorners}
+                        // Hide the polygon overlay while Ctrl/Cmd is held, but
+                        // keep it visible during calibration corner editing —
+                        // the user needs the corner handles to remain on
+                        // screen while they line them up.
+                        overlayVisible={calMode === 'corners' ? true : !ctrlHeld}
                     />
                     <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 flex flex-col items-center gap-2">
                         <div
@@ -828,23 +866,28 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     </div>
                 </div>
                 <aside className="flex w-96 shrink-0 flex-col overflow-hidden bg-card">
-                    {currentImage.calibration?.detection_status !== 'detected' && (
-                        <div className="space-y-3 border-b p-4">
-                            <LarvaeCalibrationBanner
-                                calibration={currentImage.calibration}
-                                onEditCorners={enterCornerMode}
-                                onEditManual={enterManualMode}
-                                onRedetect={handleRedetect}
-                                redetecting={redetecting}
-                            />
-                        </div>
-                    )}
+                    {currentImage.calibration?.detection_status !== 'detected' &&
+                        currentImage.calibration?.detection_status !== 'manual' && (
+                            <div className="space-y-3 border-b p-4">
+                                <LarvaeCalibrationBanner
+                                    calibration={currentImage.calibration}
+                                    onEditCorners={enterCornerMode}
+                                    onEditManual={enterManualMode}
+                                    onRedetect={handleRedetect}
+                                    redetecting={redetecting}
+                                />
+                            </div>
+                        )}
                     <LarvaeSummaryPanel
                         batchId={batch.batch_id}
                         batchName={batch.name}
+                        imageId={currentImage.image_id}
+                        totalWeightMg={currentImage.total_weight_mg}
                         detections={workingDetectionsForSummary}
                         measurements={currentImage.measurements}
                         calibration={currentImage.calibration}
+                        weightStats={batch.weight_stats ?? null}
+                        onWeightSaved={reloadBatch}
                     />
                     <div className="flex flex-1 flex-col gap-3 overflow-hidden p-4 pt-0">
                         <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">

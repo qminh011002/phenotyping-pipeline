@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
@@ -123,7 +124,7 @@ export function LarvaeMeasurementTable({
                 tabIndex={0}
                 aria-selected={isSelected}
                 className={cn(
-                    'grid cursor-pointer grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-border/60 px-3 text-sm hover:bg-muted/40',
+                    'grid cursor-pointer grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] items-center gap-2 border-b border-border/60 px-3 text-sm hover:bg-muted/40',
                     isSelected && 'bg-primary/10',
                 )}
                 onClick={() => onSelect(row.detection.detection_id)}
@@ -140,6 +141,10 @@ export function LarvaeMeasurementTable({
                 <span className="tabular-nums">{fmt(row.measurement?.length_mm)}</span>
                 <span className="tabular-nums">{fmt(row.measurement?.max_width_mm)}</span>
                 <span className="tabular-nums">{fmt(row.measurement?.area_mm2)}</span>
+                <span className="tabular-nums">{fmt(row.measurement?.weight_mg)}</span>
+                <span className="tabular-nums">
+                    {fmt(row.measurement?.weight_area_ratio, 3)}
+                </span>
             </div>
         );
     }
@@ -147,14 +152,14 @@ export function LarvaeMeasurementTable({
     return (
         <div
             className={cn(
-                'flex h-full flex-col overflow-hidden rounded-md border bg-card text-card-foreground',
+                'flex h-full flex-col overflow-hidden rounded-md border border-border bg-card text-card-foreground',
                 className,
             )}
             data-testid="larvae-measurement-table"
         >
             <div
                 role="row"
-                className="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground"
+                className="grid grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
             >
                 <SortableHeader
                     label="#"
@@ -180,6 +185,8 @@ export function LarvaeMeasurementTable({
                     dir={sortDir}
                     onClick={() => toggleSort('area_mm2')}
                 />
+                <span>Weight (mg)</span>
+                <span>W/A</span>
             </div>
             <div
                 ref={parentRef}
@@ -236,12 +243,17 @@ function SortableHeader({
             type="button"
             onClick={onClick}
             className={cn(
-                'flex items-center gap-1 text-left',
+                'inline-flex items-center gap-1 text-left transition-colors hover:text-foreground',
                 active && 'text-foreground',
             )}
         >
             {label}
-            {active && <span aria-hidden>{dir === 'asc' ? '▲' : '▼'}</span>}
+            {active &&
+                (dir === 'asc' ? (
+                    <ChevronUp className="h-3 w-3" aria-hidden />
+                ) : (
+                    <ChevronDown className="h-3 w-3" aria-hidden />
+                ))}
         </button>
     );
 }

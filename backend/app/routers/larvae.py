@@ -23,7 +23,6 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from pathlib import PurePath
 from typing import Annotated, AsyncIterator
 from uuid import UUID
 
@@ -45,13 +44,28 @@ from app.deps import (
 )
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.models.larvae import LarvaeDetection, LarvaeMeasurement
+from app.routers.inference_utils import (
+    ensure_status_loaded,
+    map_inference_error,
+    parse_and_verify_optional_batch,
+    read_image_upload,
+    validate_image_extension,
+    verify_batch_owned,
+)
 from app.schemas.calibration import CalibrationCorners, CalibrationUpdate
 from app.schemas.larvae import (
+    ImageTotalWeightResult,
+    ImageTotalWeightUpdate,
     LarvaeBatchDetail,
     LarvaeDetectionResult,
     LarvaeMeasurementResult,
     MeasureLarvaeRequest,
     PolygonsUpdate,
+)
+from app.schemas.pupae import (
+    MeasurePupaeRequest,
+    PupaeBatchDetail,
+    PupaeMeasurementResult,
 )
 from app.services.inference.egg import InvalidImageError
 from app.services.inference.measurement import build_warp_matrix
@@ -65,6 +79,7 @@ from app.services.larvae_persistence import (
     resolve_warped_path,
     save_calibration,
     save_measurements,
+    set_image_total_weight,
     update_polygons,
 )
 from app.services.model_registry import ModelNotLoadedError
@@ -76,6 +91,10 @@ router = APIRouter(tags=["larvae"])
 # Cyan #00FFFF in BGR — matches the inference-time polygon stroke and the
 # editor SVG. Centralised so re-render after manual calibration stays in sync.
 _POLYGON_COLOR_BGR: tuple[int, int, int] = (255, 255, 0)
+_POLYGON_COLORS_BGR: dict[str, tuple[int, int, int]] = {
+    "larvae": (255, 255, 0),
+    "pupae": (0, 255, 255),
+}
 
 
 async def _rerender_after_calibration(
@@ -85,6 +104,7 @@ async def _rerender_after_calibration(
     new_corners: list[tuple[int, int]],
     old_corners: list[tuple[int, int]] | None,
     db: AsyncSession,
+    polygon_color_bgr: tuple[int, int, int] = _POLYGON_COLOR_BGR,
 ) -> None:
     """Warp the raw image with ``new_corners``, transform every persisted
     polygon into the new warped frame, and re-write ``_overlay.png`` /
@@ -152,47 +172,34 @@ async def _rerender_after_calibration(
 
     overlay = warped_img.copy()
     for poly in new_polygons:
-        cv2.polylines(overlay, [poly], True, _POLYGON_COLOR_BGR, 2)
+        cv2.polylines(overlay, [poly], True, polygon_color_bgr, 2)
 
     png_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
     cv2.imwrite(str(overlay_path), overlay, png_params)
     cv2.imwrite(str(resolve_warped_path(overlay_path)), warped_img, png_params)
     await db.flush()
 
-ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"})
-MAX_IMAGE_BYTES = 100 * 1024 * 1024
 
-
-def _validate_extension(filename: str) -> tuple[str, str]:
-    stem = PurePath(filename).stem
-    suffix = PurePath(filename).suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Unsupported file type {suffix!r}. "
-                f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-            ),
-        )
-    return stem, suffix
-
-
-async def _verify_batch_owned(
-    batch_id: UUID, db: AsyncSession, user_id: UUID
-) -> AnalysisBatch:
-    batch = (
+async def _image_organism(image: AnalysisImage, db: AsyncSession) -> str:
+    organism = (
         await db.execute(
-            select(AnalysisBatch)
-            .where(AnalysisBatch.id == batch_id)
-            .where(AnalysisBatch.user_id == user_id)
+            select(AnalysisBatch.organism_type).where(
+                AnalysisBatch.id == image.batch_id
+            )
         )
     ).scalar_one_or_none()
-    if batch is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Analysis batch {batch_id} not found.",
-        )
-    return batch
+    return organism if organism in ("larvae", "pupae") else "larvae"
+
+
+def _polygon_config_for(organism: str):
+    cfg_mgr = get_pipeline_config()
+    if organism == "pupae":
+        return cfg_mgr.get_pupae_config()
+    return cfg_mgr.get_larvae_config()
+
+
+def _measurement_response_schema(organism: str):
+    return PupaeMeasurementResult if organism == "pupae" else LarvaeMeasurementResult
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -210,43 +217,18 @@ async def run_larvae_inference(
     inference_svc: AnnotatedLarvaeInferenceService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-    file: Annotated[
-        UploadFile, File(description="Image file (JPG, PNG, TIFF, BMP)")
-    ],
+    file: Annotated[UploadFile, File(description="Image file (JPG, PNG, TIFF, BMP)")],
     batch_id: Annotated[
         str | None,
         Query(description="Persist results into this batch (must be owned by caller)"),
     ] = None,
 ) -> LarvaeDetectionResult:
-    stem, suffix = _validate_extension(file.filename or "unknown")
-
-    bid: UUID | None = None
-    if batch_id:
-        try:
-            bid = UUID(batch_id)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid batch_id"
-            ) from exc
-        await _verify_batch_owned(bid, db, user.id)
+    stem, suffix = validate_image_extension(file.filename or "unknown")
+    bid = await parse_and_verify_optional_batch(batch_id, db, user.id)
 
     registry = get_model_registry()
-    if registry.status("larvae") != "loaded":
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Larvae model not loaded.",
-        )
-
-    data = await file.read()
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty."
-        )
-    if len(data) > MAX_IMAGE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large (max {MAX_IMAGE_BYTES // (1024 * 1024)} MB)",
-        )
+    ensure_status_loaded(registry, "larvae", "Larvae")
+    data = await read_image_upload(file)
 
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
@@ -254,14 +236,8 @@ async def run_larvae_inference(
         result = await inference_svc.process_single(
             data, stem, resolved_batch_id, raw_suffix=suffix
         )
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    except ModelNotLoadedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        ) from exc
+    except (InvalidImageError, ModelNotLoadedError) as exc:
+        raise map_inference_error(exc) from exc
 
     # Persist detections only when bound to a stored image. The router accepts
     # ad-hoc inference (no batch_id) for parity with the egg flow; in that case
@@ -321,7 +297,8 @@ async def detect_calibration(
             detail=f"Could not decode raw image at {raw_path}",
         )
 
-    cfg = get_pipeline_config().get_larvae_config()
+    organism = await _image_organism(image, db)
+    cfg = _polygon_config_for(organism)
     corners = await calibration_svc.detect_async(img, cfg)
     corners = corners.model_copy(update={"image_id": str(image_id)})
 
@@ -355,7 +332,8 @@ async def update_calibration(
             detail=f"Image {image_id} not found.",
         )
 
-    cfg = get_pipeline_config().get_larvae_config()
+    organism = await _image_organism(image, db)
+    cfg = _polygon_config_for(organism)
 
     # Snapshot the corner set the persisted polygons are currently in, before
     # save_calibration overwrites it. Used to compose H_new ∘ H_old⁻¹ during
@@ -405,6 +383,9 @@ async def update_calibration(
                     ],
                     old_corners=old_corners,
                     db=db,
+                    polygon_color_bgr=_POLYGON_COLORS_BGR.get(
+                        organism, _POLYGON_COLOR_BGR
+                    ),
                 )
 
     await db.commit()
@@ -416,29 +397,31 @@ async def update_calibration(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@router.post(
-    "/measure/larvae",
-    response_model=LarvaeMeasurementResult,
-    status_code=status.HTTP_200_OK,
-    summary="Compute per-larva measurements on a stored image",
-)
-async def measure_larvae(
+async def _measure_polygon_image(
+    organism_filter: str | None,
     measurement_svc: AnnotatedLarvaeMeasurementService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-    image_id: Annotated[UUID, Query(description="Stored analysis_image.id")],
-    body: MeasureLarvaeRequest | None = None,
-) -> LarvaeMeasurementResult:
+    image_id: UUID,
+    body: MeasureLarvaeRequest | MeasurePupaeRequest | None = None,
+) -> LarvaeMeasurementResult | PupaeMeasurementResult:
     image = await get_image_for_user(image_id, user.id, db)
     if image is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Image {image_id} not found.",
         )
+    organism = await _image_organism(image, db)
+    if organism_filter is not None and organism != organism_filter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} is not a {organism_filter} image.",
+        )
+    response_schema = _measurement_response_schema(organism)
 
     detections = await list_detections_for_image(image_id, db)
     if not detections:
-        return LarvaeMeasurementResult(
+        return response_schema(
             image_id=str(image_id),
             calibration=await load_calibration(image_id, db),
             measurements=[],
@@ -511,8 +494,8 @@ async def measure_larvae(
             )
         polygons_already_warped = False
 
-    cfg = get_pipeline_config().get_larvae_config()
-    # Keep larvae measurements numerically compatible with
+    cfg = _polygon_config_for(organism)
+    # Keep polygon measurements numerically compatible with
     # phenotyping_pipeline/2_inference/process_larvae.py. Older batches may
     # carry a config_snapshot with "hybrid"; do not let that override the
     # reference Dijkstra + polynomial-fit path.
@@ -542,17 +525,52 @@ async def measure_larvae(
         cv2.imwrite(str(viz_path), viz, [cv2.IMWRITE_PNG_COMPRESSION, 1])
     except (cv2.error, OSError) as exc:
         logger.warning(
-            "Could not write measurement viz: %s", exc,
+            "Could not write measurement viz: %s",
+            exc,
             extra={"context": {"image_id": str(image_id)}},
         )
 
     await db.commit()
 
-    return LarvaeMeasurementResult(
+    return response_schema(
         image_id=str(image_id),
         calibration=calibration,
         measurements=measurements,
         generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.post(
+    "/measure/larvae",
+    response_model=LarvaeMeasurementResult | PupaeMeasurementResult,
+    status_code=status.HTTP_200_OK,
+    summary="Compute per-larva measurements on a stored image",
+)
+async def measure_larvae(
+    measurement_svc: AnnotatedLarvaeMeasurementService,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    image_id: Annotated[UUID, Query(description="Stored analysis_image.id")],
+    body: MeasureLarvaeRequest | None = None,
+) -> LarvaeMeasurementResult | PupaeMeasurementResult:
+    return await _measure_polygon_image(None, measurement_svc, user, db, image_id, body)
+
+
+@router.post(
+    "/measure/pupae",
+    response_model=PupaeMeasurementResult,
+    status_code=status.HTTP_200_OK,
+    summary="Compute per-pupa measurements on a stored image",
+)
+async def measure_pupae(
+    measurement_svc: AnnotatedLarvaeMeasurementService,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    image_id: Annotated[UUID, Query(description="Stored analysis_image.id")],
+    body: MeasurePupaeRequest | None = None,
+) -> PupaeMeasurementResult:
+    return await _measure_polygon_image(
+        "pupae", measurement_svc, user, db, image_id, body
     )
 
 
@@ -563,17 +581,37 @@ async def measure_larvae(
 
 @router.get(
     "/analyses/{batch_id}/larvae",
-    response_model=LarvaeBatchDetail,
+    response_model=LarvaeBatchDetail | PupaeBatchDetail,
     status_code=status.HTTP_200_OK,
-    summary="Full larvae batch payload (detections + calibration + measurements)",
+    summary="Full polygon batch payload (detections + calibration + measurements)",
 )
 async def get_larvae_batch(
     batch_id: UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> LarvaeBatchDetail:
+) -> LarvaeBatchDetail | PupaeBatchDetail:
     detail = await load_batch_for_user(batch_id, user.id, db)
     if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+    return detail
+
+
+@router.get(
+    "/analyses/{batch_id}/pupae",
+    response_model=PupaeBatchDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Full pupae batch payload (detections + calibration + measurements)",
+)
+async def get_pupae_batch(
+    batch_id: UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> PupaeBatchDetail:
+    detail = await load_batch_for_user(batch_id, user.id, db)
+    if detail is None or detail.organism != "pupae":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis batch {batch_id} not found.",
@@ -597,7 +635,9 @@ _CSV_FIELDS = (
     "average_width_mm",
     "area_mm2",
     "volume_mm3",
+    "total_weight_mg",
     "weight_mg",
+    "weight_area_ratio",
     "is_stale",
     "measured_at",
 )
@@ -619,7 +659,7 @@ async def export_larvae_csv(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> StreamingResponse:
-    batch = await _verify_batch_owned(batch_id, db, user.id)
+    batch = await verify_batch_owned(batch_id, db, user.id)
 
     # Pull rows in one streaming-friendly join. We use server-side iteration
     # with a moderate page size so a 10K-larva export does not buffer the
@@ -628,6 +668,7 @@ async def export_larvae_csv(
         select(
             AnalysisImage.id.label("image_id"),
             AnalysisImage.original_filename.label("filename"),
+            AnalysisImage.total_weight_mg.label("total_weight_mg"),
             LarvaeDetection.id.label("detection_id"),
             LarvaeMeasurement.length_mm,
             LarvaeMeasurement.min_width_mm,
@@ -678,7 +719,19 @@ async def export_larvae_csv(
                         ),
                         row.area_mm2 if row.area_mm2 is not None else "",
                         row.volume_mm3 if row.volume_mm3 is not None else "",
+                        (
+                            row.total_weight_mg
+                            if row.total_weight_mg is not None
+                            else ""
+                        ),
                         row.weight_mg if row.weight_mg is not None else "",
+                        (
+                            row.weight_mg / row.area_mm2
+                            if row.weight_mg is not None
+                            and row.area_mm2 is not None
+                            and row.area_mm2 > 0
+                            else ""
+                        ),
                         bool(row.is_stale) if row.is_stale is not None else "",
                         (
                             row.measured_at.isoformat()
@@ -714,7 +767,7 @@ async def save_polygon_edits(
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, int | str]:
-    await _verify_batch_owned(batch_id, db, user.id)
+    await verify_batch_owned(batch_id, db, user.id)
 
     image = (
         await db.execute(
@@ -771,3 +824,36 @@ async def save_polygon_edits(
         "updated": touched,
         "deleted": deleted,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUT /analyses/images/{image_id}/total-weight
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.put(
+    "/analyses/images/{image_id}/total-weight",
+    response_model=ImageTotalWeightResult,
+    status_code=status.HTTP_200_OK,
+    summary="Set the per-image total weight; redistributes weight_mg across measurements",
+)
+async def set_image_total_weight_endpoint(
+    image_id: UUID,
+    payload: ImageTotalWeightUpdate,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> ImageTotalWeightResult:
+    image = await get_image_for_user(image_id, user.id, db)
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} not found.",
+        )
+
+    updated = await set_image_total_weight(image_id, payload.total_weight_mg, db)
+    await db.commit()
+    return ImageTotalWeightResult(
+        image_id=str(image_id),
+        total_weight_mg=payload.total_weight_mg,
+        measurements_updated=updated,
+    )

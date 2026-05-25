@@ -78,3 +78,100 @@ def test_refine_candidates_only_refines_above_threshold_and_preserves_order(tmp_
     assert result[1]["refined"] is True
     svc._ensure_model.assert_called_once()
     svc._refine_one.assert_called_once()
+
+
+class _Tensor:
+    def __init__(self, arr: np.ndarray) -> None:
+        self._arr = arr
+
+    def cpu(self):
+        return self
+
+    def numpy(self) -> np.ndarray:
+        return self._arr
+
+
+class _MaskData:
+    def __init__(self, arr: np.ndarray) -> None:
+        self._arr = arr
+
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, index: int) -> _Tensor:
+        assert index == 0
+        return _Tensor(self._arr)
+
+
+class _Masks:
+    def __init__(self, arr: np.ndarray) -> None:
+        self.data = _MaskData(arr)
+
+
+class _SamResult:
+    def __init__(self, arr: np.ndarray) -> None:
+        self.masks = _Masks(arr)
+
+
+def _fake_sam(mask: np.ndarray):
+    model = MagicMock()
+    model.return_value = [_SamResult(mask)]
+    return model
+
+
+def test_refine_one_rejects_sam_mask_outside_area_ratio(tmp_path):
+    executor = ThreadPoolExecutor(max_workers=1)
+    svc = SamRefinementService(executor=executor, weights_dir=tmp_path)
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+    candidate = {
+        "bbox": (10, 10, 30, 30),
+        "polygon": np.array([[10, 10], [30, 10], [30, 30], [10, 30]], dtype=np.int32),
+        "area": 400,
+        "confidence": 0.95,
+    }
+    tiny_mask = np.zeros((20, 20), dtype=np.uint8)
+    tiny_mask[0:2, 0:2] = 1
+
+    try:
+        out = svc._refine_one(
+            _fake_sam(tiny_mask),
+            image,
+            candidate,
+            padding=0,
+            min_area_ratio=0.6,
+            max_area_ratio=1.3,
+            min_iou_vs_yolo=0.0,
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert out is None
+
+
+def test_refine_one_rejects_sam_mask_below_iou_guard(tmp_path):
+    executor = ThreadPoolExecutor(max_workers=1)
+    svc = SamRefinementService(executor=executor, weights_dir=tmp_path)
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+    candidate = {
+        "bbox": (10, 10, 30, 30),
+        "polygon": np.array([[10, 10], [30, 10], [30, 30], [10, 30]], dtype=np.int32),
+        "area": 400,
+        "confidence": 0.95,
+    }
+    shifted_mask = np.zeros((20, 20), dtype=np.uint8)
+    shifted_mask[10:20, 10:20] = 1
+
+    try:
+        out = svc._refine_one(
+            _fake_sam(shifted_mask),
+            image,
+            candidate,
+            padding=0,
+            min_area_ratio=0.1,
+            max_area_ratio=2.0,
+            min_iou_vs_yolo=0.8,
+        )
+    finally:
+        executor.shutdown(wait=False)
+
+    assert out is None

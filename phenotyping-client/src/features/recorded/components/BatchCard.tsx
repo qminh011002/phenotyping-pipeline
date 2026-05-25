@@ -366,8 +366,8 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                 }
             }}
             className={cn(
-                'group relative flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card/80 shadow-sm',
-                'transition-all duration-150 hover:-translate-y-px hover:bg-card hover:shadow-md',
+                'group relative flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card shadow-none',
+                'transition-all duration-150 hover:-translate-y-px hover:border-border/80 hover:shadow-sm',
                 'focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
                 'active:scale-[0.99] cursor-pointer select-none',
             )}
@@ -404,7 +404,7 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                     </div>
 
                     <h3
-                        className="min-w-0 truncate text-sm font-bold tracking-tight text-foreground"
+                        className="min-w-0 truncate text-sm font-semibold tracking-tight text-foreground"
                         title={batch.name}
                     >
                         {batch.name || 'Untitled batch'}
@@ -419,8 +419,7 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                 </div>
             </div>
 
-            <div className="mt-4 flex min-w-0 shrink-0 items-start gap-2 px-3.5 pb-3.5">
-                <span className={cn('mt-2 size-2 shrink-0 rounded-full', info.dotClass)} />
+            <div className="mt-4 flex min-w-0 shrink-0 items-start px-3.5 pb-3.5">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 overflow-hidden">
                     <StatChip
                         icon={ImageIcon}

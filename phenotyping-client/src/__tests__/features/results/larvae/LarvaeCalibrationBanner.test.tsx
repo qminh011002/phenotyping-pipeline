@@ -14,13 +14,13 @@ describe('LarvaeCalibrationBanner', () => {
         expect(container.firstChild).toBeNull();
     });
 
-    it('shows the manual copy when calibration is manual', () => {
-        render(
+    it('renders nothing when calibration is manual (calibration is good — banner is noise)', () => {
+        const { container } = render(
             <LarvaeCalibrationBanner
                 calibration={{ detection_status: 'manual' }}
             />,
         );
-        expect(screen.getByText(/Manual calibration/i)).toBeInTheDocument();
+        expect(container.firstChild).toBeNull();
     });
 
     it('shows the failed copy when calibration is failed', () => {

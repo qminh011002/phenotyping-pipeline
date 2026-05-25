@@ -14,6 +14,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -24,11 +25,17 @@ from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.models.larvae import LarvaeCalibration, LarvaeDetection, LarvaeMeasurement
 from app.schemas.calibration import CalibrationCorners
 from app.schemas.larvae import (
-    LarvaeAnnotation,
     LarvaeBatchDetail,
     LarvaeImageDetail,
     LarvaeMeasurement as LarvaeMeasurementSchema,
     StoredLarvaeAnnotation,
+    WeightStats,
+)
+from app.schemas.pupae import (
+    PupaeBatchDetail,
+    PupaeImageDetail,
+    PupaeMeasurement,
+    StoredPupaeAnnotation,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +54,9 @@ def _polygon_jsonb(polygon: list[tuple[int, int]]) -> list[list[int]]:
     return [[int(x), int(y)] for x, y in polygon]
 
 
-def _polygon_bbox_and_area(polygon: list[tuple[int, int]]) -> tuple[dict[str, int], int]:
+def _polygon_bbox_and_area(
+    polygon: list[tuple[int, int]],
+) -> tuple[dict[str, int], int]:
     xs = [int(x) for x, _ in polygon]
     ys = [int(y) for _, y in polygon]
     bbox = {
@@ -68,7 +77,7 @@ def _polygon_bbox_and_area(polygon: list[tuple[int, int]]) -> tuple[dict[str, in
 
 async def save_detections(
     image_id: UUID,
-    annotations: list[LarvaeAnnotation],
+    annotations: list[Any],
     model_version: str | None,
     db: AsyncSession,
 ) -> list[LarvaeDetection]:
@@ -98,7 +107,8 @@ async def save_detections(
         rows.append(row)
     await db.flush()
     logger.info(
-        "Saved %d larvae detections", len(rows),
+        "Saved %d larvae detections",
+        len(rows),
         extra={"context": {"image_id": str(image_id), "count": len(rows)}},
     )
     return rows
@@ -157,9 +167,7 @@ async def save_calibration(
         update(LarvaeMeasurement)
         .where(
             LarvaeMeasurement.detection_id.in_(
-                select(LarvaeDetection.id).where(
-                    LarvaeDetection.image_id == image_id
-                )
+                select(LarvaeDetection.id).where(LarvaeDetection.image_id == image_id)
             )
         )
         .values(is_stale=True)
@@ -184,9 +192,7 @@ async def load_calibration(
 
 def _calibration_to_schema(row: LarvaeCalibration) -> CalibrationCorners:
     auto = (
-        [(int(p[0]), int(p[1])) for p in row.auto_corners]
-        if row.auto_corners
-        else None
+        [(int(p[0]), int(p[1])) for p in row.auto_corners] if row.auto_corners else None
     )
     edited = (
         [(int(p[0]), int(p[1])) for p in row.edited_corners]
@@ -210,7 +216,7 @@ def _calibration_to_schema(row: LarvaeCalibration) -> CalibrationCorners:
 
 async def save_measurements(
     image_id: UUID,
-    measurements: list[tuple[UUID, LarvaeMeasurementSchema]],
+    measurements: list[tuple[UUID, Any]],
     db: AsyncSession,
 ) -> list[LarvaeMeasurement]:
     """Replace all measurements for the image's detections.
@@ -224,9 +230,7 @@ async def save_measurements(
         d
         for d in (
             await db.execute(
-                select(LarvaeDetection.id).where(
-                    LarvaeDetection.image_id == image_id
-                )
+                select(LarvaeDetection.id).where(LarvaeDetection.image_id == image_id)
             )
         ).scalars()
     ]
@@ -295,9 +299,7 @@ async def update_polygons(
         det_id
         for det_id in (
             await db.execute(
-                select(LarvaeDetection.id).where(
-                    LarvaeDetection.image_id == image_id
-                )
+                select(LarvaeDetection.id).where(LarvaeDetection.image_id == image_id)
             )
         ).scalars()
     }
@@ -359,9 +361,27 @@ async def update_polygons(
 # ── Read path ────────────────────────────────────────────────────────────────
 
 
+def _schemas_for_organism(
+    organism: str,
+) -> tuple[type[Any], type[Any], type[Any], type[Any]]:
+    if organism == "pupae":
+        return (
+            PupaeBatchDetail,
+            PupaeImageDetail,
+            StoredPupaeAnnotation,
+            PupaeMeasurement,
+        )
+    return (
+        LarvaeBatchDetail,
+        LarvaeImageDetail,
+        StoredLarvaeAnnotation,
+        LarvaeMeasurementSchema,
+    )
+
+
 async def load_batch_for_user(
     batch_id: UUID, user_id: UUID, db: AsyncSession
-) -> LarvaeBatchDetail | None:
+) -> LarvaeBatchDetail | PupaeBatchDetail | None:
     """Joined load: batch + images + detections + calibration + measurements.
 
     Returns ``None`` if the batch does not exist for this user (404).
@@ -376,17 +396,19 @@ async def load_batch_for_user(
     ).scalar_one_or_none()
     if batch is None:
         return None
+    organism = (
+        batch.organism_type if batch.organism_type in ("larvae", "pupae") else "larvae"
+    )
+    batch_schema, image_schema, _stored_schema, measurement_schema = (
+        _schemas_for_organism(organism)
+    )
 
     image_ids = [img.id for img in batch.images]
-    detections_by_image: dict[UUID, list[LarvaeDetection]] = {
-        i: [] for i in image_ids
-    }
+    detections_by_image: dict[UUID, list[LarvaeDetection]] = {i: [] for i in image_ids}
     if image_ids:
         for det in (
             await db.execute(
-                select(LarvaeDetection).where(
-                    LarvaeDetection.image_id.in_(image_ids)
-                )
+                select(LarvaeDetection).where(LarvaeDetection.image_id.in_(image_ids))
             )
         ).scalars():
             detections_by_image.setdefault(det.image_id, []).append(det)
@@ -414,14 +436,14 @@ async def load_batch_for_user(
         ).scalars():
             measurements_by_detection[m.detection_id] = m
 
-    images: list[LarvaeImageDetail] = []
+    images: list[Any] = []
     for img in batch.images:
         dets = detections_by_image.get(img.id, [])
         cal_row = calibrations_by_image.get(img.id)
 
-        stored_anns = [_detection_to_stored_schema(d) for d in dets]
+        stored_anns = [_detection_to_stored_schema(d, organism) for d in dets]
         m_rows = [
-            _measurement_to_schema(measurements_by_detection[d.id])
+            _measurement_to_schema(measurements_by_detection[d.id], measurement_schema)
             for d in dets
             if d.id in measurements_by_detection
         ]
@@ -439,9 +461,10 @@ async def load_batch_for_user(
             raw_url = f"/analyses/{batch.id}/images/{img.id}/raw"
 
         images.append(
-            LarvaeImageDetail(
+            image_schema(
                 image_id=str(img.id),
                 original_filename=img.original_filename,
+                total_weight_mg=img.total_weight_mg,
                 overlay_url=overlay_url,
                 warped_url=warped_url,
                 raw_url=raw_url,
@@ -452,20 +475,33 @@ async def load_batch_for_user(
             )
         )
 
+    weight_pairs: list[tuple[float, float]] = [
+        (float(m.weight_mg), float(m.area_mm2 or 0.0))
+        for m in measurements_by_detection.values()
+        if m.weight_mg is not None
+    ]
+    weight_stats = _compute_weight_stats(weight_pairs) if weight_pairs else None
+
     snapshot = batch.config_snapshot or {}
-    return LarvaeBatchDetail(
+    return batch_schema(
         batch_id=str(batch.id),
         name=batch.name,
-        organism="larvae",
+        organism=organism,
         status=batch.status,
         total_image_count=batch.total_image_count,
         detection_model=snapshot.get("detection_model"),
         sam_model=snapshot.get("sam_model"),
         images=images,
+        weight_stats=weight_stats,
     )
 
 
-def _detection_to_stored_schema(d: LarvaeDetection) -> StoredLarvaeAnnotation:
+def _detection_to_stored_schema(
+    d: LarvaeDetection, organism: str
+) -> StoredLarvaeAnnotation | StoredPupaeAnnotation:
+    stored_schema = (
+        StoredPupaeAnnotation if organism == "pupae" else StoredLarvaeAnnotation
+    )
     bbox = d.bbox
     if isinstance(bbox, dict):
         bbox_t = (
@@ -479,13 +515,11 @@ def _detection_to_stored_schema(d: LarvaeDetection) -> StoredLarvaeAnnotation:
 
     polygon = [(int(p[0]), int(p[1])) for p in d.polygon]
     edited_polygon = (
-        [(int(p[0]), int(p[1])) for p in d.edited_polygon]
-        if d.edited_polygon
-        else None
+        [(int(p[0]), int(p[1])) for p in d.edited_polygon] if d.edited_polygon else None
     )
-    return StoredLarvaeAnnotation(
+    return stored_schema(
         detection_id=str(d.id),
-        label="larvae",
+        label=organism,
         polygon=polygon,
         bbox=bbox_t,  # type: ignore[arg-type]
         confidence=float(d.confidence),
@@ -496,14 +530,17 @@ def _detection_to_stored_schema(d: LarvaeDetection) -> StoredLarvaeAnnotation:
     )
 
 
-def _measurement_to_schema(m: LarvaeMeasurement) -> LarvaeMeasurementSchema:
+def _measurement_to_schema(
+    m: LarvaeMeasurement, schema: type[Any] = LarvaeMeasurementSchema
+) -> LarvaeMeasurementSchema | PupaeMeasurement:
     centerline = (
-        [(float(p[0]), float(p[1])) for p in m.centerline]
-        if m.centerline
-        else None
+        [(float(p[0]), float(p[1])) for p in m.centerline] if m.centerline else None
     )
     widths = [float(w) for w in m.widths] if m.widths else None
-    return LarvaeMeasurementSchema(
+    ratio: float | None = None
+    if m.weight_mg is not None and m.area_mm2 and m.area_mm2 > 0:
+        ratio = m.weight_mg / m.area_mm2
+    return schema(
         detection_id=str(m.detection_id),
         length_mm=m.length_mm,
         min_width_mm=m.min_width_mm,
@@ -514,8 +551,132 @@ def _measurement_to_schema(m: LarvaeMeasurement) -> LarvaeMeasurementSchema:
         centerline=centerline,
         widths=widths,
         weight_mg=m.weight_mg,
+        weight_area_ratio=ratio,
         is_stale=bool(m.is_stale),
         measured_at=m.measured_at,
+    )
+
+
+# ── Weight distribution ───────────────────────────────────────────────────────
+
+
+async def set_image_total_weight(
+    image_id: UUID,
+    total_weight_mg: float | None,
+    db: AsyncSession,
+) -> int:
+    """Persist ``total_weight_mg`` on the image and redistribute across each
+    measurement proportional to ``area_mm2``.
+
+    ``None`` clears the per-image total and blanks ``weight_mg`` for every
+    measurement on the image. Returns the number of measurement rows updated.
+    Caller commits.
+    """
+    await db.execute(
+        update(AnalysisImage)
+        .where(AnalysisImage.id == image_id)
+        .values(total_weight_mg=total_weight_mg)
+    )
+
+    rows = list(
+        (
+            await db.execute(
+                select(LarvaeMeasurement)
+                .join(
+                    LarvaeDetection,
+                    LarvaeDetection.id == LarvaeMeasurement.detection_id,
+                )
+                .where(LarvaeDetection.image_id == image_id)
+            )
+        ).scalars()
+    )
+    if not rows:
+        return 0
+
+    if total_weight_mg is None:
+        for m in rows:
+            m.weight_mg = None
+        await db.flush()
+        return len(rows)
+
+    total_area = sum(m.area_mm2 or 0.0 for m in rows)
+    for m in rows:
+        if total_area > 0 and m.area_mm2:
+            m.weight_mg = (m.area_mm2 / total_area) * total_weight_mg
+        else:
+            m.weight_mg = 0.0
+    await db.flush()
+    return len(rows)
+
+
+def _percentile(sorted_vals: list[float], q: float) -> float:
+    """Linear-interpolation percentile (numpy default, no numpy dependency)."""
+    if not sorted_vals:
+        return 0.0
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    idx = (len(sorted_vals) - 1) * (q / 100.0)
+    lo = int(idx)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = idx - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def _compute_weight_stats(
+    pairs: list[tuple[float, float]],
+) -> WeightStats:
+    """``pairs`` is a list of (weight_mg, area_mm2). Missing weights are
+    filtered out upstream."""
+    weights = [w for w, _ in pairs]
+    n = len(weights)
+    if n == 0:
+        return WeightStats(count=0)
+
+    total = sum(weights)
+    mean = total / n
+    srt = sorted(weights)
+    median = _percentile(srt, 50)
+    mn = srt[0]
+    mx = srt[-1]
+    variance = sum((w - mean) ** 2 for w in weights) / n
+    std = variance**0.5
+    cv = (std / mean) if mean != 0 else None
+    p5 = _percentile(srt, 5)
+    p25 = _percentile(srt, 25)
+    p75 = _percentile(srt, 75)
+    p95 = _percentile(srt, 95)
+    iqr = p75 - p25
+    if n >= 3 and std > 0:
+        m3 = sum((w - mean) ** 3 for w in weights) / n
+        skew = m3 / (std**3)
+    else:
+        skew = None
+    if n >= 4 and std > 0:
+        m4 = sum((w - mean) ** 4 for w in weights) / n
+        kurt = m4 / (std**4) - 3.0
+    else:
+        kurt = None
+
+    ratios = [w / a for w, a in pairs if a and a > 0]
+    avg_ratio = (sum(ratios) / len(ratios)) if ratios else None
+
+    return WeightStats(
+        count=n,
+        total_biomass_mg=total,
+        mean=mean,
+        median=median,
+        min=mn,
+        max=mx,
+        std=std,
+        cv=cv,
+        p5=p5,
+        p25=p25,
+        p75=p75,
+        p95=p95,
+        iqr=iqr,
+        skewness=skew,
+        kurtosis=kurt,
+        avg_weight_area_ratio=avg_ratio,
     )
 
 

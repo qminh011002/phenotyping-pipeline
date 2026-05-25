@@ -46,24 +46,33 @@ interface ToolDef {
     Icon: typeof Hand;
     /** Capability key on `ToolCapability`; ``null`` means the tool is universal. */
     capability: keyof ToolCapability | null;
+    /** Visual grouping — separators are inserted between groups. */
+    group: 'navigate' | 'draw' | 'measure' | 'history';
 }
 
 const TOOLS: ToolDef[] = [
     // Universal "Select / pan" tool — enters the default edit mode for the
     // active organism (bbox-select for egg/neonate, polygon-edit for larvae).
-    { id: 'select', label: 'Select', Icon: Hand, capability: null },
-    { id: 'addBox', label: 'Add box', Icon: Plus, capability: 'bbox' },
-    { id: 'addPolygon', label: 'Polygon', Icon: Pencil, capability: 'polygon' },
-    { id: 'smooth', label: 'Smooth', Icon: Spline, capability: 'polygon' },
+    { id: 'select', label: 'Select', Icon: Hand, capability: null, group: 'navigate' },
+    { id: 'addBox', label: 'Add box', Icon: Plus, capability: 'bbox', group: 'draw' },
+    {
+        id: 'addPolygon',
+        label: 'Polygon',
+        Icon: Pencil,
+        capability: 'polygon',
+        group: 'draw',
+    },
+    { id: 'smooth', label: 'Smooth', Icon: Spline, capability: 'polygon', group: 'draw' },
     {
         id: 'editCalibration',
         label: 'Calibrate',
         Icon: Ruler,
         capability: 'calibration',
+        group: 'measure',
     },
-    { id: 'undo', label: 'Undo', Icon: Undo2, capability: null },
-    { id: 'redo', label: 'Redo', Icon: Redo2, capability: null },
-    { id: 'reset', label: 'Reset', Icon: RotateCcw, capability: null },
+    { id: 'undo', label: 'Undo', Icon: Undo2, capability: null, group: 'history' },
+    { id: 'redo', label: 'Redo', Icon: Redo2, capability: null, group: 'history' },
+    { id: 'reset', label: 'Reset', Icon: RotateCcw, capability: null, group: 'history' },
 ];
 
 interface AnnotationToolbarProps {
@@ -89,11 +98,11 @@ export function AnnotationToolbar({
             role="toolbar"
             aria-label="Annotation toolbar"
             className={cn(
-                'flex items-center gap-1 rounded-lg border bg-card p-1 shadow-sm',
+                'flex items-center gap-0.5 rounded-md border border-border bg-card p-1 shadow-sm',
                 className,
             )}
         >
-            {TOOLS.map((tool) => {
+            {TOOLS.map((tool, idx) => {
                 const capDisabled =
                     tool.capability !== null && !caps[tool.capability];
                 const overrideDisabled = forceDisabled?.[tool.id] ?? false;
@@ -102,6 +111,8 @@ export function AnnotationToolbar({
                     ? disabledReason(tool.capability!, organism)
                     : tool.label;
                 const isActive = activeTool === tool.id;
+                const prevGroup = idx > 0 ? TOOLS[idx - 1].group : tool.group;
+                const showSeparator = idx > 0 && prevGroup !== tool.group;
                 const button = (
                     <Button
                         key={tool.id}
@@ -112,6 +123,7 @@ export function AnnotationToolbar({
                         aria-label={tool.label}
                         aria-pressed={isActive}
                         data-tool-id={tool.id}
+                        className="h-8 w-8"
                         onClick={
                             disabled || !onSelectTool
                                 ? undefined
@@ -122,13 +134,21 @@ export function AnnotationToolbar({
                     </Button>
                 );
                 return (
-                    <Tooltip key={tool.id}>
-                        <TooltipTrigger asChild>
-                            {/* Tooltip needs a focusable child even when disabled. */}
-                            <span className="inline-flex">{button}</span>
-                        </TooltipTrigger>
-                        <TooltipContent>{reason}</TooltipContent>
-                    </Tooltip>
+                    <span key={tool.id} className="inline-flex items-center">
+                        {showSeparator && (
+                            <span
+                                aria-hidden
+                                className="mx-1 h-5 w-px shrink-0 bg-border"
+                            />
+                        )}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                {/* Tooltip needs a focusable child even when disabled. */}
+                                <span className="inline-flex">{button}</span>
+                            </TooltipTrigger>
+                            <TooltipContent>{reason}</TooltipContent>
+                        </Tooltip>
+                    </span>
                 );
             })}
         </div>

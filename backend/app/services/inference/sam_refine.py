@@ -28,7 +28,12 @@ import numpy as np
 if TYPE_CHECKING:
     from ultralytics import SAM as _SAMType  # noqa: N811
 
-    from app.schemas.config import LarvaeConfig, LarvaeSamConfig
+    from app.schemas.config import (
+        LarvaeConfig,
+        LarvaeSamConfig,
+        PupaeConfig,
+        PupaeSamConfig,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,47 @@ def _auto_device(preferred: str | None) -> str:
         return "cpu"
 
 
+def _polygon_iou(poly_a: np.ndarray, poly_b: np.ndarray) -> float:
+    """Compute IoU over the combined polygon ROI."""
+    a = np.asarray(poly_a, dtype=np.float32).reshape(-1, 2)
+    b = np.asarray(poly_b, dtype=np.float32).reshape(-1, 2)
+    if len(a) < 3 or len(b) < 3:
+        return 0.0
+
+    x_min = int(np.floor(min(a[:, 0].min(), b[:, 0].min()))) - 5
+    y_min = int(np.floor(min(a[:, 1].min(), b[:, 1].min()))) - 5
+    x_max = int(np.ceil(max(a[:, 0].max(), b[:, 0].max()))) + 5
+    y_max = int(np.ceil(max(a[:, 1].max(), b[:, 1].max()))) + 5
+    roi_w = x_max - x_min + 1
+    roi_h = y_max - y_min + 1
+    if roi_w <= 0 or roi_h <= 0:
+        return 0.0
+
+    # Extremely large prompt failures should not allocate huge masks. Bbox IoU
+    # is conservative enough for rejecting obviously shifted SAM masks.
+    if roi_w * roi_h > 500_000:
+        ax1, ay1 = float(a[:, 0].min()), float(a[:, 1].min())
+        ax2, ay2 = float(a[:, 0].max()), float(a[:, 1].max())
+        bx1, by1 = float(b[:, 0].min()), float(b[:, 1].min())
+        bx2, by2 = float(b[:, 0].max()), float(b[:, 1].max())
+        inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+        inter = inter_w * inter_h
+        area_a = max(0.0, (ax2 - ax1) * (ay2 - ay1))
+        area_b = max(0.0, (bx2 - bx1) * (by2 - by1))
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    offset = np.array([x_min, y_min], dtype=np.float32)
+    mask_a = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    mask_b = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    cv2.fillPoly(mask_a, [(a - offset).astype(np.int32)], 1)
+    cv2.fillPoly(mask_b, [(b - offset).astype(np.int32)], 1)
+    inter = int(np.logical_and(mask_a, mask_b).sum())
+    union = int(np.logical_or(mask_a, mask_b).sum())
+    return inter / union if union > 0 else 0.0
+
+
 class SamRefinementService:
     """Lazy-loaded SAM refiner. One model instance, thread-safe load."""
 
@@ -77,6 +123,7 @@ class SamRefinementService:
         self._loaded_signature: tuple[str, str] | None = None  # (weights_path, device)
         self._device_cache: dict[str, str] = {}
         self._load_lock = threading.Lock()
+        self._refine_lock = threading.Lock()
         # Bounded concurrency — SAM models are heavy; one at a time on CPU,
         # one at a time on GPU (Ultralytics SAM is not batch-safe for our
         # per-crop loop). Override here if profiling later suggests more.
@@ -104,7 +151,11 @@ class SamRefinementService:
         # Final fallback: let Ultralytics resolve / download by short name.
         return Path(model_name)
 
-    def _ensure_model(self, sam_cfg: "LarvaeSamConfig", larvae_device: str) -> "_SAMType":
+    def _ensure_model(
+        self,
+        sam_cfg: "LarvaeSamConfig | PupaeSamConfig",
+        larvae_device: str,
+    ) -> "_SAMType":
         preferred = sam_cfg.device or larvae_device
         device = self._device_cache.get(preferred)
         if device is None:
@@ -119,7 +170,9 @@ class SamRefinementService:
             from ultralytics import SAM
 
             logger.info(
-                "Loading SAM model weights=%s device=%s", weights, device,
+                "Loading SAM model weights=%s device=%s",
+                weights,
+                device,
                 extra={"context": {"sam_weights": str(weights), "device": device}},
             )
             model = SAM(str(weights))
@@ -127,7 +180,9 @@ class SamRefinementService:
                 model.to(device)
             except (RuntimeError, AssertionError) as exc:
                 logger.warning(
-                    "SAM .to(%s) failed (%s) — falling back to CPU", device, exc,
+                    "SAM .to(%s) failed (%s) — falling back to CPU",
+                    device,
+                    exc,
                 )
                 device = "cpu"
                 self._device_cache[preferred] = device
@@ -178,7 +233,9 @@ class SamRefinementService:
                 import torch
 
                 with torch.inference_mode():
-                    results = model(crop, bboxes=[local_bbox], verbose=False, half=False)
+                    results = model(
+                        crop, bboxes=[local_bbox], verbose=False, half=False
+                    )
             except ImportError:
                 results = model(crop, bboxes=[local_bbox], verbose=False, half=False)
         except (RuntimeError, ValueError) as exc:
@@ -207,6 +264,27 @@ class SamRefinementService:
         poly_local = main_contour.squeeze(axis=1).astype(np.float32)
         poly_arr = poly_local + np.array([cx1, cy1], dtype=np.float32)
         new_area = float(cv2.contourArea(poly_arr))
+        old_poly = np.asarray(candidate.get("polygon"), dtype=np.float32).reshape(-1, 2)
+        old_area = float(candidate.get("area") or cv2.contourArea(old_poly))
+        if old_area <= 0:
+            return None
+        area_ratio = new_area / old_area
+        if area_ratio < min_area_ratio or area_ratio > max_area_ratio:
+            logger.debug(
+                "Rejecting SAM mask by area ratio %.3f outside [%.3f, %.3f]",
+                area_ratio,
+                min_area_ratio,
+                max_area_ratio,
+            )
+            return None
+        iou_vs_yolo = _polygon_iou(old_poly, poly_arr)
+        if iou_vs_yolo < min_iou_vs_yolo:
+            logger.debug(
+                "Rejecting SAM mask by IoU %.3f below %.3f",
+                iou_vs_yolo,
+                min_iou_vs_yolo,
+            )
+            return None
 
         x1 = int(poly_arr[:, 0].min())
         y1 = int(poly_arr[:, 1].min())
@@ -223,7 +301,7 @@ class SamRefinementService:
         self,
         image: np.ndarray,
         candidates: list[dict[str, Any]],
-        cfg: "LarvaeConfig",
+        cfg: "LarvaeConfig | PupaeConfig",
     ) -> list[dict[str, Any]]:
         """Refine every candidate polygon in-place (returns a new list).
 
@@ -268,23 +346,31 @@ class SamRefinementService:
         n_skipped = len(candidates) - len(needs_refine)
         n_failed = 0
         t0 = time.time()
-        for idx in needs_refine:
-            cand = candidates[idx]
-            new = self._refine_one(
-                model, image, cand, padding,
-                min_area_ratio=min_ratio,
-                max_area_ratio=max_ratio,
-                min_iou_vs_yolo=min_iou,
-            )
-            if new is None:
-                n_failed += 1
-                continue
-            refined[idx] = new
-            n_refined += 1
+        with self._refine_lock:
+            for idx in needs_refine:
+                cand = candidates[idx]
+                new = self._refine_one(
+                    model,
+                    image,
+                    cand,
+                    padding,
+                    min_area_ratio=min_ratio,
+                    max_area_ratio=max_ratio,
+                    min_iou_vs_yolo=min_iou,
+                )
+                if new is None:
+                    n_failed += 1
+                    continue
+                refined[idx] = new
+                n_refined += 1
 
         logger.info(
             "SAM refine: %d refined / %d skipped / %d failed (%d total) in %.2fs",
-            n_refined, n_skipped, n_failed, len(candidates), time.time() - t0,
+            n_refined,
+            n_skipped,
+            n_failed,
+            len(candidates),
+            time.time() - t0,
             extra={
                 "context": {
                     "refined": n_refined,
@@ -302,7 +388,7 @@ class SamRefinementService:
         self,
         image: np.ndarray,
         candidates: list[dict[str, Any]],
-        cfg: "LarvaeConfig",
+        cfg: "LarvaeConfig | PupaeConfig",
     ) -> list[dict[str, Any]]:
         if not cfg.sam.enabled or not candidates:
             return candidates

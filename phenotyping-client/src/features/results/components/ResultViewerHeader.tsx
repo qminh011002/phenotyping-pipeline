@@ -53,9 +53,9 @@ export function ResultViewerHeader({
     }
 
     return (
-        <header className="bg-card grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b px-5 py-2.5">
+        <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2">
             {/* Left — back + batch name + filename */}
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
                 <Button
                     variant="ghost"
                     size="icon"
@@ -66,10 +66,10 @@ export function ResultViewerHeader({
                     <ArrowLeft className="h-4 w-4" />
                 </Button>
 
-                <div className="flex min-w-0 flex-col gap-0.5">
-                    <div className="flex min-w-0 items-center gap-2 text-sm">
+                <div className="flex min-w-0 flex-col">
+                    <div className="flex min-w-0 items-center gap-2 text-sm leading-tight">
                         <span
-                            className="truncate font-semibold text-foreground"
+                            className="truncate font-semibold tracking-tight text-foreground"
                             title={batchName ?? ''}
                         >
                             {batchName ?? 'Untitled batch'}
@@ -86,8 +86,8 @@ export function ResultViewerHeader({
                         onClick={copyFilename}
                         title="Click to copy filename"
                         className={cn(
-                            'group flex max-w-full items-center gap-1.5 -mx-0.5 px-0.5',
-                            'rounded-sm text-left font-mono text-xs text-muted-foreground',
+                            'group flex max-w-full items-center gap-1 -mx-0.5 px-0.5',
+                            'rounded-sm text-left font-mono text-[11px] leading-snug text-muted-foreground',
                             'hover:text-foreground',
                             'focus:outline-none focus-visible:ring-[2px] focus-visible:ring-ring/60 focus-visible:text-foreground',
                         )}
@@ -120,11 +120,11 @@ export function ResultViewerHeader({
                         Auto-saving
                     </span>
                 )}
-                <Button size="sm" onClick={onFinish} disabled={finishing} className="gap-2">
+                <Button size="sm" onClick={onFinish} disabled={finishing} className="h-8 gap-1.5">
                     {finishing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                        <Check className="h-4 w-4" />
+                        <Check className="h-3.5 w-3.5" />
                     )}
                     {finishing ? 'Saving…' : isSaved ? 'Save' : 'Finish'}
                 </Button>

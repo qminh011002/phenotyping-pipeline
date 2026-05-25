@@ -101,7 +101,9 @@ class SamModelService:
 
     # ── Mutations ───────────────────────────────────────────────────────────
 
-    async def save_uploaded(self, original_filename: str, src_path: Path) -> SamModelFile:
+    async def save_uploaded(
+        self, original_filename: str, src_path: Path
+    ) -> SamModelFile:
         """Move ``src_path`` into the SAM weights dir under a safe name."""
         safe = _safe_filename(original_filename)
         target = self._weights_dir / safe
@@ -109,7 +111,9 @@ class SamModelService:
         # upload). Refinement will pick up the new weights on its next load.
         await asyncio.to_thread(shutil.move, str(src_path), str(target))
         logger.info(
-            "Saved SAM weights %s (%d bytes)", target, target.stat().st_size,
+            "Saved SAM weights %s (%d bytes)",
+            target,
+            target.stat().st_size,
             extra={"context": {"filename": safe}},
         )
         entry = self.find(safe)
@@ -130,7 +134,9 @@ class SamModelService:
             )
         target.unlink()
         logger.info(
-            "Deleted SAM weights %s", target, extra={"context": {"filename": target.name}}
+            "Deleted SAM weights %s",
+            target,
+            extra={"context": {"filename": target.name}},
         )
 
     def set_active(self, filename: str) -> SamModelFile:
@@ -140,7 +146,8 @@ class SamModelService:
             raise SamModelNotFoundError(f"SAM model not found: {filename!r}")
         self._config.update_larvae_sam({"model": target.name})
         logger.info(
-            "Activated SAM model %s", target.name,
+            "Activated SAM model %s",
+            target.name,
             extra={"context": {"filename": target.name}},
         )
         entry = self.find(target.name)

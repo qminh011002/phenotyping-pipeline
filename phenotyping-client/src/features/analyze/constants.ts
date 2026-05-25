@@ -5,7 +5,6 @@ import {
     Sprout,
     Bug,
     Worm,
-    VectorSquare,
     Hash,
     Lasso,
     RulerDimensionLine,
@@ -42,8 +41,6 @@ export const MODES: ModeDef[] = [
     { id: 'camera', label: 'Camera', icon: Camera, available: false },
 ];
 
-const BOUNDING_BOXES: BadgeDef = { label: 'Bounding Boxes', icon: VectorSquare };
-const COUNTS: BadgeDef = { label: 'Counts', icon: Hash };
 const COUNT: BadgeDef = { label: 'Count', icon: Hash };
 const SEGMENTATION: BadgeDef = { label: 'Segmentation', icon: Lasso };
 const MEASURING: BadgeDef = { label: 'Measuring', icon: RulerDimensionLine };
@@ -51,35 +48,35 @@ const WEIGHT: BadgeDef = { label: 'Weight', icon: Weight };
 
 export const PROJECT_TYPES: ProjectTypeDef[] = [
     {
-        id: 'neonate',
-        label: 'Neonate',
-        description: 'Detect newly hatched neonates — tiled inference with bounding boxes.',
-        badges: [BOUNDING_BOXES, COUNTS],
+        id: 'larvae',
+        label: 'Larvae',
+        description: 'Segment larvae and measure length, width and estimated weight.',
+        badges: [COUNT, SEGMENTATION, MEASURING, WEIGHT],
         available: true,
-        icon: Sprout,
-    },
-    {
-        id: 'egg',
-        label: 'Egg',
-        description: 'Per-image egg detection with NMS deduplication across tiles.',
-        badges: [BOUNDING_BOXES, COUNTS],
-        available: true,
-        icon: Microscope,
+        icon: Worm,
     },
     {
         id: 'pupae',
         label: 'Pupae',
-        description: 'Segment individual pupae and measure size and weight.',
-        badges: [SEGMENTATION, COUNT, MEASURING, WEIGHT],
+        description: 'Segment pupae and measure length, width and estimated weight.',
+        badges: [COUNT, SEGMENTATION, MEASURING, WEIGHT],
         available: true,
         icon: Bug,
     },
     {
-        id: 'larvae',
-        label: 'Larvae',
-        description: 'Segment larvae instances and measure size and weight.',
-        badges: [SEGMENTATION, COUNT, MEASURING, WEIGHT],
+        id: 'egg',
+        label: 'Egg',
+        description: 'Count eggs per image. Counts only — no size or weight output.',
+        badges: [COUNT],
         available: true,
-        icon: Worm,
+        icon: Microscope,
+    },
+    {
+        id: 'neonate',
+        label: 'Neonate',
+        description: 'Count newly hatched neonates. Counts only — no size or weight output.',
+        badges: [COUNT],
+        available: true,
+        icon: Sprout,
     },
 ];

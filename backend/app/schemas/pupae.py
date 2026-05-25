@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.calibration import CalibrationCorners
+from app.schemas.larvae import WeightStats
 
 Point2D = tuple[int, int]
 
@@ -88,6 +89,7 @@ class PupaeMeasurement(BaseModel):
     centerline: list[tuple[float, float]] | None = None
     widths: list[float] | None = None
     weight_mg: float | None = Field(default=None, ge=0.0)
+    weight_area_ratio: float | None = Field(default=None, ge=0.0)
     is_stale: bool = False
     measured_at: datetime | None = None
 
@@ -118,6 +120,7 @@ class StoredPupaeAnnotation(PupaeAnnotation):
 class PupaeImageDetail(BaseModel):
     image_id: str
     original_filename: str
+    total_weight_mg: float | None = Field(default=None, ge=0.0)
     overlay_url: str | None = None
     warped_url: str | None = None
     raw_url: str | None = None
@@ -136,6 +139,7 @@ class PupaeBatchDetail(BaseModel):
     detection_model: str | None = None
     sam_model: str | None = None
     images: list[PupaeImageDetail] = Field(default_factory=list)
+    weight_stats: WeightStats | None = None
 
 
 class MeasurePupaeRequest(BaseModel):

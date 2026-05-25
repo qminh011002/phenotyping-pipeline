@@ -33,27 +33,41 @@ export default function RecordedPage() {
 
     return (
         <div className="flex flex-col h-full">
-            <header className="px-6 py-3">
-                <SearchFilters filters={filters} onFiltersChange={setFilters} total={total} />
+            <header className="border-b border-border bg-background px-6 pb-4 pt-5">
+                <div className="mx-auto w-full max-w-screen-2xl space-y-4">
+                    <div className="flex flex-wrap items-end justify-between gap-2">
+                        <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                History
+                            </p>
+                            <h1 className="mt-1 text-xl font-semibold tracking-tight">
+                                Recorded batches
+                            </h1>
+                        </div>
+                    </div>
+                    <SearchFilters filters={filters} onFiltersChange={setFilters} total={total} />
+                </div>
             </header>
 
             {/* Batch grid */}
             <motion.div
-                className="flex-1 overflow-y-auto p-6"
+                className="flex-1 overflow-y-auto px-6 py-5"
                 variants={listContainerVariants}
                 initial="hidden"
                 animate="visible"
             >
-                <BatchList
-                    batches={batches}
-                    page={page}
-                    totalPages={totalPages}
-                    loading={loading}
-                    error={error}
-                    onPageChange={setPage}
-                    onDelete={deleteBatch}
-                    itemVariants={listItemVariants}
-                />
+                <div className="mx-auto w-full max-w-screen-2xl">
+                    <BatchList
+                        batches={batches}
+                        page={page}
+                        totalPages={totalPages}
+                        loading={loading}
+                        error={error}
+                        onPageChange={setPage}
+                        onDelete={deleteBatch}
+                        itemVariants={listItemVariants}
+                    />
+                </div>
             </motion.div>
         </div>
     );

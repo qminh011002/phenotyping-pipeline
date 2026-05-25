@@ -144,8 +144,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     _set_mr(registry)
 
-    # Create ThreadPoolExecutor sized by device
-    device = registry.device
+    # Create ThreadPoolExecutor sized by the loaded model devices. Older code
+    # only looked at egg.device; larvae/pupae can be on GPU even when egg is CPU.
+    loaded_devices = [
+        registry.device_for(org)
+        for org, model_status in registry.models_status.items()
+        if model_status == "loaded"
+    ]
+    device = "cuda" if any(d != "cpu" for d in loaded_devices) else "cpu"
     n_workers = 1 if device == "cpu" else 2
     executor = ThreadPoolExecutor(
         max_workers=n_workers, thread_name_prefix="inference_worker"

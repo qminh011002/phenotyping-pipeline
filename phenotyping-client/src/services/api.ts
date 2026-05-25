@@ -23,6 +23,8 @@ import type {
     EggConfig,
     FailBatchResponse,
     HealthResponse,
+    ImageTotalWeightResult,
+    ImageTotalWeightUpdate,
     LarvaeBatchDetail,
     LarvaeConfig,
     LarvaeDetectionResult,
@@ -500,6 +502,18 @@ export async function measureLarvae(
 ): Promise<LarvaeMeasurementResult> {
     return http.post<LarvaeMeasurementResult>(
         `measure/larvae?image_id=${encodeURIComponent(imageId)}`,
+        payload,
+    );
+}
+
+/** PUT /analyses/images/{image_id}/total-weight — set per-image total weight
+ *  and redistribute across measurements proportionally to area. */
+export async function setImageTotalWeight(
+    imageId: string,
+    payload: ImageTotalWeightUpdate,
+): Promise<ImageTotalWeightResult> {
+    return http.put<ImageTotalWeightResult>(
+        `analyses/images/${imageId}/total-weight`,
         payload,
     );
 }

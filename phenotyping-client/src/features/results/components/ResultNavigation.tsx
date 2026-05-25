@@ -28,30 +28,33 @@ export function ResultNavigation({ total, currentIndex, onNavigate }: ResultNavi
     }, [currentIndex, hasPrev, hasNext, onNavigate]);
 
     return (
-        <div className="flex items-center gap-3">
+        <div className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5">
             <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 disabled={!hasPrev}
                 onClick={() => onNavigate(currentIndex - 1)}
                 title="Previous (←)"
-                className="h-8 w-8"
+                aria-label="Previous image"
+                className="h-7 w-7"
             >
                 <ChevronLeft className="h-4 w-4" />
             </Button>
 
-            <span className="text-sm tabular-nums font-medium">
-                Image <span className="font-mono">{currentIndex + 1}</span> of{' '}
+            <span className="px-2 text-xs font-medium text-foreground tabular-nums">
+                <span className="font-mono">{currentIndex + 1}</span>
+                <span className="text-muted-foreground"> / </span>
                 <span className="font-mono">{total}</span>
             </span>
 
             <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
                 disabled={!hasNext}
                 onClick={() => onNavigate(currentIndex + 1)}
                 title="Next (→)"
-                className="h-8 w-8"
+                aria-label="Next image"
+                className="h-7 w-7"
             >
                 <ChevronRight className="h-4 w-4" />
             </Button>

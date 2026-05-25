@@ -172,8 +172,29 @@ export interface LarvaeMeasurement {
     /** Per-segment widths along the centerline. */
     widths?: number[] | null;
     weight_mg?: number | null;
+    /** weight_mg / area_mm2 — computed server-side on read; not persisted. */
+    weight_area_ratio?: number | null;
     is_stale: boolean;
     measured_at?: string | null; // ISO-8601
+}
+
+export interface WeightStats {
+    count: number;
+    total_biomass_mg: number | null;
+    mean: number | null;
+    median: number | null;
+    min: number | null;
+    max: number | null;
+    std: number | null;
+    cv: number | null;
+    p5: number | null;
+    p25: number | null;
+    p75: number | null;
+    p95: number | null;
+    iqr: number | null;
+    skewness: number | null;
+    kurtosis: number | null;
+    avg_weight_area_ratio: number | null;
 }
 
 export interface LarvaeMeasurementResult {
@@ -193,6 +214,8 @@ export interface StoredLarvaeAnnotation extends LarvaeAnnotation {
 export interface LarvaeImageDetail {
     image_id: string;
     original_filename: string;
+    /** User-entered total weight for this image, distributed across measurements. */
+    total_weight_mg: number | null;
     overlay_url: string | null;
     /** Warped raw (no marks) used by LarvaePolygonEditor as its backing image. */
     warped_url: string | null;
@@ -215,6 +238,18 @@ export interface LarvaeBatchDetail {
     /** SAM model filename snapshotted at batch creation. Null on legacy batches. */
     sam_model: string | null;
     images: LarvaeImageDetail[];
+    weight_stats: WeightStats | null;
+}
+
+/** Body for PUT /analyses/images/{image_id}/total-weight */
+export interface ImageTotalWeightUpdate {
+    total_weight_mg: number | null;
+}
+
+export interface ImageTotalWeightResult {
+    image_id: string;
+    total_weight_mg: number | null;
+    measurements_updated: number;
 }
 
 /** Body for PUT /calibration/{image_id} — at least one branch required. */

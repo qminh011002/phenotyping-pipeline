@@ -90,6 +90,14 @@ interface LarvaePolygonEditorProps {
     calibrationCorners?: Corners | null;
     onCalibrationCornersChange?: (next: Corners) => void;
 
+    /**
+     * When false, hide the polygon overlay layer (and the dim spotlight) so
+     * the user sees the raw underlying image. Matches OverlayImage's
+     * `dimEnabled` behavior for egg/neonate — bound to Ctrl/Cmd-hold in the
+     * parent. Defaults to true.
+     */
+    overlayVisible?: boolean;
+
     onDimensions?: (w: number, h: number) => void;
     className?: string;
 }
@@ -135,6 +143,7 @@ export function LarvaePolygonEditor({
     previewPolygon,
     calibrationCorners,
     onCalibrationCornersChange,
+    overlayVisible = true,
     onDimensions,
     className,
 }: LarvaePolygonEditorProps) {
@@ -176,6 +185,22 @@ export function LarvaePolygonEditor({
      */
     const polygonDragRef = useRef<PolygonDragState | null>(null);
     const [polygonDragging, setPolygonDragging] = useState(false);
+    /**
+     * Detection id of the polygon being **body-dragged** (not just selected).
+     * When non-null:
+     *   - The polygon (and its handles) in the main SVG is hidden via
+     *     `visibility="hidden"`. Pointer capture continues to receive events.
+     *   - A copy of the polygon is rendered in a separate overlay <svg> that
+     *     has its own GPU compositing layer (`will-change: transform`).
+     *   - Per-frame movement is applied as a CSS transform on the overlay
+     *     element — compositor-only update, no re-rasterization of either
+     *     the main SVG or the overlay's cached layer.
+     * This is the key fix for slow-drag stutter: mutating an SVG attribute
+     * on a child invalidates the parent SVG's backing store every frame.
+     */
+    const [draggingPolygonId, setDraggingPolygonId] = useState<string | null>(null);
+    /** Overlay SVG element ref — owns the dragged-polygon copy. */
+    const dragOverlayRef = useRef<SVGSVGElement | null>(null);
     /**
      * rAF handle for the SVG pointermove → vertex/polygon drag preview path.
      * Pointermove can fire faster than 60 Hz on high-rate input devices, and
@@ -244,6 +269,7 @@ export function LarvaePolygonEditor({
             setVertexDragging(false);
             polygonDragRef.current = null;
             setPolygonDragging(false);
+            setDraggingPolygonId(null);
             if (dragRafRef.current != null) {
                 cancelAnimationFrame(dragRafRef.current);
                 dragRafRef.current = null;
@@ -259,6 +285,9 @@ export function LarvaePolygonEditor({
                 if (poly) poly.style.willChange = '';
                 if (handles) handles.style.willChange = '';
             }
+            // Clear any leftover transform/visibility on the overlay element.
+            const overlay = dragOverlayRef.current;
+            if (overlay) overlay.style.transform = '';
             onInteractionChange?.(false);
             setDrawingVertices([]);
             setDrawCursor(null);
@@ -322,23 +351,22 @@ export function LarvaePolygonEditor({
     );
 
     const setPolygonTranslatePreview = useCallback(
-        (detectionId: string, dx: number, dy: number) => {
-            const transform =
-                dx !== 0 || dy !== 0 ? `translate(${dx} ${dy})` : '';
-            // Skip the mask polygon — the dim overlay is hidden during drag,
-            // so mutating the mask's transform every frame is wasted work
-            // (it'd force a paint of the mask layer for no visible effect).
-            const nodes: Array<SVGElement | undefined> = [
-                polygonNodeRefs.current.get(detectionId),
-                handleGroupRefs.current.get(detectionId),
-            ];
-            for (const node of nodes) {
-                if (!node) continue;
-                if (transform) node.setAttribute('transform', transform);
-                else node.removeAttribute('transform');
+        (_detectionId: string, dx: number, dy: number) => {
+            // The dragged polygon is rendered in a separate overlay <svg>
+            // (see draggingPolygonId state). Movement is applied as a CSS
+            // transform on the overlay element — compositor-only, no
+            // re-rasterization of the main SVG. The CSS unit is screen
+            // pixels, whereas dx/dy are in image-space user units; multiply
+            // by the current zoom scale to land them on the right spot.
+            const overlay = dragOverlayRef.current;
+            if (!overlay) return;
+            if (dx !== 0 || dy !== 0) {
+                overlay.style.transform = `translate(${dx * scale}px, ${dy * scale}px)`;
+            } else {
+                overlay.style.transform = '';
             }
         },
-        [],
+        [scale],
     );
 
     const setVertexPreview = useCallback(
@@ -416,6 +444,13 @@ export function LarvaePolygonEditor({
 
     const beginDragPerfMode = useCallback(() => {
         refreshDragCtmInverse();
+        // Promote the SVG to its own compositing layer for the duration of
+        // the drag — same trick startPan uses (line 540-541). Individual SVG
+        // children don't get their own layers, so the existing per-polygon
+        // `willChange = 'transform'` hint is a no-op; the only handle the
+        // browser respects in SVG is on the root <svg> element.
+        const svg = svgRef.current;
+        if (svg) svg.style.willChange = 'transform';
     }, [refreshDragCtmInverse]);
 
     /**
@@ -431,6 +466,15 @@ export function LarvaePolygonEditor({
         const handles = handleGroupRefs.current.get(detectionId);
         if (poly) poly.style.willChange = 'transform';
         if (handles) handles.style.willChange = 'transform';
+        // Disable pointer-events on every OTHER polygon while one is being
+        // dragged. SVG `<polygon>` defaults to `visiblePainted` hit-testing —
+        // when the dragged polygon visually slides over a complex underlying
+        // polygon the browser still computes boundary events on it. Switch
+        // it off entirely; pointer capture on the dragged element keeps the
+        // drag pipeline working.
+        polygonNodeRefs.current.forEach((node, id) => {
+            if (id !== detectionId) node.style.pointerEvents = 'none';
+        });
     }, []);
 
     const releaseDetectionLayer = useCallback(() => {
@@ -441,11 +485,26 @@ export function LarvaePolygonEditor({
         const handles = handleGroupRefs.current.get(id);
         if (poly) poly.style.willChange = '';
         if (handles) handles.style.willChange = '';
+        // Restore pointer-events on every polygon.
+        polygonNodeRefs.current.forEach((node) => {
+            node.style.pointerEvents = '';
+        });
     }, []);
 
     const endDragPerfMode = useCallback(() => {
         dragCtmInverseRef.current = null;
         releaseDetectionLayer();
+        // Release the SVG layer hint. Pair with the `willChange = 'transform'`
+        // set in beginDragPerfMode (and the same pattern in startPan).
+        const svg = svgRef.current;
+        if (svg) svg.style.willChange = '';
+        // Reset the overlay element's CSS transform so a future drag starts
+        // from translate(0, 0). The draggingPolygonId state itself is cleared
+        // by the caller (so React removes the overlay copy from the DOM at
+        // the same commit that re-renders the main SVG polygon with its new
+        // vertex positions — avoiding a one-frame double image).
+        const overlay = dragOverlayRef.current;
+        if (overlay) overlay.style.transform = '';
     }, [releaseDetectionLayer]);
 
     // ── Pan / zoom (only when not editing) ──────────────────────────────────
@@ -629,6 +688,13 @@ export function LarvaePolygonEditor({
             polyDrag.moved = Math.hypot(dx, dy);
             if (polyDrag.moved > POLYGON_DRAG_THRESHOLD_PX) {
                 if (!polygonDragging) setPolygonDragging(true);
+                // Move the polygon into the overlay <svg> so subsequent
+                // movement is just a CSS transform on a separately-composited
+                // layer. This is the crucial step that stops the main SVG
+                // from re-rasterizing every frame during slow drag.
+                if (draggingPolygonId !== polyDrag.detectionId) {
+                    setDraggingPolygonId(polyDrag.detectionId);
+                }
                 // Promote the dragged polygon's nodes to their own layer
                 // *only once* movement actually starts — that way a click
                 // intent (pointerdown without drag) doesn't pay the cost.
@@ -639,6 +705,7 @@ export function LarvaePolygonEditor({
     }, [
         dims,
         polygonDragging,
+        draggingPolygonId,
         promoteDetectionLayer,
         setPolygonTranslatePreview,
         setVertexPreview,
@@ -692,6 +759,12 @@ export function LarvaePolygonEditor({
             if (drag) endDragPerfMode();
             const wasDragging = drag !== null && drag.moved > POLYGON_DRAG_THRESHOLD_PX;
             setPolygonDragging(false);
+            // Remove the overlay <svg> copy of the dragged polygon. React
+            // commits this state change in the same batch as the parent's
+            // `onTranslatePolygon` update, so the main-SVG polygon is
+            // revealed at its new vertex positions on the same frame the
+            // overlay disappears — no visible flicker.
+            if (draggingPolygonId !== null) setDraggingPolygonId(null);
             if (drag) setPolygonTranslatePreview(drag.detectionId, 0, 0);
             if (wasDragging && drag) {
                 onTranslatePolygon(drag.detectionId, drag.dx, drag.dy);
@@ -724,6 +797,7 @@ export function LarvaePolygonEditor({
             onTranslatePolygon,
             onInteractionChange,
             setPolygonTranslatePreview,
+            draggingPolygonId,
         ],
     );
 
@@ -829,6 +903,7 @@ export function LarvaePolygonEditor({
             setPolygonTranslatePreview(polygonDrag.detectionId, 0, 0);
             polygonDragRef.current = null;
             setPolygonDragging(false);
+            if (draggingPolygonId !== null) setDraggingPolygonId(null);
             onInteractionChange?.(false);
         }
     }
@@ -936,6 +1011,14 @@ export function LarvaePolygonEditor({
     const showEditPanel =
         !!selectedDetectionId && tool === 'select' && !calibrationCorners;
 
+    // Memoized snapshot of the polygon currently being body-dragged. Used
+    // by the dedicated overlay <svg> below. Recomputes only when the
+    // dragging id or polygons array changes — not per-frame.
+    const draggingPolygon = useMemo<WorkingPolygon | null>(() => {
+        if (!draggingPolygonId) return null;
+        return polygons.find((p) => p.detection_id === draggingPolygonId) ?? null;
+    }, [draggingPolygonId, polygons]);
+
     // ── Render helpers ──────────────────────────────────────────────────────
     const cursor = useMemo(() => {
         if (vertexDragging) return 'grabbing';
@@ -963,17 +1046,17 @@ export function LarvaePolygonEditor({
             )}
             {/* Zoom controls + saving indicator — mirrors OverlayImage's bottom-left bar. */}
             <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex items-center gap-2">
-                <div className="pointer-events-auto flex items-center rounded-[12px] border border-cyan-400/40 bg-card/70 px-1.5 py-1 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
+                <div className="pointer-events-auto flex items-center rounded-md border border-border bg-card/90 p-1 shadow-md backdrop-blur">
                     <Button
                         variant="ghost"
                         size="icon-sm"
                         title="Zoom out"
                         onClick={handleZoomOut}
-                        className="h-8 w-8 rounded-[10px] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100 disabled:text-cyan-900"
+                        className="h-7 w-7 rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
-                        <Minus className="h-4 w-4" />
+                        <Minus className="h-3.5 w-3.5" />
                     </Button>
-                    <div className="min-w-16 px-0.5 text-center font-mono text-[1.05rem] font-semibold tabular-nums tracking-[-0.03em] text-slate-100">
+                    <div className="min-w-12 px-1 text-center font-mono text-xs font-semibold tabular-nums text-foreground">
                         {Math.round(scale * 100)}%
                     </div>
                     <Button
@@ -981,29 +1064,30 @@ export function LarvaePolygonEditor({
                         size="icon-sm"
                         title="Zoom in"
                         onClick={handleZoomIn}
-                        className="h-8 w-8 rounded-[10px] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100 disabled:text-cyan-900"
+                        className="h-7 w-7 rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
-                        <Plus className="h-4 w-4" />
+                        <Plus className="h-3.5 w-3.5" />
                     </Button>
+                    <span className="mx-1 h-4 w-px bg-border" />
                     <Button
                         variant="ghost"
                         size="sm"
                         title="Fit to viewport"
                         onClick={fitToScreen}
-                        className="h-8 rounded-[10px] px-2.5 text-[11px] font-bold tracking-[0.12em] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100"
+                        className="h-7 rounded-sm px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
-                        RESET
+                        Fit
                     </Button>
                 </div>
                 <div
                     className={cn(
-                        'pointer-events-none flex items-center gap-1 rounded-[10px] border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-cyan-100 backdrop-blur transition-opacity duration-200 ease-out',
+                        'pointer-events-none flex items-center gap-1.5 rounded-md border border-border bg-card/90 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur transition-opacity duration-200 ease-out',
                         saveInProgress || savePending ? 'opacity-100' : 'opacity-0',
                     )}
                     aria-hidden={!saveInProgress && !savePending}
                 >
-                    <CloudUpload className="h-3.5 w-3.5 animate-pulse" />
-                    <span>{saveInProgress ? 'SAVING' : 'SAVE QUEUED'}</span>
+                    <CloudUpload className="h-3.5 w-3.5 animate-pulse text-primary" />
+                    <span>{saveInProgress ? 'Saving' : 'Save queued'}</span>
                 </div>
             </div>
             {tool === 'draw' && (
@@ -1104,7 +1188,18 @@ export function LarvaePolygonEditor({
                         // was clipped (dim overlay would only cover part of
                         // the image). Container's overflow-hidden does the
                         // real clipping.
-                        style={{ position: 'absolute', inset: 0, overflow: 'visible' }}
+                        style={{
+                            position: 'absolute',
+                            inset: 0,
+                            overflow: 'visible',
+                            // Ctrl/Cmd-hold reveals the raw image — match
+                            // OverlayImage's dimEnabled behavior. Pointer
+                            // events go off too so the polygons don't eat
+                            // clicks while hidden.
+                            opacity: overlayVisible ? 1 : 0,
+                            pointerEvents: overlayVisible ? undefined : 'none',
+                            transition: 'opacity 120ms ease-out',
+                        }}
                         onPointerMove={handleSvgPointerMove}
                         onPointerUp={handleSvgPointerUp}
                         onPointerCancel={cancelActiveDrag}
@@ -1178,6 +1273,8 @@ export function LarvaePolygonEditor({
                         {polygons.map((wp) => {
                             const isSelected = wp.detection_id === selectedDetectionId;
                             const isHovered = wp.detection_id === hoverId;
+                            const isBeingDragged =
+                                draggingPolygonId === wp.detection_id;
                             // Don't dim other polygons on hover — only the
                             // hovered/selected polygon gets a small lift.
                             const fillOpacity = isHovered || isSelected ? 0.45 : 0.32;
@@ -1205,6 +1302,13 @@ export function LarvaePolygonEditor({
                                     }
                                     strokeWidth={isSelected ? 2 : 1}
                                     vectorEffect="non-scaling-stroke"
+                                    // While body-dragging, hide the main-SVG
+                                    // copy; an overlay <svg> renders the
+                                    // moving copy on its own GPU layer. The
+                                    // node still receives pointer events
+                                    // (capture is on it) but the browser
+                                    // skips painting it.
+                                    visibility={isBeingDragged ? 'hidden' : 'visible'}
                                     style={{
                                         cursor: isSelected
                                             ? polygonDragging
@@ -1212,12 +1316,30 @@ export function LarvaePolygonEditor({
                                                 : 'grab'
                                             : 'pointer',
                                     }}
-                                    onMouseEnter={() => setHoverId(wp.detection_id)}
-                                    onMouseLeave={() =>
+                                    onMouseEnter={() => {
+                                        // Freeze hover state while a drag is
+                                        // in progress — otherwise crossing
+                                        // over another polygon fires
+                                        // mouseenter → setHoverId → full
+                                        // <svg> reconcile, which is the
+                                        // dominant cost of cross-over jank.
+                                        if (
+                                            polygonDragRef.current ||
+                                            vertexDragRef.current
+                                        )
+                                            return;
+                                        setHoverId(wp.detection_id);
+                                    }}
+                                    onMouseLeave={() => {
+                                        if (
+                                            polygonDragRef.current ||
+                                            vertexDragRef.current
+                                        )
+                                            return;
                                         setHoverId((cur) =>
                                             cur === wp.detection_id ? null : cur,
-                                        )
-                                    }
+                                        );
+                                    }}
                                     onPointerDown={(e) =>
                                         handlePolygonPointerDown(e, wp)
                                     }
@@ -1234,6 +1356,11 @@ export function LarvaePolygonEditor({
                                     key={`handles:${wp.detection_id}`}
                                     ref={(node) =>
                                         setHandleGroupRef(wp.detection_id, node)
+                                    }
+                                    visibility={
+                                        draggingPolygonId === wp.detection_id
+                                            ? 'hidden'
+                                            : 'visible'
                                     }
                                 >
                                     {wp.polygon.map((v, i) => (
@@ -1364,6 +1491,64 @@ export function LarvaePolygonEditor({
                         )}
 
                     </g>
+                    </svg>
+
+                    {/*
+                      Drag-overlay <svg> — renders a copy of the polygon
+                      currently being body-dragged (and its vertex handles)
+                      on its own GPU compositing layer. The main SVG above
+                      stays static during the drag; per-frame movement is
+                      applied to this overlay element's CSS transform only,
+                      which the compositor handles without re-rasterizing
+                      either SVG's backing store. The ref is always set so
+                      `setPolygonTranslatePreview` can mutate
+                      `style.transform` immediately on threshold cross.
+                    */}
+                    <svg
+                        ref={dragOverlayRef}
+                        width="100%"
+                        height="100%"
+                        style={{
+                            position: 'absolute',
+                            inset: 0,
+                            overflow: 'visible',
+                            // Pointer events go to the captured polygon in
+                            // the main SVG — the overlay is visual-only.
+                            pointerEvents: 'none',
+                            willChange: draggingPolygon ? 'transform' : 'auto',
+                            visibility: draggingPolygon ? 'visible' : 'hidden',
+                        }}
+                        aria-hidden
+                    >
+                        {draggingPolygon && (
+                            <g transform={`translate(${tx} ${ty}) scale(${scale})`}>
+                                <polygon
+                                    points={polylineFor(draggingPolygon.polygon)}
+                                    fill="#00FFFF"
+                                    fillOpacity={0.45}
+                                    stroke="#00FFFF"
+                                    strokeWidth={2}
+                                    vectorEffect="non-scaling-stroke"
+                                />
+                                {draggingPolygon.detection_id === selectedDetectionId && (
+                                    <g>
+                                        {draggingPolygon.polygon.map((v, i) => (
+                                            <rect
+                                                key={i}
+                                                x={v[0] - handleR}
+                                                y={v[1] - handleR}
+                                                width={handleR * 2}
+                                                height={handleR * 2}
+                                                fill="white"
+                                                stroke="#1f2937"
+                                                strokeWidth={1}
+                                                vectorEffect="non-scaling-stroke"
+                                            />
+                                        ))}
+                                    </g>
+                                )}
+                            </g>
+                        )}
                     </svg>
                 </>
             )}

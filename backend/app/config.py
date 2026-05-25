@@ -26,6 +26,7 @@ from app.schemas.config import (
     LarvaeConfig,
     NeonateConfig,
     PupaeConfig,
+    PupaeConfigUpdateRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,37 @@ class PipelineConfigManager:
             larvae_section["sam"] = sam_section
             merged = LarvaeConfig.model_validate(larvae_section)
             raw["larvae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_pupae(self, updates: dict[str, Any]) -> PupaeConfig:
+        """Patch top-level fields of the ``pupae`` section."""
+        PupaeConfigUpdateRequest.model_validate(updates)
+        with self._lock:
+            raw = self._load_yaml()
+            pupae_section = dict(raw.get("pupae", {}))
+            for k, v in updates.items():
+                pupae_section[k] = v
+            merged = PupaeConfig.model_validate(pupae_section)
+            raw["pupae"] = merged.model_dump(exclude_none=True)
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
+    def update_pupae_sam(self, updates: dict[str, Any]) -> PupaeConfig:
+        """Patch the ``pupae.sam`` subsection."""
+        with self._lock:
+            raw = self._load_yaml()
+            pupae_section = dict(raw.get("pupae", {}))
+            sam_section = dict(pupae_section.get("sam", {}))
+            for k, v in updates.items():
+                sam_section[k] = v
+            pupae_section["sam"] = sam_section
+            merged = PupaeConfig.model_validate(pupae_section)
+            raw["pupae"] = merged.model_dump(exclude_none=True)
             self._save_yaml(raw)
             self._cached_config = raw
             self._cached_mtime = self._file_mtime()

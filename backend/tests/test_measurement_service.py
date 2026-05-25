@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from app.schemas.calibration import CalibrationCorners
-from app.schemas.config import LarvaeConfig
+from app.schemas.config import LarvaeConfig, PupaeConfig
 from app.services.inference.centerline import (
     extract_centerline,
     fallback_centerline,
@@ -38,6 +38,21 @@ def _cfg(volume_height_ratio: float = 0.6) -> LarvaeConfig:
         mwis_score_metric="confidence",
         batch_size=1,
         larva_volume_height_ratio=volume_height_ratio,
+    )
+
+
+def _pupae_cfg(volume_height_ratio: float = 0.6) -> PupaeConfig:
+    return PupaeConfig(
+        device="cpu",
+        tile_size=320,
+        overlap=0.2,
+        confidence_threshold=0.5,
+        min_mask_size=10,
+        edge_margin=5,
+        mwis_overlap_threshold=0.3,
+        mwis_score_metric="confidence",
+        batch_size=1,
+        pupa_volume_height_ratio=volume_height_ratio,
     )
 
 
@@ -295,6 +310,21 @@ def test_measure_image_uses_provided_detection_ids(
 
     out = service.measure_image(canvas, [poly], cal, _cfg(), detection_ids=["det-xyz"])
     assert out[0].detection_id == "det-xyz"
+
+
+def test_measure_image_uses_pupae_volume_ratio(
+    service: LarvaeMeasurementService,
+) -> None:
+    canvas = np.zeros((200, 400, 3), dtype=np.uint8)
+    poly = _draw_rectangle_polygon(canvas, x=50, y=80, w=300, h=20)
+    cal = _identity_calibration(400, 200)
+
+    low = service.measure_image(canvas, [poly], cal, _pupae_cfg(0.2))[0]
+    high = service.measure_image(canvas, [poly], cal, _pupae_cfg(1.0))[0]
+
+    assert low.volume_mm3 is not None
+    assert high.volume_mm3 is not None
+    assert high.volume_mm3 > low.volume_mm3
 
 
 def test_measure_image_skips_mm_when_calibration_factors_missing(

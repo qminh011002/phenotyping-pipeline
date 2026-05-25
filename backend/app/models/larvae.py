@@ -95,15 +95,9 @@ class LarvaeCalibration(Base):
     edited_corners: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     mm_per_px_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     mm_per_px_y: Mapped[float | None] = mapped_column(Float, nullable=True)
-    calibration_object_w_mm: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
-    calibration_object_h_mm: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
-    detection_status: Mapped[str] = mapped_column(
-        _CALIBRATION_STATUS, nullable=False
-    )
+    calibration_object_w_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calibration_object_h_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    detection_status: Mapped[str] = mapped_column(_CALIBRATION_STATUS, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=_now_utc, nullable=False
     )
@@ -117,9 +111,7 @@ class LarvaeMeasurement(Base):
 
     __tablename__ = "larvae_measurement"
     __table_args__ = (
-        UniqueConstraint(
-            "detection_id", name="uq_larvae_measurement_detection_id"
-        ),
+        UniqueConstraint("detection_id", name="uq_larvae_measurement_detection_id"),
         Index("idx_larvae_measurement_detection_id", "detection_id"),
     )
 
@@ -138,9 +130,7 @@ class LarvaeMeasurement(Base):
     weight_mg: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Denormalised hint — flips TRUE when polygon/calibration changes after
     # this measurement was computed. Source of truth is timestamp comparison.
-    is_stale: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     measured_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=_now_utc, nullable=False
     )

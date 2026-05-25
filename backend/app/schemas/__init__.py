@@ -13,9 +13,12 @@ from app.schemas.config import (
     Device,
     EggConfig,
     LarvaeConfig,
+    LarvaeConfigUpdateRequest,
+    LarvaeSamConfig,
     MwisScoreMetric,
     NeonateConfig,
     PupaeConfig,
+    PupaeConfigUpdateRequest,
     PupaeSamConfig,
 )
 from app.schemas.detection import BatchDetectionResult, BBox, DetectionResult, Organism
@@ -97,8 +100,11 @@ __all__ = [
     # Config
     "EggConfig",
     "LarvaeConfig",
+    "LarvaeConfigUpdateRequest",
+    "LarvaeSamConfig",
     "NeonateConfig",
     "PupaeConfig",
+    "PupaeConfigUpdateRequest",
     "PupaeSamConfig",
     "ConfigUpdateRequest",
     "DedupMode",

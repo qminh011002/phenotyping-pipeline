@@ -1,6 +1,6 @@
 // LarvaeCalibrationBanner — status banner + edit/re-detect actions (FE-034).
 
-import { AlertCircle, Hand, Pencil, RefreshCcw, Search } from 'lucide-react';
+import { AlertCircle, Pencil, RefreshCcw, Search } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -90,21 +90,9 @@ export function LarvaeCalibrationBanner({
         );
     }
 
-    if (status === 'manual') {
-        return (
-            <Alert className={cn(className)} data-testid="larvae-calibration-banner">
-                <Hand className="h-4 w-4" />
-                <AlertTitle>Manual calibration</AlertTitle>
-                <AlertDescription>
-                    Calibration corners were set manually.
-                    {Actions}
-                </AlertDescription>
-            </Alert>
-        );
-    }
-
-    // Detected — banner is hidden; the toolbar's ruler tool and chrome already
-    // surface Drag corners / Re-detect, so a redundant card on the right is
-    // just visual noise.
+    // Detected / manual — banner is hidden. Both states mean calibration is
+    // good enough to run measurements; the toolbar's ruler tool and chrome
+    // already surface Drag corners / Re-detect, so a redundant card on the
+    // right is just visual noise.
     return null;
 }

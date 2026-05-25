@@ -107,8 +107,9 @@ class ModelRegistry:
                 custom_path=custom_assignments.get(organism),
             )
 
-        if self._statuses.get("egg") == "loaded":
-            await self._warmup("egg")
+        for organism, status in self._statuses.items():
+            if status == "loaded":
+                await self._warmup(organism)
 
         self._start_time = time.time()
         logger.info(

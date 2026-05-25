@@ -95,6 +95,9 @@ class AnalysisImage(Base):
     # FS-009: operator-corrected bounding boxes — supersedes model annotations when set.
     # List of bbox dicts (matches schema BatchDetail / EditedAnnotationsUpdate).
     edited_annotations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # User-entered total weight (mg) for this image; distributed across
+    # larvae/pupae measurements proportionally to area_mm2.
+    total_weight_mg: Mapped[float | None] = mapped_column(nullable=True)
 
     batch: Mapped["AnalysisBatch"] = relationship(
         "AnalysisBatch", back_populates="images"

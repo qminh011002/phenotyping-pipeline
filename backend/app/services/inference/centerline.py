@@ -361,9 +361,7 @@ def _prune_short_branches(g: nx.Graph, min_branch_ratio: float) -> nx.Graph:
     return g
 
 
-def _geodesic_distance_map(
-    mask: np.ndarray, seed_yx: tuple[int, int]
-) -> np.ndarray:
+def _geodesic_distance_map(mask: np.ndarray, seed_yx: tuple[int, int]) -> np.ndarray:
     """8-connected weighted Dijkstra from ``seed_yx`` over ``mask``.
 
     Returns a float32 distance map; pixels outside the mask are ``+inf``.
@@ -417,9 +415,7 @@ def _find_endpoints_geodesic(
     return (int(ep_a[0]), int(ep_a[1])), (int(ep_b[0]), int(ep_b[1]))
 
 
-def _snap_to_skeleton(
-    point: tuple[int, int], skel: np.ndarray
-) -> tuple[int, int]:
+def _snap_to_skeleton(point: tuple[int, int], skel: np.ndarray) -> tuple[int, int]:
     """Nearest skeleton pixel to ``point`` (Euclidean)."""
     ys, xs = np.where(skel)
     if len(ys) == 0:
@@ -461,9 +457,7 @@ def _find_centerline_path(
     return _longest_path_in_tree(g)
 
 
-def _resample_path(
-    path_yx: list[tuple[int, int]], n_points: int
-) -> np.ndarray:
+def _resample_path(path_yx: list[tuple[int, int]], n_points: int) -> np.ndarray:
     """Arc-length resample. Returns ``(n_points, 2)`` float64 in (x, y)."""
     pts = np.array([(x, y) for y, x in path_yx], dtype=np.float64)
     if len(pts) < 2:
@@ -511,9 +505,7 @@ def _smooth_centerline_spline(
     return np.column_stack([np.asarray(x_fit), np.asarray(y_fit)])
 
 
-def _measure_widths_from_dt(
-    path_xy: np.ndarray, dt: np.ndarray
-) -> np.ndarray:
+def _measure_widths_from_dt(path_xy: np.ndarray, dt: np.ndarray) -> np.ndarray:
     """Bilinear-interpolated ``dt * 2`` along the path."""
     h, w = dt.shape
     xs = np.clip(path_xy[:, 0], 0, w - 1)
@@ -567,7 +559,7 @@ def hybrid_centerline(
     ep_a, ep_b = endpoints
 
     skel_pruned = np.zeros_like(skel)
-    for (y, x) in g.nodes:
+    for y, x in g.nodes:
         skel_pruned[y, x] = True
     if not skel_pruned.any():
         return None

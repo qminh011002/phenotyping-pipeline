@@ -74,7 +74,7 @@ class AnalysisImageResult(BaseModel):
     original_width: int | None = None
     original_height: int | None = None
     file_size_bytes: int | None = None
-    # Larvae-only: auto-calibration output forwarded from inference so the
+    # Polygon organisms: auto-calibration output forwarded from inference so the
     # backend persists corners + mm/px in the same atomic write as detections.
     calibration: dict | None = None
 

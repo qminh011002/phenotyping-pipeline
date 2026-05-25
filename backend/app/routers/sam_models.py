@@ -62,7 +62,9 @@ def _invalidate_loaded_sam() -> None:
     get_sam_refinement_service().invalidate_cached_model()
 
 
-@router.get("", response_model=SamModelListResponse, summary="List available SAM models")
+@router.get(
+    "", response_model=SamModelListResponse, summary="List available SAM models"
+)
 async def list_sam_models(user: CurrentUser) -> SamModelListResponse:
     del user  # auth-only
     svc = _service()

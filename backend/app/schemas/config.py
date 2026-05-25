@@ -340,6 +340,13 @@ class LarvaeConfigUpdateRequest(BaseModel):
     sam_enabled: bool | None = None
 
 
+class PupaeConfigUpdateRequest(BaseModel):
+    """Partial update for the ``pupae`` block of inference_config.yaml."""
+
+    centerline_method: CenterlineMethod | None = None
+    sam_enabled: bool | None = None
+
+
 class ConfigUpdateRequest(BaseModel):
     """Partial config update — all fields optional."""
 
