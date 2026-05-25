@@ -64,13 +64,22 @@ function _authHeader(): Record<string, string> {
 let _refreshInFlight: Promise<boolean> | null = null;
 const ACCESS_REFRESH_SKEW_SECONDS = 5;
 
+function _parsePath(url: string): string {
+    // _baseUrl can be relative (e.g. "/api" behind a reverse proxy), so the
+    // built URL may be path-only. Pass window.location.origin as the base so
+    // ``new URL`` succeeds in both absolute and relative cases.
+    const base =
+        typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    return new URL(url, base).pathname;
+}
+
 function _isAuthEndpoint(url: string): boolean {
-    return new URL(url).pathname.startsWith('/auth/');
+    return _parsePath(url).includes('/auth/');
 }
 
 function _isPublicEndpoint(url: string): boolean {
-    const path = new URL(url).pathname;
-    return path === '/health' || path === '/ping';
+    const path = _parsePath(url);
+    return path.endsWith('/health') || path.endsWith('/ping');
 }
 
 function _decodeJwtPayload(token: string): Record<string, unknown> | null {
