@@ -336,9 +336,9 @@ from app.routers.analyses import router as analysis_router  # noqa: E402
 from app.routers.auth import router as auth_router  # noqa: E402
 from app.routers.dashboard import router as dashboard_router  # noqa: E402
 from app.routers.larvae import router as larvae_router  # noqa: E402
-from app.routers.pupae import router as pupae_router  # noqa: E402
 from app.routers.models import router as models_router  # noqa: E402
 from app.routers.overlay import router as overlay_router  # noqa: E402
+from app.routers.pupae import router as pupae_router  # noqa: E402
 from app.routers.sam_models import router as sam_models_router  # noqa: E402
 from app.routers.settings import router as settings_router  # noqa: E402
 

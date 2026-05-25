@@ -27,9 +27,11 @@ from app.schemas.calibration import CalibrationCorners
 from app.schemas.larvae import (
     LarvaeBatchDetail,
     LarvaeImageDetail,
-    LarvaeMeasurement as LarvaeMeasurementSchema,
     StoredLarvaeAnnotation,
     WeightStats,
+)
+from app.schemas.larvae import (
+    LarvaeMeasurement as LarvaeMeasurementSchema,
 )
 from app.schemas.pupae import (
     PupaeBatchDetail,
