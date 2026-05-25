@@ -17,6 +17,7 @@ export default function AnalyzePage() {
     const navigate = useNavigate();
     const isProcessing = useProcessingStore((s) => s.isProcessing);
     const setProjectNameStore = useProcessingStore((s) => s.setProjectName);
+    const setOrganismStore = useProcessingStore((s) => s.setOrganism);
     const setClassesStore = useProcessingStore((s) => s.setClasses);
 
     const [projectName, setProjectName] = useState('');
@@ -72,6 +73,7 @@ export default function AnalyzePage() {
         // No class names anymore — keep the store + session storage clean so
         // any old values from a previous project don't leak through.
         setProjectNameStore(nameTrimmed);
+        setOrganismStore(organism);
         setClassesStore([]);
         storeProjectClasses([]);
         navigate(`/analyze/upload?mode=${mode}&type=${organism}`);
@@ -80,7 +82,7 @@ export default function AnalyzePage() {
     return (
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
             {/* Fixed header */}
-            <header className="shrink-0 border-b bg-background">
+            {/* <header className="shrink-0 border-b bg-background">
                 <div className="mx-auto flex w-full items-center px-14 py-3">
                     <div className="flex items-center gap-3">
                         <div className="flex aspect-square size-10 items-center justify-center">
@@ -96,11 +98,11 @@ export default function AnalyzePage() {
                         </div>
                     </div>
                 </div>
-            </header>
+            </header> */}
 
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-screen-2xl px-6 py-8">
+                <div className="mx-auto w-full max-w-screen-2xl px-6 py-8 mt-10">
                     {/* Top form row */}
                     <div className="flex flex-col">
                         <h1 className="text-3xl font-semibold tracking-tight">

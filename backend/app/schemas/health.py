@@ -26,6 +26,19 @@ class HealthResponse(BaseModel):
             "not installed."
         ),
     )
+    cuda_device_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of CUDA devices torch can see (0 if no GPU).",
+    )
+    cuda_device_name: str | None = Field(
+        default=None,
+        description="Name of the first CUDA device, or null if no GPU.",
+    )
+    devices_per_organism: dict[str, str] = Field(
+        default_factory=dict,
+        description="Active device per organism (e.g. {'egg': 'cpu', 'larvae': 'cuda:0'}).",
+    )
 
 
 class AppSettingsResponse(BaseModel):

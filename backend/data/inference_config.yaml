@@ -1,21 +1,29 @@
 larvae:
-  input_folders:
-  - C:/path/to/GxE Images/Batch 1
-  - C:/path/to/GxE Images/Batch 2
-  - C:/path/to/GxE Images/Batch 3
-  - C:/path/to/GxE Images/Batch 4
-  - C:/path/to/GxE Images/Batch 5
   model: models/larvae_best.pt
+  device: cpu
   tile_size: 512
   overlap: 0.4
   confidence_threshold: 0.3
-  overlap_threshold: 0.5
   min_mask_size: 500
+  edge_margin: 5
+  mwis_overlap_threshold: 0.3
+  mwis_score_metric: confidence_x_area
   batch_size: 24
-  num_workers: 6
-  output_suffix: results_larvae
-  processed_output_dir: C:/path/to/GxE Images/processed_results_larvae
-  phenotype_csv: C:/path/to/GxE Images/larvae_phenotyping_sample_data.csv
+  calibration_object_w_mm: 405.0
+  calibration_object_h_mm: 317.0
+  enable_weight: false
+  larva_volume_height_ratio: 0.6
+  centerline_method: pipeline_compat
+  centerline_min_branch_ratio: 0.15
+  centerline_n_output_points: 100
+  sam:
+    enabled: true
+    model: sam2.1_t.pt
+    crop_padding: 50
+    confidence_threshold: 0.3
+    min_area_ratio: 0.6
+    max_area_ratio: 1.3
+    min_iou_vs_yolo: 0.5
 pupae:
   input_folders:
   - C:/path/to/GxE Images/GE05_Pupae Phenotype

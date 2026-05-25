@@ -28,7 +28,6 @@ import type {
     Organism,
 } from '@/types/api';
 import {
-    loadBatchSummary,
     loadBatchDetail,
     loadProcessingFiles,
     loadProcessingConfig,
@@ -44,7 +43,6 @@ import {
     getAnalysisDetail,
     getImageDetail,
     putEditedAnnotations,
-    renameBatch,
     resetEditedAnnotations,
 } from '@/services/api';
 import { cn } from '@/lib/utils';
@@ -55,6 +53,7 @@ import { canRedo, canUndo, editorHistoryReducer } from '../lib/editorHistory';
 import { ResultViewerContent } from './ResultViewerContent';
 import { ResultViewerDialogs } from './ResultViewerDialogs';
 import { ResultViewerHeader } from './ResultViewerHeader';
+import { LarvaeResultPanel } from '../larvae/LarvaeResultPanel';
 
 interface ResultViewerProps {
     className?: string;
@@ -95,7 +94,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
     const [rawUrlByName, setRawUrlByName] = useState<Record<string, string>>({});
     const [processingConfig, setProcessingConfig] = useState<Record<string, unknown> | null>(null);
-    const batchSummary = useMemo(() => loadBatchSummary(), []);
     const [loading, setLoading] = useState(true);
     const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0);
 
@@ -706,18 +704,6 @@ export function ResultViewer({ className }: ResultViewerProps) {
         }
     }, [batchDetail, handleSaveEdits, isDirty, navigate, savingEdits]);
 
-    const handleRenameBatch = useCallback(
-        async (next: string) => {
-            if (!batchDetail) return;
-
-            const updated = await renameBatch(batchDetail.id, next);
-            const nextDetail = { ...batchDetail, name: updated.name };
-            setBatchDetail(nextDetail);
-            storeBatchDetail(nextDetail);
-        },
-        [batchDetail],
-    );
-
     const handleSelectDragTool = useCallback(() => {
         setEditorTool('drag');
     }, []);
@@ -785,6 +771,19 @@ export function ResultViewer({ className }: ResultViewerProps) {
         );
     }
 
+    // Polygon-based organisms (larvae/pupae) — completely separate flow.
+    if (
+        batchDetail &&
+        (batchDetail.organism_type === 'larvae' || batchDetail.organism_type === 'pupae')
+    ) {
+        return (
+            <LarvaeResultPanel
+                organism={batchDetail.organism_type as Organism}
+                className={className}
+            />
+        );
+    }
+
     if (!currentResult) {
         return (
             <div className={cn('flex h-screen flex-col', className)}>
@@ -802,11 +801,11 @@ export function ResultViewer({ className }: ResultViewerProps) {
     return (
         <div className={cn('flex h-screen flex-col', className)}>
             <ResultViewerHeader
-                batchDetail={batchDetail}
-                batchSummary={batchSummary}
+                batchName={batchDetail?.name ?? null}
+                batchStatus={batchDetail?.status}
+                filename={currentResult.filename}
                 currentIndex={currentIndex}
-                currentResult={currentResult}
-                results={results}
+                total={results.length}
                 canEdit={Boolean(batchDetail && currentImageRecord)}
                 editMode={editMode}
                 isDirty={isDirty}
@@ -814,11 +813,11 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 finishing={finishing}
                 onBack={handleBack}
                 onNavigate={handleNavigate}
-                onRename={handleRenameBatch}
                 onFinish={handleFinish}
             />
 
             <ResultViewerContent
+                organism={(batchDetail?.organism_type as Organism) ?? 'egg'}
                 currentImageRecordId={currentImageRecord?.id ?? null}
                 currentIndex={currentIndex}
                 currentResult={currentResult}
@@ -849,6 +848,8 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 onSelectDragTool={handleSelectDragTool}
                 onToggleDrawTool={handleToggleDrawTool}
                 onUndo={handleUndo}
+                onSave={isDirty ? () => void handleSaveEdits() : undefined}
+                saveDirty={isDirty}
             />
 
             <ResultViewerDialogs

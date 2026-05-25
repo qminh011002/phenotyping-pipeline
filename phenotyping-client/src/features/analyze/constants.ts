@@ -71,7 +71,7 @@ export const PROJECT_TYPES: ProjectTypeDef[] = [
         label: 'Pupae',
         description: 'Segment individual pupae and measure size and weight.',
         badges: [SEGMENTATION, COUNT, MEASURING, WEIGHT],
-        available: false,
+        available: true,
         icon: Bug,
     },
     {
@@ -79,7 +79,7 @@ export const PROJECT_TYPES: ProjectTypeDef[] = [
         label: 'Larvae',
         description: 'Segment larvae instances and measure size and weight.',
         badges: [SEGMENTATION, COUNT, MEASURING, WEIGHT],
-        available: false,
+        available: true,
         icon: Worm,
     },
 ];

@@ -156,6 +156,7 @@ export default function ProcessingPage() {
     const interruptedBatch = useProcessingStore((s) => s.interruptedBatch);
     const completedBatchId = useProcessingStore((s) => s.completedBatchId);
     const activeBatchId = useProcessingStore((s) => s.activeBatchId);
+    const organism = useProcessingStore((s) => s.organism);
     const liveLogs = useProcessingStore((s) => s.liveLogs);
 
     useEffect(() => {
@@ -185,31 +186,43 @@ export default function ProcessingPage() {
         // the processing manager.
         const stored = loadBatchDetail();
         const firstImageId = stored?.images?.[0]?.id;
-        const url = firstImageId
+        const base = firstImageId
             ? `/analyze/results/${completedBatchId}/images/${firstImageId}`
             : `/analyze/results/${completedBatchId}`;
+        const url =
+            organism === 'larvae'
+                ? `${base}?organism=larvae`
+                : organism === 'pupae'
+                  ? `${base}?organism=pupae`
+                  : base;
         navigate(url);
-    }, [completedBatchId, navigate]);
+    }, [completedBatchId, navigate, organism]);
 
-    const { doneCount, errorCount, allCompleted } = useMemo(() => {
+    const { doneCount, errorCount, needsCalibrationCount, allCompleted } = useMemo(() => {
         let done = 0;
         let err = 0;
-        let completed = 0;
+        let needsCal = 0;
+        let resting = 0;
         for (const img of storeImages) {
             if (img.status === 'done') {
                 done += 1;
-                completed += 1;
+                resting += 1;
             } else if (img.status === 'error') {
                 err += 1;
+                resting += 1;
+            } else if (img.status === 'needs_calibration') {
+                needsCal += 1;
+                resting += 1;
             }
         }
         return {
             doneCount: done,
             errorCount: err,
-            allCompleted: completed === storeImages.length,
+            needsCalibrationCount: needsCal,
+            allCompleted: resting === storeImages.length,
         };
     }, [storeImages]);
-    const processedSoFar = doneCount + errorCount;
+    const processedSoFar = doneCount + errorCount + needsCalibrationCount;
     const anyError = errorCount > 0;
     const allDone = !isProcessing && totalImages > 0 && allCompleted;
 

@@ -19,12 +19,14 @@ export function ProcessingToast() {
     const totalImages = useProcessingStore((s) => s.totalImages);
     const completedBatchId = useProcessingStore((s) => s.completedBatchId);
     const activeBatchId = useProcessingStore((s) => s.activeBatchId);
+    const organism = useProcessingStore((s) => s.organism);
     const setToastId = useProcessingStore((s) => s.setToastId);
     const reset = useProcessingStore((s) => s.reset);
 
-    const { doneCount, errorCount, allDone } = useMemo(() => {
+    const { doneCount, errorCount, needsCalCount, allDone } = useMemo(() => {
         let done = 0;
         let err = 0;
+        let needsCal = 0;
         let resting = 0;
         for (const img of images) {
             if (img.status === 'done') {
@@ -33,16 +35,20 @@ export function ProcessingToast() {
             } else if (img.status === 'error') {
                 err += 1;
                 resting += 1;
+            } else if (img.status === 'needs_calibration') {
+                needsCal += 1;
+                resting += 1;
             }
         }
         return {
             doneCount: done,
             errorCount: err,
+            needsCalCount: needsCal,
             allDone: images.length > 0 && resting === images.length,
         };
     }, [images]);
     const hasErrors = errorCount > 0;
-    const totalDone = doneCount + errorCount;
+    const totalDone = doneCount + errorCount + needsCalCount;
 
     // Show/update toast when processing starts
     useEffect(() => {
@@ -93,12 +99,18 @@ export function ProcessingToast() {
                         const batchId = completedBatchId ?? activeBatchId;
                         const stored = loadBatchDetail();
                         const firstImageId = stored?.images?.[0]?.id;
-                        const url =
+                        const base =
                             batchId && firstImageId
                                 ? `/analyze/results/${batchId}/images/${firstImageId}`
                                 : batchId
                                   ? `/analyze/results/${batchId}`
                                   : '/analyze/results';
+                        const url =
+                            organism === 'larvae'
+                                ? `${base}?organism=larvae`
+                                : organism === 'pupae'
+                                  ? `${base}?organism=pupae`
+                                  : base;
                         navigate(url);
                         reset();
                     },
@@ -120,6 +132,7 @@ export function ProcessingToast() {
         totalDone,
         completedBatchId,
         activeBatchId,
+        organism,
     ]);
 
     return null;
@@ -138,19 +151,26 @@ function ProcessingToastContent({
 }) {
     const images = useProcessingStore((s) => s.images);
 
-    const { doneCount, errorCount, processingCount } = useMemo(() => {
+    const { doneCount, errorCount, processingCount, needsCalCount } = useMemo(() => {
         let done = 0;
         let err = 0;
         let proc = 0;
+        let needsCal = 0;
         for (const img of images) {
             if (img.status === 'done') done += 1;
             else if (img.status === 'error') err += 1;
             else if (img.status === 'processing') proc += 1;
+            else if (img.status === 'needs_calibration') needsCal += 1;
         }
-        return { doneCount: done, errorCount: err, processingCount: proc };
+        return {
+            doneCount: done,
+            errorCount: err,
+            processingCount: proc,
+            needsCalCount: needsCal,
+        };
     }, [images]);
     const hasErrors = errorCount > 0;
-    const totalProcessed = doneCount + errorCount;
+    const totalProcessed = doneCount + errorCount + needsCalCount;
     const progress = totalImages > 0 ? (totalProcessed / totalImages) * 100 : 0;
 
     return (
@@ -211,6 +231,11 @@ function ProcessingToastContent({
                 <span className="text-muted-foreground">{doneCount} complete</span>
                 {processingCount > 0 && (
                     <span className="text-primary">{processingCount} processing</span>
+                )}
+                {needsCalCount > 0 && (
+                    <span className="text-amber-600 dark:text-amber-400">
+                        {needsCalCount} needs calibration
+                    </span>
                 )}
                 {errorCount > 0 && (
                     <span className="text-amber-600 dark:text-amber-400">{errorCount} failed</span>

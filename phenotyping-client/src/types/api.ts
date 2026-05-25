@@ -77,6 +77,176 @@ export interface EggConfig {
     batch_size: number;
 }
 
+// ── Larvae (BE-030) ──────────────────────────────────────────────────────────
+
+export type MwisScoreMetric = 'confidence_x_area' | 'confidence';
+export type CenterlineMethod = 'pipeline_compat' | 'hybrid' | 'legacy_dijkstra';
+
+export interface LarvaeConfig {
+    model: string | null;
+    device: Device;
+    tile_size: number;
+    overlap: number;
+    confidence_threshold: number;
+    min_mask_size: number;
+    mwis_overlap_threshold: number;
+    mwis_score_metric: MwisScoreMetric;
+    batch_size: number;
+    /** Calibration object width in mm (default: 405) */
+    calibration_object_w_mm: number;
+    /** Calibration object height in mm (default: 317) */
+    calibration_object_h_mm: number;
+    /** Toggle weight (mg) prediction during measurement */
+    enable_weight: boolean;
+    /** Centerline extraction method (default: 'hybrid') */
+    centerline_method?: CenterlineMethod;
+    /** Hybrid prune threshold: branch length / total skeleton length (default 0.15) */
+    centerline_min_branch_ratio?: number;
+    /** Number of resampled points along the centerline (default 100) */
+    centerline_n_output_points?: number;
+    /** B-spline smoothing factor; null = scipy default (s = N) */
+    centerline_smoothness?: number | null;
+}
+
+/** A 2D pixel-space point. */
+export type Point2D = [number, number];
+
+/** Polygon as ≥3 (x, y) vertices. */
+export type LarvaePolygon = Point2D[];
+
+export type DetectionOrigin = 'model' | 'user';
+
+export interface LarvaeAnnotation {
+    label: 'larvae';
+    polygon: LarvaePolygon;
+    bbox: [number, number, number, number]; // [x1, y1, x2, y2]
+    confidence: number;
+    area_px: number;
+    origin: DetectionOrigin;
+    /** Operator-corrected polygon; supersedes `polygon` when present. */
+    edited_polygon?: LarvaePolygon | null;
+    edited_at?: string | null; // ISO-8601
+}
+
+export type CalibrationStatus = 'detected' | 'manual' | 'failed';
+
+export interface CalibrationCorners {
+    image_id?: string | null;
+    /** TL, TR, BR, BL (4 points). */
+    auto_corners?: [Point2D, Point2D, Point2D, Point2D] | null;
+    edited_corners?: [Point2D, Point2D, Point2D, Point2D] | null;
+    mm_per_px_x?: number | null;
+    mm_per_px_y?: number | null;
+    calibration_object_w_mm?: number | null;
+    calibration_object_h_mm?: number | null;
+    detection_status: CalibrationStatus;
+}
+
+export interface LarvaeDetectionResult {
+    filename: string;
+    organism: 'larvae';
+    count: number;
+    avg_confidence: number;
+    elapsed_seconds: number;
+    annotations: LarvaeAnnotation[];
+    overlay_url: string;
+    calibration?: CalibrationCorners | null;
+}
+
+export interface LarvaeBatchDetectionResult {
+    results: LarvaeDetectionResult[];
+    total_count: number;
+    total_elapsed_seconds: number;
+}
+
+export interface LarvaeMeasurement {
+    detection_id: string;
+    length_mm: number | null;
+    min_width_mm: number | null;
+    max_width_mm: number | null;
+    average_width_mm: number | null;
+    area_mm2: number | null;
+    volume_mm3: number | null;
+    /** Centerline points (~50 entries). Sent only on measurement endpoints. */
+    centerline?: Array<[number, number]> | null;
+    /** Per-segment widths along the centerline. */
+    widths?: number[] | null;
+    weight_mg?: number | null;
+    is_stale: boolean;
+    measured_at?: string | null; // ISO-8601
+}
+
+export interface LarvaeMeasurementResult {
+    image_id: string;
+    calibration: CalibrationCorners | null;
+    measurements: LarvaeMeasurement[];
+    generated_at: string; // ISO-8601
+}
+
+// ── Larvae batch endpoints (BE-034) ──────────────────────────────────────────
+
+/** Persisted detection — adds the row id used to address the polygon edit. */
+export interface StoredLarvaeAnnotation extends LarvaeAnnotation {
+    detection_id: string;
+}
+
+export interface LarvaeImageDetail {
+    image_id: string;
+    original_filename: string;
+    overlay_url: string | null;
+    /** Warped raw (no marks) used by LarvaePolygonEditor as its backing image. */
+    warped_url: string | null;
+    raw_url: string | null;
+    /** Per-image inference wall time, in seconds. Null on older batches. */
+    elapsed_secs: number | null;
+    detections: StoredLarvaeAnnotation[];
+    calibration: CalibrationCorners | null;
+    measurements: LarvaeMeasurement[];
+}
+
+export interface LarvaeBatchDetail {
+    batch_id: string;
+    name: string;
+    organism: 'larvae';
+    status: string;
+    total_image_count: number;
+    /** Detection model filename snapshotted at batch creation. Null on legacy batches. */
+    detection_model: string | null;
+    /** SAM model filename snapshotted at batch creation. Null on legacy batches. */
+    sam_model: string | null;
+    images: LarvaeImageDetail[];
+}
+
+/** Body for PUT /calibration/{image_id} — at least one branch required. */
+export interface CalibrationUpdate {
+    corners?: [Point2D, Point2D, Point2D, Point2D] | null;
+    mm_per_px_x?: number | null;
+    mm_per_px_y?: number | null;
+}
+
+/** Body for POST /measure/larvae?image_id=... */
+export interface MeasureLarvaeRequest {
+    polygon_overrides?: LarvaePolygon[] | null;
+}
+
+export interface PolygonEdit {
+    detection_id: string;
+    polygon: LarvaePolygon;
+}
+
+/** Body for PUT /analyses/{batch_id}/images/{image_id}/polygons */
+export interface PolygonsUpdate {
+    polygons: PolygonEdit[];
+    deleted_detection_ids?: string[];
+}
+
+export interface PolygonsUpdateResponse {
+    status: 'ok';
+    image_id: string;
+    updated: number;
+    deleted: number;
+}
+
 export interface LogEntry {
     timestamp: string;
     level: LogLevel;
@@ -96,6 +266,12 @@ export interface HealthResponse {
     version: string;
     /** Per-organism load state. Frontend uses this to gate the Project Type cards. */
     models_status: Partial<Record<Organism, ModelStatus>>;
+    /** Number of CUDA devices torch can see (0 if no GPU). */
+    cuda_device_count: number;
+    /** Name of the first CUDA device, or null if no GPU. */
+    cuda_device_name: string | null;
+    /** Active device per organism (e.g. {egg: "cpu", larvae: "cuda:0"}). */
+    devices_per_organism: Partial<Record<Organism, string>>;
 }
 
 // ── Analyses ─────────────────────────────────────────────────────────────────
@@ -201,6 +377,21 @@ export interface AssignResultResponse {
     organism: Organism;
     custom_model_id: string | null;
     model_filename: string | null;
+}
+
+// ── SAM Models ───────────────────────────────────────────────────────────────
+
+export interface SamModelResponse {
+    filename: string;
+    file_size_bytes: number;
+    uploaded_at: string;
+    is_builtin: boolean;
+    is_active: boolean;
+}
+
+export interface SamModelListResponse {
+    models: SamModelResponse[];
+    active_filename: string | null;
 }
 
 // ── Log streaming ─────────────────────────────────────────────────────────────

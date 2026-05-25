@@ -50,6 +50,7 @@ def app():
     _mock_registry.cuda_available = False
     _mock_registry.uptime_seconds = 3600.5
     _mock_registry.models_status = {"egg": "loaded"}
+    _mock_registry.device_for = MagicMock(return_value="cpu")
 
     _mock_log_buffer = MagicMock()
 
@@ -61,6 +62,12 @@ def app():
     _deps_mod._log_buffer = _mock_log_buffer
     _deps_mod._executor = _mock_executor
     _deps_mod._inference_service = _mock_inference_svc
+    _deps_mod._neonate_inference_service = MagicMock()
+    _deps_mod._larvae_inference_service = MagicMock()
+    _deps_mod._pupae_inference_service = MagicMock()
+    _deps_mod._calibration_service = MagicMock()
+    _deps_mod._larvae_measurement_service = MagicMock()
+    _deps_mod._sam_refinement_service = MagicMock()
 
     # Bypass JWT auth in all router tests by overriding the dependency.
     import uuid as _uuid

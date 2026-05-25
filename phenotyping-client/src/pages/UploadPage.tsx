@@ -30,6 +30,7 @@ import { storeProcessingFiles, generateBatchId } from '@/features/upload/lib/pro
 import { useProcessingStore } from '@/stores/processingStore';
 import { startProcessingFromSession, isManagerRunning } from '@/services/processingManager';
 import { ConfigPanel } from '@/features/upload/components/ConfigPanel';
+import { LarvaeConfigPanel } from '@/features/upload/components/LarvaeConfigPanel';
 import { cn } from '@/lib/utils';
 
 interface FileEntry {
@@ -855,7 +856,11 @@ export default function UploadPage() {
                 </div>
             </div>
 
-            <ConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
+            {organism === 'larvae' ? (
+                <LarvaeConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
+            ) : (
+                <ConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
+            )}
 
             {/* Full-quality preview dialog — loads the ORIGINAL file on demand. */}
             <Dialog

@@ -10,8 +10,6 @@ import { CloudUpload, Minus, Plus } from 'lucide-react';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import {
-    Circle,
-    Group,
     Image as KonvaImage,
     Layer,
     Line,
@@ -188,9 +186,6 @@ export const OverlayImage = memo(function OverlayImage({
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
     // Transient preview boxes during a body drag or rubber-band draw.
     const [rubberBand, setRubberBand] = useState<[number, number, number, number] | null>(null);
-    // After a rubber-band draw releases, the new box is held here until the
-    // user confirms it via the floating ✓/✕ controls. Image-space coords.
-    const [pendingBox, setPendingBox] = useState<[number, number, number, number] | null>(null);
     // True while a drag / resize / rubber-band is in flight — hides the dim layer.
     const [interacting, setInteracting] = useState(false);
     // Cursor in image coords — drives the draw-mode crosshair.
@@ -557,14 +552,11 @@ export const OverlayImage = memo(function OverlayImage({
             if (evtButton !== 0) return;
             const pt = getImagePointer();
             if (!pt) return;
-            // Starting a new rubber band discards any unconfirmed pending box.
-            // The user implicitly chose to abandon it by drawing again.
-            if (pendingBox) setPendingBox(null);
             drawStartRef.current = pt;
             setRubberBand([pt.x, pt.y, pt.x, pt.y]);
             setInteracting(true);
         },
-        [editing, mode, getImagePointer, pendingBox],
+        [editing, mode, getImagePointer],
     );
 
     const handleStageMouseMoveDraw = useCallback(() => {
@@ -592,58 +584,33 @@ export const OverlayImage = memo(function OverlayImage({
         const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
         if (!enforced) return;
         const clamped = clampBox(enforced, imageEl.naturalWidth, imageEl.naturalHeight);
-        // Stage the new box for explicit confirmation (✓/✕ floating buttons)
-        // instead of committing immediately. Confirm flows through onCommit;
-        // cancel just clears the pending state.
-        setPendingBox(clamped);
-    }, [editing, mode, editor, getImagePointer, imageEl]);
-
-    const confirmPendingBox = useCallback(() => {
-        if (!editor || !pendingBox) return;
+        // Autosave on action end: commit + select the new box immediately.
         const newBox: BBox = {
             label: editor.defaultClass ?? 'object',
-            bbox: pendingBox,
+            bbox: clamped,
             confidence: 1.0,
             origin: 'user',
             edited_at: new Date().toISOString(),
         };
         const next = [...annotations, newBox];
-        setPendingBox(null);
         editor.onCommit(next);
         editor.onSelect(next.length - 1);
-    }, [editor, pendingBox, annotations]);
+    }, [editing, mode, editor, getImagePointer, imageEl, annotations]);
 
-    const cancelPendingBox = useCallback(() => {
-        setPendingBox(null);
-    }, []);
-
-    // Discard pending box if the user leaves draw mode (e.g. switches to drag,
-    // navigates to a different image, or unmounts). Stale pending boxes from
-    // a previous image must never be committed against the current annotations.
+    // Enter ⇒ exit edit mode (close modal) when a box is selected.
     useEffect(() => {
-        if (mode !== 'draw') setPendingBox(null);
-    }, [mode]);
-    useEffect(() => {
-        return () => setPendingBox(null);
-    }, [src]);
-
-    // Enter ⇒ confirm, Escape ⇒ cancel — only while a box is pending.
-    useEffect(() => {
-        if (!pendingBox) return;
+        if (!editing || !editor || selectedIndex === null) return;
         const onKey = (e: KeyboardEvent) => {
             const target = e.target;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
             if (e.key === 'Enter') {
                 e.preventDefault();
-                confirmPendingBox();
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelPendingBox();
+                editor.onSelect(null);
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [pendingBox, confirmPendingBox, cancelPendingBox]);
+    }, [editing, editor, selectedIndex]);
 
     // ── Box drag (move) ─────────────────────────────────────────────────────
     const handleBoxDragStart = useCallback(
@@ -888,8 +855,6 @@ export const OverlayImage = memo(function OverlayImage({
                 ? 'grab'
                 : 'default';
 
-    const invScale = 1 / Math.max(scale, 0.001);
-    const handleSize = HANDLE_PX * invScale;
 
     // With useOffscreen: non-selected boxes live inside rasterCanvas, so the
     // per-box <Rect> loop only needs to render the selected one (for its
@@ -908,8 +873,45 @@ export const OverlayImage = memo(function OverlayImage({
                 className="relative h-full overflow-hidden bg-muted/20 select-none"
                 style={{ cursor: cursorStyle }}
             >
-                {/* Zoom controls */}
-                <div className="pointer-events-none absolute bottom-4 left-4 z-20">
+                {/* Edit panel — selected box */}
+                {editing &&
+                    mode === 'drag' &&
+                    selectedIndex !== null &&
+                    renderBoxes[selectedIndex] && (
+                        <div className="pointer-events-auto absolute left-4 top-4 z-20 w-64 rounded-lg border border-border/60 bg-card/90 p-3 text-card-foreground shadow-lg backdrop-blur">
+                            <div className="mb-2 flex items-center justify-between">
+                                <span className="text-sm font-semibold tabular-nums">
+                                    #{selectedIndex + 1}
+                                </span>
+                                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                                    Editing
+                                </span>
+                            </div>
+                            <div className="mb-3 text-xs text-muted-foreground">
+                                Updating...
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    className="flex-1"
+                                    onClick={handleDeleteSelected}
+                                >
+                                    Delete
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    className="flex-1"
+                                    onClick={() => editor?.onSelect(null)}
+                                >
+                                    Save (Enter)
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                {/* Zoom controls + saving indicator */}
+                <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex items-center gap-2">
                     <div className="pointer-events-auto flex items-center rounded-[12px] border border-cyan-400/40 bg-card/70 px-1.5 py-1 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
                         <Button
                             variant="ghost"
@@ -941,14 +943,19 @@ export const OverlayImage = memo(function OverlayImage({
                         >
                             RESET
                         </Button>
-                        {saveInProgress && (
-                            <div className="ml-1 flex items-center gap-1 rounded-[10px] border border-cyan-400/25 bg-cyan-500/8 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-cyan-100">
-                                <CloudUpload className="h-3.5 w-3.5 animate-pulse" />
-                                <span>SAVING</span>
-                            </div>
+                    </div>
+                    <div
+                        className={cn(
+                            'pointer-events-none flex items-center gap-1 rounded-[10px] border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-cyan-100 backdrop-blur transition-opacity duration-200 ease-out',
+                            saveInProgress ? 'opacity-100' : 'opacity-0',
                         )}
+                        aria-hidden={!saveInProgress}
+                    >
+                        <CloudUpload className="h-3.5 w-3.5 animate-pulse" />
+                        <span>SAVING</span>
                     </div>
                 </div>
+
 
                 {/* Placeholders */}
                 {!src && (
@@ -1213,20 +1220,6 @@ export const OverlayImage = memo(function OverlayImage({
                                 />
                             )}
 
-                            {/* Delete handle for selected box */}
-                            {editing &&
-                                mode === 'drag' &&
-                                selectedIndex !== null &&
-                                renderBoxes[selectedIndex] && (
-                                    <DeleteHandle
-                                        groupRef={deleteHandleRef}
-                                        x={renderBoxes[selectedIndex].bbox[0]}
-                                        y={renderBoxes[selectedIndex].bbox[1]}
-                                        size={handleSize * 1.6}
-                                        onClick={handleDeleteSelected}
-                                    />
-                                )}
-
                             {/* Rubber-band while drawing */}
                             {editing &&
                                 mode === 'draw' &&
@@ -1254,30 +1247,6 @@ export const OverlayImage = memo(function OverlayImage({
                                     );
                                 })()}
 
-                            {/* Pending (just-drawn) box awaiting confirm/cancel */}
-                            {editing && mode === 'draw' && pendingBox && (
-                                <>
-                                    <Rect
-                                        x={pendingBox[0]}
-                                        y={pendingBox[1]}
-                                        width={pendingBox[2] - pendingBox[0]}
-                                        height={pendingBox[3] - pendingBox[1]}
-                                        fill={FILL_SELECTED}
-                                        stroke={STROKE_SELECTED}
-                                        strokeWidth={1.5}
-                                        strokeScaleEnabled={false}
-                                        dash={[4, 3]}
-                                        listening={false}
-                                    />
-                                    <ConfirmCancelHandle
-                                        x={pendingBox[2]}
-                                        y={pendingBox[1]}
-                                        size={handleSize * 1.6}
-                                        onConfirm={confirmPendingBox}
-                                        onCancel={cancelPendingBox}
-                                    />
-                                </>
-                            )}
                         </Layer>
                     </Stage>
                 )}
@@ -1286,171 +1255,3 @@ export const OverlayImage = memo(function OverlayImage({
     );
 });
 
-// ── Delete handle (small red X on NW corner of selected box) ──────────────
-// The Group is positioned at the box's top-left (x, y) and children are laid
-// out at negative offsets so the icon floats just outside the box. Because
-// the group carries the position, callers can move the icon imperatively by
-// setting `group.position({x, y})` — used to track the rect during Konva drag.
-
-interface DeleteHandleProps {
-    x: number;
-    y: number;
-    size: number;
-    onClick: () => void;
-    groupRef?: React.Ref<Konva.Group>;
-}
-
-function DeleteHandle({ x, y, size, onClick, groupRef }: DeleteHandleProps) {
-    const r = size / 2;
-    // Children are positioned relative to the group origin (= box top-left).
-    const cx = -r * 0.6;
-    const cy = -r * 0.6;
-    return (
-        <Group
-            ref={groupRef}
-            x={x}
-            y={y}
-            onClick={(e) => {
-                e.cancelBubble = true;
-                onClick();
-            }}
-            onTap={(e) => {
-                e.cancelBubble = true;
-                onClick();
-            }}
-        >
-            <Circle
-                x={cx}
-                y={cy}
-                radius={r}
-                fill="#ef4444"
-                stroke="white"
-                strokeWidth={Math.max(1, r * 0.18)}
-                strokeScaleEnabled={false}
-            />
-            <Line
-                points={[cx - r * 0.4, cy - r * 0.4, cx + r * 0.4, cy + r * 0.4]}
-                stroke="white"
-                strokeWidth={Math.max(1, r * 0.22)}
-                strokeScaleEnabled={false}
-                lineCap="round"
-            />
-            <Line
-                points={[cx + r * 0.4, cy - r * 0.4, cx - r * 0.4, cy + r * 0.4]}
-                stroke="white"
-                strokeWidth={Math.max(1, r * 0.22)}
-                strokeScaleEnabled={false}
-                lineCap="round"
-            />
-        </Group>
-    );
-}
-
-// ── Confirm / Cancel handles for a just-drawn pending box ─────────────────
-// Two circular icons sit just above the top-left of the pending box: a green
-// check (confirm) and a red X (cancel). Both stop event bubbling so clicks
-// don't bleed into the stage's draw-start handler.
-
-interface ConfirmCancelHandleProps {
-    x: number;
-    y: number;
-    size: number;
-    onConfirm: () => void;
-    onCancel: () => void;
-}
-
-function ConfirmCancelHandle({ x, y, size, onConfirm, onCancel }: ConfirmCancelHandleProps) {
-    // Square buttons stacked vertically just outside the box's top-right corner.
-    // x,y is the box top-right (x2, y1) in image coords; children are positioned
-    // relative to that anchor.
-    const s = size; // icon side length
-    const gap = s * 0.25; // gap between the two buttons
-    const margin = s * 0.4; // gap between the buttons and the box edge
-    const radius = s * 0.22; // border-radius
-    const stroke = Math.max(1, s * 0.09);
-
-    // Both buttons sit fully outside the box on the right.
-    // Confirm (top) and Cancel (below it).
-    const btnX = margin;
-    const confirmY = 0;
-    const cancelY = s + gap;
-
-    return (
-        <Group x={x} y={y} listening>
-            {/* Confirm — green check */}
-            <Group
-                x={btnX}
-                y={confirmY}
-                onMouseDown={(e) => {
-                    e.cancelBubble = true;
-                }}
-                onClick={(e) => {
-                    e.cancelBubble = true;
-                    onConfirm();
-                }}
-                onTap={(e) => {
-                    e.cancelBubble = true;
-                    onConfirm();
-                }}
-            >
-                <Rect
-                    width={s}
-                    height={s}
-                    cornerRadius={radius}
-                    fill="#10b981"
-                    stroke="white"
-                    strokeWidth={stroke}
-                    strokeScaleEnabled={false}
-                />
-                <Line
-                    points={[s * 0.25, s * 0.55, s * 0.45, s * 0.72, s * 0.78, s * 0.32]}
-                    stroke="white"
-                    strokeWidth={Math.max(1, s * 0.13)}
-                    strokeScaleEnabled={false}
-                    lineCap="round"
-                    lineJoin="round"
-                />
-            </Group>
-            {/* Cancel — red X */}
-            <Group
-                x={btnX}
-                y={cancelY}
-                onMouseDown={(e) => {
-                    e.cancelBubble = true;
-                }}
-                onClick={(e) => {
-                    e.cancelBubble = true;
-                    onCancel();
-                }}
-                onTap={(e) => {
-                    e.cancelBubble = true;
-                    onCancel();
-                }}
-            >
-                <Rect
-                    width={s}
-                    height={s}
-                    cornerRadius={radius}
-                    fill="#ef4444"
-                    stroke="white"
-                    strokeWidth={stroke}
-                    strokeScaleEnabled={false}
-                />
-                <Line
-                    points={[s * 0.3, s * 0.3, s * 0.7, s * 0.7]}
-                    stroke="white"
-                    strokeWidth={Math.max(1, s * 0.11)}
-                    strokeScaleEnabled={false}
-                    lineCap="round"
-                />
-                <Line
-                    points={[s * 0.7, s * 0.3, s * 0.3, s * 0.7]}
-                    stroke="white"
-                    strokeWidth={Math.max(1, s * 0.11)}
-                    strokeScaleEnabled={false}
-                    lineCap="round"
-                />
-            </Group>
-        </Group>
-    );
-}

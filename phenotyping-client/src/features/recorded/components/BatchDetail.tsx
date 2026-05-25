@@ -249,7 +249,10 @@ const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardP
                         </span>
                     )}
                     {image.elapsed_secs !== null && (
-                        <span className="flex items-center gap-1">
+                        <span
+                            className="flex items-center gap-1 font-medium text-foreground/80 tabular-nums"
+                            title="Processing time"
+                        >
                             <Clock className="h-3 w-3" />
                             {formatElapsed(image.elapsed_secs)}
                         </span>
@@ -762,11 +765,26 @@ export function BatchDetail() {
                             icon={Clock}
                             label="Processing time"
                             value={formatElapsed(detail.total_elapsed_secs)}
-                            sub={
-                                detail.total_elapsed_secs && detail.total_image_count > 0
-                                    ? `avg ${(detail.total_elapsed_secs / detail.total_image_count).toFixed(1)}s per image`
-                                    : undefined
-                            }
+                            sub={(() => {
+                                const elapsed = detail.images
+                                    .map((i) => i.elapsed_secs)
+                                    .filter((s): s is number => s !== null && s >= 0);
+                                if (elapsed.length === 0) return undefined;
+                                if (elapsed.length === 1) {
+                                    return `${elapsed[0].toFixed(2)}s for 1 image`;
+                                }
+                                const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length;
+                                const min = Math.min(...elapsed);
+                                const max = Math.max(...elapsed);
+                                return (
+                                    <span className="flex flex-col gap-0.5">
+                                        <span>avg {avg.toFixed(2)}s per image</span>
+                                        <span className="text-[10px] uppercase tracking-wider">
+                                            min {min.toFixed(2)}s · max {max.toFixed(2)}s
+                                        </span>
+                                    </span>
+                                );
+                            })()}
                         />
 
                         {/* Average confidence — keeps the inline progress bar since

@@ -49,6 +49,8 @@ class ModelRegistry:
         self._statuses: dict[str, ModelStatus] = {o: "missing" for o in VALID_ORGANISMS}
         self._active_paths: dict[str, Path] = {}
         self._cuda_available: bool = False
+        self._cuda_device_count: int = 0
+        self._cuda_device_name: str | None = None
         self._start_time: float = time.time()
 
     # ── Lifespan integration ──────────────────────────────────────────────────
@@ -70,6 +72,18 @@ class ModelRegistry:
             silently fall back to defaults.
         """
         self._cuda_available = torch.cuda.is_available()
+        self._cuda_device_count = 0
+        self._cuda_device_name = None
+        if self._cuda_available:
+            try:
+                self._cuda_device_count = int(torch.cuda.device_count())
+                if self._cuda_device_count > 0:
+                    self._cuda_device_name = str(torch.cuda.get_device_name(0))
+            except RuntimeError as exc:
+                logger.warning("CUDA metadata probe failed: %s", exc)
+                self._cuda_available = False
+                self._cuda_device_count = 0
+                self._cuda_device_name = None
         custom_assignments = custom_assignments or {}
 
         # CPU thread tuning honors TORCH_NUM_THREADS for ops who need to cap.
@@ -154,12 +168,14 @@ class ModelRegistry:
             )
             return
 
-        if model.task != "detect":
+        expected_task = "segment" if organism in ("larvae", "pupae") else "detect"
+        if model.task != expected_task:
             self._statuses[organism] = "error"
             logger.error(
-                "Model at %s is a %r model, expected 'detect' — disabling %s",
+                "Model at %s is a %r model, expected %r — disabling %s",
                 resolved.path,
                 model.task,
+                expected_task,
                 organism,
             )
             return
@@ -260,6 +276,14 @@ class ModelRegistry:
         return self._cuda_available
 
     @property
+    def cuda_device_count(self) -> int:
+        return self._cuda_device_count
+
+    @property
+    def cuda_device_name(self) -> str | None:
+        return self._cuda_device_name
+
+    @property
     def uptime_seconds(self) -> float:
         return time.time() - self._start_time
 
@@ -292,6 +316,10 @@ class ModelRegistry:
         return self.model_for("neonate")
 
     @property
+    def pupae_model(self) -> YOLO:
+        return self.model_for("pupae")
+
+    @property
     def model_loaded(self) -> bool:
         return self.status("egg") == "loaded"
 
@@ -307,3 +335,7 @@ class ModelRegistry:
     @property
     def neonate_device(self) -> str:
         return self.device_for("neonate")
+
+    @property
+    def pupae_device(self) -> str:
+        return self.device_for("pupae")

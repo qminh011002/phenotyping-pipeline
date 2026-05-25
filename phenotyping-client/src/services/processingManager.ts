@@ -15,17 +15,22 @@ import {
     addImageResult,
     completeBatch,
     createBatch,
+    detectCalibration,
     failBatch,
     getActiveBatch,
     getAnalysisDetail,
     getConfig,
     inferSingle,
+    inferSingleLarvae,
+    inferSinglePupae,
+    measureLarvae,
 } from './api';
 import type { Organism } from '@/types/api';
 import {
     clearProcessingSession,
     getCachedFile,
     loadDbBatchId,
+    loadLarvaeProcessingConfig,
     loadOrganism,
     loadProcessingFiles,
     loadProjectClasses,
@@ -38,7 +43,7 @@ import {
 } from '@/features/upload/lib/processingSession';
 import { useProcessingStore } from '@/stores/processingStore';
 import { startStageTracker } from './stageTracker';
-import type { DetectionResult } from '@/types/api';
+import type { DetectionResult, LarvaeDetectionResult } from '@/types/api';
 
 function setStage(stage: string | null): void {
     const store = useProcessingStore.getState();
@@ -167,8 +172,18 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
             );
             runtime.dbBatchId = batch.id;
             runtime.organism = (batch.organism_type ?? loadOrganism()) as Organism;
+            store.setOrganism(runtime.organism);
             startStageTracker();
-            void runProcessLoop(stored, batch.processed_image_count, batch.id);
+            if (runtime.organism === 'larvae' || runtime.organism === 'pupae') {
+                void runPolygonProcessLoop(
+                    stored,
+                    batch.processed_image_count,
+                    batch.id,
+                    runtime.organism,
+                );
+            } else {
+                void runProcessLoop(stored, batch.processed_image_count, batch.id);
+            }
             return true;
         }
 
@@ -239,15 +254,22 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
     const store = useProcessingStore.getState();
     const organism = loadOrganism() as Organism;
     runtime.organism = organism;
+    store.setOrganism(organism);
 
     setStage('Loading configuration…');
     let configSnapshot: Record<string, unknown> = {};
-    try {
-        const currentConfig = await getConfig();
-        const { model: _model, ...rest } = currentConfig;
-        configSnapshot = rest;
-    } catch {
-        /* non-fatal — proceed with empty snapshot */
+    if (organism === 'larvae' || organism === 'pupae') {
+        // No /config endpoint for larvae/pupae — pull from sessionStorage
+        // (written by LarvaeConfigPanel; pupae reuses the same panel shape).
+        configSnapshot = loadLarvaeProcessingConfig() ?? {};
+    } else {
+        try {
+            const currentConfig = await getConfig();
+            const { model: _model, ...rest } = currentConfig;
+            configSnapshot = rest;
+        } catch {
+            /* non-fatal — proceed with empty snapshot */
+        }
     }
 
     setStage('Creating analysis batch…');
@@ -283,7 +305,11 @@ async function runNewBatch(stored: StoredFile[]): Promise<void> {
     }
 
     runtime.dbBatchId = dbBatchId;
-    await runProcessLoop(stored, 0, dbBatchId);
+    if (organism === 'larvae' || organism === 'pupae') {
+        await runPolygonProcessLoop(stored, 0, dbBatchId, organism);
+    } else {
+        await runProcessLoop(stored, 0, dbBatchId);
+    }
 }
 
 async function runProcessLoop(
@@ -398,6 +424,221 @@ async function runProcessLoop(
     storeProcessingResults(
         doneResults.map((r) => ({ id: r.id, filename: r.filename, result: r.result! })),
     );
+    storeBatchSummary({
+        total_count: doneResults.reduce((s, r) => s + (r.result?.count ?? 0), 0),
+        total_elapsed_seconds: elapsed,
+    });
+
+    store.setCompletedBatch(dbBatchId);
+    runtime.running = false;
+    runtime.dbBatchId = null;
+}
+
+// ── Polygon-based loop (larvae + pupae) ───────────────────────────────────
+//
+// Pupae shares the larvae pipeline shape (polygon + MWIS + SAM, same DB
+// tables, same calibration / measurement endpoints). The only per-organism
+// difference is the inference endpoint: `/inference/larvae` vs
+// `/inference/pupae`.
+//
+// Per-image flow:
+//   1. POST /inference/{organism}?batch_id=...  → save overlay, return polygons
+//   2. POST /analyses/{batch_id}/images          → register the AnalysisImage row
+//   3. GET  /analyses/{batch_id}                 → resolve the freshly-registered
+//                                                  image_id by matching filename
+//   4. POST /calibration/detect?image_id=...     → auto-detect mm/px scale
+//   5. POST /measure/larvae?image_id=...         → only when calibration succeeded;
+//                                                  on `detection_status === 'failed'`
+//                                                  the image is flagged
+//                                                  `needs_calibration` and we move on.
+//
+// Calibration failure (auto-detect couldn't find the green rectangle) does
+// NOT abort the batch. Inference / register / measure HTTP failures still
+// fall through to the per-image error branch.
+
+async function runPolygonProcessLoop(
+    stored: StoredFile[],
+    startFrom: number,
+    dbBatchId: string,
+    organism: Organism,
+): Promise<void> {
+    runtime.running = true;
+    runtime.cancelled = false;
+    const store = useProcessingStore.getState();
+    const startTime = Date.now();
+    const runResults: Array<{
+        id: string;
+        filename: string;
+        result?: LarvaeDetectionResult;
+        error?: string;
+    }> = [];
+    const total = stored.length;
+
+    for (let i = startFrom; i < stored.length; i++) {
+        if (runtime.cancelled) break;
+
+        const file = stored[i];
+        store.setCurrentImageStart(Date.now());
+        store.updateImage(file.id, { status: 'processing' });
+
+        try {
+            setStage(`Loading image — ${file.name} (${i + 1}/${total})…`);
+            let fileObj = getCachedFile(file.id);
+            if (!fileObj) {
+                const resp = await fetch(file.blobUrl);
+                if (!resp.ok) throw new Error(`source image unavailable (${resp.status})`);
+                const blob = await resp.blob();
+                fileObj = new File([blob], file.name, { type: file.type });
+            }
+
+            // 1. Inference ----------------------------------------------------
+            if (runtime.cancelled) break;
+            setStage(`Inferring image ${i + 1}/${total} — ${file.name}…`);
+            const inferResult =
+                organism === 'pupae'
+                    ? await inferSinglePupae(fileObj, dbBatchId)
+                    : await inferSingleLarvae(fileObj, dbBatchId);
+            if (runtime.cancelled) break;
+
+            // 2. Register the image row -------------------------------------
+            setStage(`Persisting result — ${file.name} (${i + 1}/${total})…`);
+            // The shared /analyses/{batch_id}/images endpoint takes a generic
+            // `annotations: list[dict]`. Larvae annotations include polygons
+            // alongside bbox/confidence — they ride through the same field.
+            await addImageResult(dbBatchId, {
+                filename: inferResult.filename,
+                count: inferResult.count,
+                avg_confidence: inferResult.avg_confidence,
+                elapsed_seconds: inferResult.elapsed_seconds,
+                annotations: inferResult.annotations as unknown as Array<{
+                    label: string;
+                    bbox: [number, number, number, number];
+                    confidence: number;
+                }>,
+                overlay_url: inferResult.overlay_url,
+            });
+
+            // 3. Resolve the AnalysisImage row's id ---------------------------
+            // The register endpoint returns only `{status, batch_id}`, so we
+            // re-fetch the batch detail (without annotations) and match by
+            // filename. Backend assigns ids in insertion order, so the most
+            // recent matching row is the one we just created.
+            if (runtime.cancelled) break;
+            let imageId: string | undefined;
+            try {
+                const detail = await getAnalysisDetail(dbBatchId, undefined, {
+                    includeAnnotations: false,
+                });
+                const matches = detail.images.filter(
+                    (img) => img.original_filename === inferResult.filename,
+                );
+                imageId = matches[matches.length - 1]?.id;
+            } catch (err) {
+                console.warn('getAnalysisDetail (image_id lookup) failed', err);
+            }
+
+            if (!imageId) {
+                throw new Error('Could not resolve image_id after registration');
+            }
+
+            store.updateImage(file.id, { backendImageId: imageId });
+
+            // 4. Auto calibration ---------------------------------------------
+            if (runtime.cancelled) break;
+            setStage(`Calibrating image ${i + 1}/${total} — ${file.name}…`);
+            let calibrationOk = false;
+            try {
+                const calibration = await detectCalibration(imageId);
+                calibrationOk = calibration.detection_status !== 'failed';
+                if (!calibrationOk) {
+                    store.addLiveLog({
+                        level: 'WARN',
+                        message: `${file.name}: auto-calibration failed — needs manual calibration`,
+                    });
+                }
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                store.addLiveLog({
+                    level: 'WARN',
+                    message: `${file.name}: calibration error — ${msg}`,
+                });
+                calibrationOk = false;
+            }
+
+            // 5. Measurement (only when calibration succeeded) ---------------
+            if (calibrationOk) {
+                if (runtime.cancelled) break;
+                setStage(`Measuring image ${i + 1}/${total} — ${file.name}…`);
+                try {
+                    await measureLarvae(imageId);
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    store.addLiveLog({
+                        level: 'WARN',
+                        message: `${file.name}: measurement error — ${msg}`,
+                    });
+                }
+            }
+
+            store.pushCompletedDuration(inferResult.elapsed_seconds);
+            store.incrementProcessed();
+            store.updateImage(file.id, {
+                status: calibrationOk ? 'done' : 'needs_calibration',
+                count: inferResult.count,
+                avgConfidence: inferResult.avg_confidence,
+                elapsedSeconds: inferResult.elapsed_seconds,
+            });
+            runResults.push({ id: file.id, filename: file.name, result: inferResult });
+        } catch (err) {
+            if (runtime.cancelled) {
+                store.setCurrentImageStart(null);
+                break;
+            }
+            const msg = err instanceof Error ? err.message : String(err);
+            runResults.push({ id: file.id, filename: file.name, error: msg });
+            store.updateImage(file.id, { status: 'error', error: msg });
+            store.addLiveLog({ level: 'ERROR', message: `${file.name}: ${msg}` });
+        } finally {
+            store.setCurrentImageStart(null);
+        }
+    }
+
+    if (runtime.cancelled) {
+        try {
+            await failBatch(dbBatchId, 'User cancelled');
+        } catch {
+            /* non-fatal */
+        }
+        useProcessingStore.getState().reset();
+        clearProcessingSession();
+        runtime.running = false;
+        runtime.dbBatchId = null;
+        runtime.cancelled = false;
+        return;
+    }
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    store.setTotalElapsed(elapsed);
+
+    setStage('Finalizing batch…');
+    try {
+        await completeBatch(dbBatchId);
+        setStage('Loading results…');
+        const detail = await getAnalysisDetail(dbBatchId);
+        storeBatchDetail({
+            id: detail.id,
+            name: detail.name,
+            total_count: detail.total_count,
+            total_elapsed_secs: detail.total_elapsed_secs,
+            avg_confidence: detail.avg_confidence,
+            images: detail.images,
+            classes: detail.classes,
+        });
+    } catch {
+        /* non-fatal */
+    }
+
+    const doneResults = runResults.filter((r) => r.result !== undefined);
     storeBatchSummary({
         total_count: doneResults.reduce((s, r) => s + (r.result?.count ?? 0), 0),
         total_elapsed_seconds: elapsed,

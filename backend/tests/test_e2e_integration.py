@@ -196,6 +196,7 @@ def _build_test_app():
     _mock_registry.cuda_available = False
     _mock_registry.uptime_seconds = 3600.5
     _mock_registry.models_status = {"egg": "loaded"}
+    _mock_registry.device_for = MagicMock(return_value="cpu")
 
     # ── Mock log buffer ────────────────────────────────────────────────────
     import asyncio as _asyncio

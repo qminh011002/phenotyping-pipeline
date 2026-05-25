@@ -6,8 +6,17 @@
 // (readers: ProcessingPage, ProcessingIndicator, etc.) talk through.
 
 import { create } from 'zustand';
+import type { Organism } from '@/types/api';
 
-export type ImageStatus = 'pending' | 'processing' | 'done' | 'error';
+export type ImageStatus =
+    | 'pending'
+    | 'processing'
+    | 'done'
+    | 'error'
+    // Larvae-only: image processed but auto-calibration failed; user needs to
+    // supply manual calibration before measurements can run. The batch is not
+    // aborted — subsequent images keep going.
+    | 'needs_calibration';
 
 export interface ProcessingImage {
     id: string;
@@ -17,6 +26,8 @@ export interface ProcessingImage {
     avgConfidence?: number;
     elapsedSeconds?: number;
     error?: string;
+    /** Larvae: backend image_id once registered — used to address calibration / measurements. */
+    backendImageId?: string;
 }
 
 export interface InterruptedBatchInfo {
@@ -44,6 +55,8 @@ interface ProcessingStore {
 
     // Project metadata captured on the Analyze page
     projectName: string | null;
+    /** Organism for the active batch — drives which per-image pipeline runs. */
+    organism: Organism;
     /**
      * Class names defined on the Analyze page, frozen for the batch. The first
      * entry is the default used when the user draws a new box in the editor.
@@ -95,6 +108,7 @@ interface ProcessingStore {
     clearLiveLogs: () => void;
 
     setProjectName: (name: string | null) => void;
+    setOrganism: (organism: Organism) => void;
     setClasses: (classes: string[]) => void;
 }
 
@@ -116,6 +130,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     stage: null,
     liveLogs: [],
     projectName: null,
+    organism: 'egg',
     classes: [],
 
     startProcessing: (totalImages) =>
@@ -173,6 +188,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             stage: null,
             liveLogs: [],
             projectName: null,
+            organism: 'egg',
             classes: [],
         }),
 
@@ -228,6 +244,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     clearLiveLogs: () => set({ liveLogs: [] }),
 
     setProjectName: (projectName) => set({ projectName }),
+
+    setOrganism: (organism) => set({ organism }),
 
     setClasses: (classes) => set({ classes }),
 }));

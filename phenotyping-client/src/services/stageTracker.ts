@@ -11,6 +11,7 @@ const STAGE_LABELS: Record<string, string> = {
     'image.tile': 'Slicing into tiles',
     'image.detect': 'Detecting objects',
     'image.dedup': 'Merging detections',
+    'image.refine': 'Refining polygons (SAM)',
     'image.draw': 'Drawing overlay',
     'image.save': 'Saving overlay',
 };
@@ -23,6 +24,7 @@ const STAGE_LOG_MESSAGES: Record<
     'image.tile': (filename, index, total) => `tile ${index}/${total} for ${filename}`,
     'image.detect': (filename) => `run detector for ${filename}`,
     'image.dedup': (filename) => `deduplicate detections for ${filename}`,
+    'image.refine': (filename) => `refine polygons with SAM for ${filename}`,
     'image.draw': (filename) => `draw overlay boxes for ${filename}`,
     'image.save': (filename) => `save result assets for ${filename}`,
 };
@@ -32,6 +34,10 @@ interface StageEvent {
     batch_id: string;
     filename?: string;
     organism?: string;
+}
+
+interface StageHeartbeat {
+    type: 'heartbeat';
 }
 
 function composeStageText(code: string, filename?: string): string {
@@ -86,6 +92,11 @@ function isStageEvent(value: unknown): value is StageEvent {
     return typeof v.stage === 'string' && typeof v.batch_id === 'string';
 }
 
+function isStageHeartbeat(value: unknown): value is StageHeartbeat {
+    if (!value || typeof value !== 'object') return false;
+    return (value as Record<string, unknown>).type === 'heartbeat';
+}
+
 function clearReconnect(): void {
     if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
@@ -134,6 +145,7 @@ function openSocket(): void {
             if (DEV) console.warn('[stageTracker] bad frame:', ev.data, e);
             return;
         }
+        if (isStageHeartbeat(parsed)) return;
         if (!isStageEvent(parsed)) {
             if (DEV) console.warn('[stageTracker] invalid event shape:', parsed);
             return;

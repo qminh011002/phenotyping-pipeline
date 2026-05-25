@@ -13,6 +13,9 @@ import type {
     AssignmentsResponse,
     AssignResultResponse,
     BatchDetectionResult,
+    CalibrationCorners,
+    CalibrationUpdate,
+    CenterlineMethod,
     CustomModelListResponse,
     CustomModelResponse,
     DashboardStats,
@@ -20,8 +23,17 @@ import type {
     EggConfig,
     FailBatchResponse,
     HealthResponse,
+    LarvaeBatchDetail,
+    LarvaeConfig,
+    LarvaeDetectionResult,
+    LarvaeMeasurementResult,
     LogEntry,
+    MeasureLarvaeRequest,
     Organism,
+    PolygonsUpdate,
+    PolygonsUpdateResponse,
+    SamModelListResponse,
+    SamModelResponse,
 } from '@/types/api';
 
 // ── Health ─────────────────────────────────────────────────────────────────
@@ -76,6 +88,38 @@ export async function inferSingle(
 ): Promise<DetectionResult> {
     if (organism === 'neonate') return inferSingleNeonate(file, batchId);
     return inferSingleEgg(file, batchId);
+}
+
+/** POST /inference/larvae — run larvae segmentation on a single image. */
+export async function inferSingleLarvae(
+    file: File,
+    batchId?: string,
+): Promise<LarvaeDetectionResult> {
+    return http.postFormData<LarvaeDetectionResult>(
+        'inference/larvae',
+        'file',
+        file,
+        batchId ? { batch_id: batchId } : undefined,
+    );
+}
+
+/** POST /inference/pupae — run pupae segmentation on a single image.
+ *
+ * Pupae uses the same polygon + MWIS + SAM pipeline as larvae and shares the
+ * `larvae_detection` / `larvae_calibration` / `larvae_measurement` DB tables,
+ * so the response shape is identical to `LarvaeDetectionResult` apart from
+ * the `organism` and `label` discriminants.
+ */
+export async function inferSinglePupae(
+    file: File,
+    batchId?: string,
+): Promise<LarvaeDetectionResult> {
+    return http.postFormData<LarvaeDetectionResult>(
+        'inference/pupae',
+        'file',
+        file,
+        batchId ? { batch_id: batchId } : undefined,
+    );
 }
 
 // ── Overlay URLs ───────────────────────────────────────────────────────────────
@@ -372,4 +416,102 @@ export async function assignModel(
 /** DELETE /models/custom/{id} — delete an uploaded custom model */
 export async function deleteCustomModel(modelId: string): Promise<void> {
     await http.delete(`models/custom/${modelId}`);
+}
+
+// ── SAM models ───────────────────────────────────────────────────────────────
+
+/** GET /sam-models — list installed SAM weight files */
+export async function listSamModels(signal?: AbortSignal): Promise<SamModelListResponse> {
+    return http.get<SamModelListResponse>('sam-models', signal);
+}
+
+/** POST /sam-models/upload — upload a SAM .pt file */
+export async function uploadSamModel(file: File): Promise<SamModelResponse> {
+    return http.postFormData<SamModelResponse>('sam-models/upload', 'file', file);
+}
+
+/** PUT /config/larvae — patch larvae inference config (returns full merged config) */
+export async function updateLarvaeConfig(
+    update: { centerline_method?: CenterlineMethod; sam_enabled?: boolean },
+): Promise<LarvaeConfig> {
+    return http.put<LarvaeConfig>('config/larvae', update);
+}
+
+/** PUT /sam-models/activate — set the active SAM model */
+export async function activateSamModel(filename: string): Promise<SamModelResponse> {
+    return http.put<SamModelResponse>('sam-models/activate', { filename });
+}
+
+/** DELETE /sam-models/{filename} — delete a SAM weight file (non-builtin, non-active) */
+export async function deleteSamModel(filename: string): Promise<void> {
+    await http.delete(`sam-models/${encodeURIComponent(filename)}`);
+}
+
+// ── Larvae (BE-034) ──────────────────────────────────────────────────────────
+
+/** GET /analyses/{batch_id}/larvae — full larvae batch detail */
+export async function getLarvaeBatch(
+    batchId: string,
+    signal?: AbortSignal,
+): Promise<LarvaeBatchDetail> {
+    return http.get<LarvaeBatchDetail>(`analyses/${batchId}/larvae`, signal);
+}
+
+/** Build a CSV-export filename from a batch name + ISO date. */
+export function buildLarvaeCsvFilename(batchName: string, date = new Date()): string {
+    const safeName = batchName.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'batch';
+    const stamp = date.toISOString().slice(0, 10);
+    return `larvae-${safeName}-${stamp}.csv`;
+}
+
+/**
+ * GET /analyses/{batch_id}/larvae/csv — fetch the full measurement CSV as a
+ * Blob (auth-aware via the http client). Returns the suggested filename so
+ * the caller can pass it to a `<a download>` element.
+ */
+export async function downloadLarvaeCsv(
+    batchId: string,
+    batchName: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const blob = await http.getBlob(`analyses/${batchId}/larvae/csv`);
+    return { blob, filename: buildLarvaeCsvFilename(batchName) };
+}
+
+/** POST /calibration/detect?image_id=... — re-run auto calibration. */
+export async function detectCalibration(imageId: string): Promise<CalibrationCorners> {
+    return http.post<CalibrationCorners>(
+        `calibration/detect?image_id=${encodeURIComponent(imageId)}`,
+        {},
+    );
+}
+
+/** PUT /calibration/{image_id} — save manual calibration. */
+export async function saveCalibration(
+    imageId: string,
+    payload: CalibrationUpdate,
+): Promise<CalibrationCorners> {
+    return http.put<CalibrationCorners>(`calibration/${imageId}`, payload);
+}
+
+/** POST /measure/larvae?image_id=... — compute per-larva measurements. */
+export async function measureLarvae(
+    imageId: string,
+    payload: MeasureLarvaeRequest = {},
+): Promise<LarvaeMeasurementResult> {
+    return http.post<LarvaeMeasurementResult>(
+        `measure/larvae?image_id=${encodeURIComponent(imageId)}`,
+        payload,
+    );
+}
+
+/** PUT /analyses/{batch_id}/images/{image_id}/polygons — save polygon edits. */
+export async function savePolygonEdits(
+    batchId: string,
+    imageId: string,
+    payload: PolygonsUpdate,
+): Promise<PolygonsUpdateResponse> {
+    return http.put<PolygonsUpdateResponse>(
+        `analyses/${batchId}/images/${imageId}/polygons`,
+        payload,
+    );
 }

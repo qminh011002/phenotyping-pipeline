@@ -1,6 +1,7 @@
 // SettingsPage — top-level settings page composing all setting sections.
 // Route: /settings
 
+import { DeviceSection } from '@/features/settings/components/DeviceSection';
 import { ThemeSection } from '@/features/settings/components/ThemeSection';
 import { LogViewer } from '@/features/logs/components/LogViewer';
 import { Separator } from '@/components/ui/separator';
@@ -11,6 +12,8 @@ export default function SettingsPage() {
             <div className="flex-1 overflow-y-auto p-6">
                 <div className="w-full max-w-5xl space-y-6">
                     <ThemeSection />
+                    <Separator />
+                    <DeviceSection />
                     <Separator />
                     <section className="space-y-4">
                         <div>
