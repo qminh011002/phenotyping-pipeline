@@ -30,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 
+# YOLO task type expected per organism. egg/neonate use bbox detection;
+# larvae/pupae use polygon segmentation.
+_ORGANISM_TASK: dict[str, str] = {
+    "egg": "detect",
+    "neonate": "detect",
+    "larvae": "segment",
+    "pupae": "segment",
+}
+
 
 class ModelUploadService:
     """Handles custom model file storage, YOLO validation, and DB assignment."""
@@ -68,11 +77,14 @@ class ModelUploadService:
 
         await asyncio.to_thread(stored_path.write_bytes, content)
 
-        is_valid = await asyncio.to_thread(self._validate_yolo, stored_path)
+        expected_task = _ORGANISM_TASK[organism]
+        is_valid = await asyncio.to_thread(
+            self._validate_yolo, stored_path, expected_task
+        )
         if not is_valid:
             await asyncio.to_thread(lambda: stored_path.unlink(missing_ok=True))
             raise InvalidModelError(
-                "Invalid model file: not a YOLO detection model or file is corrupt"
+                f"Invalid model file: not a YOLO {expected_task} model or file is corrupt"
             )
 
         record = CustomModel(
@@ -130,11 +142,14 @@ class ModelUploadService:
 
         await asyncio.to_thread(_move)
 
-        is_valid = await asyncio.to_thread(self._validate_yolo, stored_path)
+        expected_task = _ORGANISM_TASK[organism]
+        is_valid = await asyncio.to_thread(
+            self._validate_yolo, stored_path, expected_task
+        )
         if not is_valid:
             await asyncio.to_thread(lambda: stored_path.unlink(missing_ok=True))
             raise InvalidModelError(
-                "Invalid model file: not a YOLO detection model or file is corrupt"
+                f"Invalid model file: not a YOLO {expected_task} model or file is corrupt"
             )
 
         record = CustomModel(
@@ -163,7 +178,7 @@ class ModelUploadService:
         )
         return record
 
-    def _validate_yolo(self, path: Path) -> bool:
+    def _validate_yolo(self, path: Path, expected_task: str) -> bool:
         """Validate by reading just the checkpoint header.
 
         Avoids constructing a full YOLO instance (which loads weights, possibly
@@ -189,7 +204,7 @@ class ModelUploadService:
             if task is None and isinstance(ckpt, dict):
                 train_args = ckpt.get("train_args") or {}
                 task = train_args.get("task")
-            return task == "detect"
+            return task == expected_task
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Could not extract task from checkpoint %s: %s", path.name, exc
