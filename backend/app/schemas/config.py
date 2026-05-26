@@ -117,7 +117,9 @@ class LarvaeConfig(BaseModel):
     overlap: float = Field(ge=0.0, le=1.0)
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     min_mask_size: int = Field(
-        ge=0, description="Minimum mask area in pixels; smaller masks are discarded"
+        default=500,
+        ge=0,
+        description="Minimum mask area in pixels; smaller masks are discarded",
     )
     edge_margin: int = Field(
         default=5,
@@ -125,7 +127,10 @@ class LarvaeConfig(BaseModel):
         description="Pixels from a tile edge — masks touching this margin are dropped",
     )
     mwis_overlap_threshold: float = Field(
-        gt=0.0, lt=1.0, description="IoU above which two masks compete in MWIS"
+        default=0.3,
+        gt=0.0,
+        lt=1.0,
+        description="IoU above which two masks compete in MWIS",
     )
     mwis_score_metric: MwisScoreMetric = "confidence_x_area"
     batch_size: int = Field(gt=0)
