@@ -556,6 +556,12 @@ export function ResultViewer({ className }: ResultViewerProps) {
     // its own transient drag state internally so we don't pollute history.
     const handleEditorCommit = useCallback((newBoxes: BBox[]) => {
         dispatchHistory({ type: 'apply', boxes: newBoxes });
+        // Finishing a drawn box (or any gesture) returns to drag-select so the
+        // annotation toolbar — hidden while drawing — reappears immediately,
+        // instead of waiting for the user to press Esc. The drawn box is
+        // auto-selected by OverlayImage, which only surfaces handles/panel in
+        // drag mode anyway.
+        setEditorTool('drag');
     }, []);
 
     // ── Ctrl/Cmd-hold → reveal raw image (non-edit mode only) ─────────────

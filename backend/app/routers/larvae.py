@@ -65,6 +65,7 @@ from app.schemas.larvae import (
 from app.schemas.pupae import (
     MeasurePupaeRequest,
     PupaeBatchDetail,
+    PupaeMeasurement,
     PupaeMeasurementResult,
 )
 from app.services.inference.egg import InvalidImageError
@@ -515,6 +516,18 @@ async def _measure_polygon_image(
     pairs = list(zip([d.id for d in detections], measurements, strict=True))
     await save_measurements(image_id, pairs, db)
 
+    # Re-measure replaces all rows with weight_mg=None; if the user previously
+    # set a per-image total weight, redistribute it across the fresh rows so
+    # per-object weight survives subsequent re-measures.
+    if image.total_weight_mg is not None:
+        await set_image_total_weight(image_id, image.total_weight_mg, db)
+        total_area = sum(m.area_mm2 or 0.0 for m in measurements)
+        for m in measurements:
+            if total_area > 0 and m.area_mm2:
+                m.weight_mg = (m.area_mm2 / total_area) * image.total_weight_mg
+            else:
+                m.weight_mg = 0.0
+
     # Render and persist a measurement-viz PNG next to the overlay so the
     # frontend can show the centerlines without re-running CV.
     try:
@@ -532,10 +545,20 @@ async def _measure_polygon_image(
 
     await db.commit()
 
+    # measurement_svc always returns LarvaeMeasurement (schema); when the image
+    # belongs to a pupae batch the response model expects PupaeMeasurement.
+    # Shapes are identical, so re-validate via model_dump().
+    if response_schema is PupaeMeasurementResult:
+        response_measurements = [
+            PupaeMeasurement.model_validate(m.model_dump()) for m in measurements
+        ]
+    else:
+        response_measurements = measurements
+
     return response_schema(
         image_id=str(image_id),
         calibration=calibration,
-        measurements=measurements,
+        measurements=response_measurements,
         generated_at=datetime.now(timezone.utc),
     )
 

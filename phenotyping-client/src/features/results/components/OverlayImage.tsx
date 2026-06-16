@@ -78,8 +78,6 @@ interface OverlayImageProps {
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 20;
 const ZOOM_FACTOR = 1.15;
-// Smaller = more wheel ticks per doubling. Roboflow-like finesse.
-const WHEEL_ZOOM_SENSITIVITY = 0.0006;
 
 // All non-selected boxes share one yellow stroke (model + user). Selection
 // stays blue so it remains distinguishable.
@@ -305,11 +303,17 @@ export const OverlayImage = memo(function OverlayImage({
         }
     }, [editing, mode, selectedIndex, renderBoxes]);
 
-    // ── Zoom (wheel) — rAF-coalesced so fast scrolls don't queue frames ─────
+    // ── Zoom (wheel) ─────────────────────────────────────────────────────────
+    // One fixed ZOOM_FACTOR step per wheel event, keyed only on scroll
+    // direction (magnitude ignored). This matches LarvaePolygonEditor so
+    // egg/neonate zoom at the same speed as larvae/pupae — the old
+    // proportional-to-deltaY zoom made trackpads (tiny per-event deltaY) crawl.
+    // Events are still coalesced per animation frame for perf on dense box
+    // images; the applied zoom equals stepping per-event: ZOOM_FACTOR^(steps).
     const wheelAccumRef = useRef<{
-        deltaY: number;
+        steps: number;
         pointer: { x: number; y: number } | null;
-    }>({ deltaY: 0, pointer: null });
+    }>({ steps: 0, pointer: null });
     const wheelRafRef = useRef<number | null>(null);
 
     const handleWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
@@ -319,22 +323,20 @@ export const OverlayImage = memo(function OverlayImage({
         const pointer = stage.getPointerPosition();
         if (!pointer) return;
 
-        // Accumulate deltaY; commit once per animation frame.
-        wheelAccumRef.current.deltaY += e.evt.deltaY;
+        // Accumulate signed step count (in = +1, out = -1); commit per frame.
+        wheelAccumRef.current.steps += e.evt.deltaY < 0 ? 1 : -1;
         wheelAccumRef.current.pointer = { x: pointer.x, y: pointer.y };
 
         if (wheelRafRef.current !== null) return;
         wheelRafRef.current = requestAnimationFrame(() => {
             wheelRafRef.current = null;
-            const { deltaY, pointer: p } = wheelAccumRef.current;
-            wheelAccumRef.current.deltaY = 0;
+            const { steps, pointer: p } = wheelAccumRef.current;
+            wheelAccumRef.current.steps = 0;
             wheelAccumRef.current.pointer = null;
-            if (!p) return;
+            if (!p || steps === 0) return;
 
             const oldScale = stage.scaleX();
-            // Clamp the accumulated delta so a single frame can't over-zoom.
-            const delta = Math.max(-240, Math.min(240, deltaY));
-            const factor = Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY);
+            const factor = Math.pow(ZOOM_FACTOR, steps);
             const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldScale * factor));
             if (newScale === oldScale) return;
 
@@ -1104,7 +1106,7 @@ export const OverlayImage = memo(function OverlayImage({
                                 <Line
                                     points={[0, cursor.y, imageSize.width, cursor.y]}
                                     stroke="white"
-                                    strokeWidth={1}
+                                    strokeWidth={1.5}
                                     strokeScaleEnabled={false}
                                     dash={[6, 4]}
                                     opacity={0.8}
@@ -1112,7 +1114,7 @@ export const OverlayImage = memo(function OverlayImage({
                                 <Line
                                     points={[cursor.x, 0, cursor.x, imageSize.height]}
                                     stroke="white"
-                                    strokeWidth={1}
+                                    strokeWidth={1.5}
                                     strokeScaleEnabled={false}
                                     dash={[6, 4]}
                                     opacity={0.8}
@@ -1155,7 +1157,7 @@ export const OverlayImage = memo(function OverlayImage({
                                     height: h,
                                     fill: isSelected ? FILL_SELECTED : 'transparent',
                                     stroke,
-                                    strokeWidth: isHover || isSelected ? 2 : 1,
+                                    strokeWidth: isHover || isSelected ? 2.5 : 1.5,
                                     strokeScaleEnabled: false,
                                     // Konva perf flags — skip extra drawing passes we don't need.
                                     perfectDrawEnabled: false,

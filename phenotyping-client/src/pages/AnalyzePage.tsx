@@ -7,6 +7,26 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ModeToggle } from '@/features/analyze/components/ModeToggle';
 import { ProjectTypeCard } from '@/features/analyze/components/ProjectTypeCard';
+import { BeforeAfterSlider } from '@/features/analyze/components/BeforeAfterSlider';
+
+const PREVIEW_ASSETS: Partial<Record<Organism, { before: string; after: string }>> = {
+    egg: {
+        before: '/assets/preview/egg/before.png',
+        after: '/assets/preview/egg/after.png',
+    },
+    larvae: {
+        before: '/assets/preview/larvae/larvae_before.png',
+        after: '/assets/preview/larvae/larvae_after.png',
+    },
+    pupae: {
+        before: '/assets/preview/pupae/pupae_before.png',
+        after: '/assets/preview/pupae/pupae_after.png',
+    },
+    neonate: {
+        before: '/assets/preview/neonate/neonate_before.png',
+        after: '/assets/preview/neonate/neonate_after.png',
+    },
+};
 import { MODES, PROJECT_TYPES, type Mode, type Organism } from '@/features/analyze/constants';
 import { storeProjectClasses } from '@/features/upload/lib/processingSession';
 import { Camera, Upload as UploadIcon } from 'lucide-react';
@@ -156,22 +176,31 @@ export default function AnalyzePage() {
                             <div className="mb-2 flex items-baseline">
                                 <Label className="text-xs font-medium">Preview</Label>
                             </div>
-                            <div className="flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/20">
-                                <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                                    <div className="flex size-12 items-center justify-center rounded-full bg-muted/60">
-                                        {mode === 'camera' ? (
-                                            <Camera className="h-5 w-5" />
-                                        ) : (
-                                            <UploadIcon className="h-5 w-5" />
-                                        )}
+                            {organism && PREVIEW_ASSETS[organism] ? (
+                                <BeforeAfterSlider
+                                    beforeSrc={PREVIEW_ASSETS[organism].before}
+                                    afterSrc={PREVIEW_ASSETS[organism].after}
+                                    beforeLabel="Original"
+                                    afterLabel="Detected"
+                                />
+                            ) : (
+                                <div className="flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/20">
+                                    <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                                        <div className="flex size-12 items-center justify-center rounded-full bg-muted/60">
+                                            {mode === 'camera' ? (
+                                                <Camera className="h-5 w-5" />
+                                            ) : (
+                                                <UploadIcon className="h-5 w-5" />
+                                            )}
+                                        </div>
+                                        <span className="text-sm">
+                                            {mode === 'camera'
+                                                ? 'Camera preview will appear after creation.'
+                                                : 'Upload preview will appear after creation.'}
+                                        </span>
                                     </div>
-                                    <span className="text-sm">
-                                        {mode === 'camera'
-                                            ? 'Camera preview will appear after creation.'
-                                            : 'Upload preview will appear after creation.'}
-                                    </span>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     </section>
                 </div>

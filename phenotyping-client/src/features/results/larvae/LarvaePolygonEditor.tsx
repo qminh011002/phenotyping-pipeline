@@ -1120,6 +1120,10 @@ export function LarvaePolygonEditor({
                             label="Max W (mm)"
                             value={selectedMeasurement?.max_width_mm}
                         />
+                        <PanelStatRow
+                            label="Weight (mg)"
+                            value={selectedMeasurement?.weight_mg}
+                        />
                     </div>
                     <div className="flex items-center gap-2">
                         <Button
