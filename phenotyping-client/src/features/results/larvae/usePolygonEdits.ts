@@ -159,6 +159,13 @@ export interface UsePolygonEditsArgs {
     /** Image dimensions, for bounds checks (optional — clamping is best-effort). */
     width?: number | null;
     height?: number | null;
+    /**
+     * Called when client-side `new:N` ids are remapped to the server's UUIDs
+     * after an autosave round-trip. The parent uses this to migrate any state
+     * that references a working polygon by id (e.g. the current selection) so
+     * it doesn't go stale and point at an id that no longer exists.
+     */
+    onIdsRemapped?: (mapping: Map<string, string>) => void;
 }
 
 export interface UsePolygonEditsApi {
@@ -199,16 +206,27 @@ export interface UsePolygonEditsApi {
 export function usePolygonEdits({
     detections,
     imageKey = null,
+    onIdsRemapped,
 }: UsePolygonEditsArgs): UsePolygonEditsApi {
     const baselineRef = useRef<WorkingPolygon[]>([]);
     const newIdSeqRef = useRef(0);
     const imageKeyRef = useRef<string | null>(imageKey);
+    // Keep the latest remap callback in a ref so the resync effect (whose deps
+    // are intentionally only [imageKey, detections]) can call it without going
+    // stale or forcing the effect to re-run when the parent re-renders.
+    const onIdsRemappedRef = useRef(onIdsRemapped);
+    onIdsRemappedRef.current = onIdsRemapped;
 
     const [history, dispatch] = useReducer(reducer, undefined, () => {
         const initial = fromDetections(detections);
         baselineRef.current = initial;
         return { past: [], present: initial, future: [] };
     });
+
+    // Mirror of the live working set so the resync effect can build the
+    // new:N → UUID mapping from the polygons actually on screen.
+    const presentRef = useRef(history.present);
+    presentRef.current = history.present;
 
     // Resync when detections change. Cases:
     //   - imageKey changed (navigated to a different image) → full reset.
@@ -294,7 +312,16 @@ export function usePolygonEdits({
         const remapPossible = removedRealIds.length === 0;
         baselineRef.current = next;
         if (remapPossible) {
+            // Tell the parent which client-side ids just became server UUIDs so
+            // it can migrate id-based state (selection) before it goes stale.
+            const idMapping = new Map<string, string>();
+            for (const wp of presentRef.current) {
+                if (!wp.detection_id.startsWith('new:')) continue;
+                const uuid = fingerprintToNewId.get(polyFingerprint(wp.polygon));
+                if (uuid) idMapping.set(wp.detection_id, uuid);
+            }
             dispatch({ type: 'remap', mapper });
+            if (idMapping.size > 0) onIdsRemappedRef.current?.(idMapping);
             return;
         }
         // Last resort.

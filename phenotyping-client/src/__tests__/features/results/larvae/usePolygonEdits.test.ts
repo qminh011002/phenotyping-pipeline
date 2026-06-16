@@ -145,6 +145,45 @@ describe('usePolygonEdits', () => {
         expect(result.current.isDirty).toBe(false);
     });
 
+    it('remaps a drawn new:N id to the server UUID and notifies via onIdsRemapped', () => {
+        const drawn: [number, number][] = [
+            [50, 50],
+            [60, 50],
+            [55, 60],
+        ];
+        const uuid = '11111111-1111-4111-8111-111111111111';
+        const remaps: Map<string, string>[] = [];
+        const { result, rerender } = renderHook(
+            ({ dets }: { dets: StoredLarvaeAnnotation[] }) =>
+                usePolygonEdits({
+                    detections: dets,
+                    imageKey: 'img-1',
+                    onIdsRemapped: (m) => remaps.push(m),
+                }),
+            { initialProps: { dets: detections } },
+        );
+
+        let newId = '';
+        act(() => {
+            newId = result.current.addPolygon(drawn);
+        });
+        expect(newId).toMatch(/^new:/);
+
+        // Simulate the post-autosave refetch: the server now returns the drawn
+        // polygon as a persisted detection with a real UUID + same coords.
+        act(() => {
+            rerender({ dets: [...detections, det(uuid, drawn)] });
+        });
+
+        // The working polygon's id is migrated, and the parent is told the map.
+        expect(result.current.polygons.map((p) => p.detection_id)).toContain(uuid);
+        expect(result.current.polygons.map((p) => p.detection_id)).not.toContain(
+            newId,
+        );
+        expect(remaps).toHaveLength(1);
+        expect(remaps[0].get(newId)).toBe(uuid);
+    });
+
     it('previewSimplify does not push history', () => {
         const noisy = [
             det('n', [

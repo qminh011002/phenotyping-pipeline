@@ -183,9 +183,17 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     const currentImage: LarvaeImageDetail | null = batch?.images[currentIndex] ?? null;
 
     const detections = useMemo(() => currentImage?.detections ?? [], [currentImage]);
+    // Migrate the current selection when a freshly-drawn polygon's client-side
+    // `new:N` id is replaced by the server UUID after autosave — otherwise the
+    // selection (and thus Delete / panel actions) would point at an id that no
+    // longer exists in the working set.
+    const handleIdsRemapped = useCallback((mapping: Map<string, string>) => {
+        setSelectedDetectionId((cur) => (cur && mapping.get(cur)) || cur);
+    }, []);
     const edits = usePolygonEdits({
         detections,
         imageKey: currentImage?.image_id ?? null,
+        onIdsRemapped: handleIdsRemapped,
     });
     const {
         polygons: workingPolygons,
