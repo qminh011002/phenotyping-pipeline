@@ -1,4 +1,5 @@
-// BatchList — paginated grid of BatchCards with loading / error / empty states.
+// BatchList — paginated grid (or list) of BatchCards with loading / error /
+// empty states.
 
 import { motion } from 'framer-motion';
 import { Microscope, SearchX } from 'lucide-react';
@@ -10,7 +11,7 @@ import { formatCount } from '@/lib/format';
 import { listContainerVariants, listItemVariants } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 import type { RecordedBatchSummary } from '../hooks/useRecorded';
-import { BatchCard } from './BatchCard';
+import { BatchCard, type BatchLayout } from './BatchCard';
 
 interface BatchListProps {
     batches: RecordedBatchSummary[];
@@ -27,11 +28,15 @@ interface BatchListProps {
     onRetry: () => void;
     onClearFilters: () => void;
     onDelete?: (batchId: string) => Promise<void>;
+    /** Gallery cards or compact rows. */
+    layout?: BatchLayout;
 }
 
 // auto-fill (not auto-fit): a lone card keeps its size instead of stretching
 // across the page.
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4';
+// Rows share one panel, split by hairlines.
+const LIST = 'panel flex flex-col divide-y divide-border overflow-hidden';
 
 function SkeletonCard() {
     return (
@@ -54,6 +59,23 @@ function SkeletonCard() {
     );
 }
 
+function SkeletonRow() {
+    return (
+        <div className="flex items-center gap-4 px-3 py-2.5">
+            <Skeleton className="aspect-[16/10] w-20 shrink-0 rounded-md" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Skeleton className="h-4 w-1/3" />
+                <div className="flex items-center gap-1.5">
+                    <Skeleton className="h-5 w-14" />
+                    <Skeleton className="h-5 w-16" />
+                </div>
+            </div>
+            <Skeleton className="hidden h-4 w-48 md:block" />
+            <Skeleton className="hidden h-4 w-16 sm:block" />
+        </div>
+    );
+}
+
 export function BatchList({
     batches,
     total,
@@ -68,7 +90,9 @@ export function BatchList({
     onRetry,
     onClearFilters,
     onDelete,
+    layout = 'grid',
 }: BatchListProps) {
+    const isList = layout === 'list';
     const navigate = useNavigate();
 
     if (error !== null) {
@@ -77,10 +101,10 @@ export function BatchList({
 
     if (loading) {
         return (
-            <div className={GRID} aria-busy="true" aria-label="Loading batches">
-                {Array.from({ length: 8 }).map((_, i) => (
-                    <SkeletonCard key={i} />
-                ))}
+            <div className={isList ? LIST : GRID} aria-busy="true" aria-label="Loading batches">
+                {Array.from({ length: 8 }).map((_, i) =>
+                    isList ? <SkeletonRow key={i} /> : <SkeletonCard key={i} />,
+                )}
             </div>
         );
     }
@@ -111,7 +135,13 @@ export function BatchList({
     return (
         <div className="flex flex-col gap-6">
             <motion.div
-                className={cn(GRID, 'transition-opacity duration-150', refreshing && 'opacity-60')}
+                // Remount on switch so the new layout staggers in.
+                key={layout}
+                className={cn(
+                    isList ? LIST : GRID,
+                    'transition-opacity duration-150',
+                    refreshing && 'opacity-60',
+                )}
                 aria-busy={refreshing}
                 variants={listContainerVariants}
                 initial="hidden"
@@ -121,9 +151,9 @@ export function BatchList({
                     <motion.div
                         key={batch.id}
                         variants={listItemVariants}
-                        className="h-full min-w-0"
+                        className={isList ? 'min-w-0' : 'h-full min-w-0'}
                     >
-                        <BatchCard batch={batch} onDelete={onDelete} />
+                        <BatchCard batch={batch} onDelete={onDelete} layout={layout} />
                     </motion.div>
                 ))}
             </motion.div>

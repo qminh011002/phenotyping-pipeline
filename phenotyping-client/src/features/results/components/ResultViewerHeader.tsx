@@ -70,12 +70,12 @@ export function ResultViewerHeader({
             {/* Left — back + batch name + filename */}
             <div className="flex min-w-0 items-center gap-2">
                 <Button
-                    variant="ghost"
+                    variant="outline"
                     size="icon"
                     onClick={onBack}
                     title="Back"
                     aria-label="Back"
-                    className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="size-8 shrink-0"
                 >
                     <ArrowLeft />
                 </Button>
@@ -149,11 +149,11 @@ export function ResultViewerHeader({
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="icon"
                                 onClick={onShowShortcuts}
                                 aria-label="Keyboard shortcuts"
-                                className="size-8 text-muted-foreground hover:text-foreground"
+                                className="size-8"
                             >
                                 <Keyboard />
                             </Button>

@@ -3,16 +3,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-    Clock,
-    FlaskConical,
-    FolderOpen,
-    Gauge,
-    Images,
-    Layers,
-    Microscope,
-    Target,
-} from 'lucide-react';
+import { Clock, FlaskConical, Gauge, Images, Layers, Microscope, Target } from 'lucide-react';
 
 import { ErrorState, PageHeader, SegmentedControl, StatTile } from '@/components/common';
 import type { StatDelta } from '@/components/common';
@@ -170,20 +161,10 @@ export default function HomePage() {
                         title="Dashboard"
                         description="Throughput, batch comparisons and measured sizes across your analyses."
                         actions={
-                            <>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => navigate('/recorded')}
-                                >
-                                    <FolderOpen />
-                                    Recorded
-                                </Button>
-                                <Button size="sm" onClick={() => navigate('/analyze')}>
-                                    <FlaskConical />
-                                    Start analysis
-                                </Button>
-                            </>
+                            <Button size="sm" onClick={() => navigate('/analyze')}>
+                                <FlaskConical />
+                                Start analysis
+                            </Button>
                         }
                     >
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

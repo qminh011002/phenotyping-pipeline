@@ -6,6 +6,7 @@ import {
     Cpu,
     CreditCard,
     FlaskConical,
+    Folder,
     FolderOpen,
     Home,
     LogOut,
@@ -41,6 +42,7 @@ import {
     useSidebar,
 } from '@/components/ui/sidebar';
 import { useTheme } from '@/hooks/useTheme';
+import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { logout } from '@/services/auth';
 import { useNavigate } from 'react-router-dom';
@@ -60,6 +62,23 @@ const KEYCAP_ACTION =
 const KEYCAP_PRIMARY = `${KEYCAP_ACTION} border-[var(--keycap-edge)] bg-primary text-primary-foreground [--keycap-edge:color-mix(in_oklab,var(--primary)_70%,black)] hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground data-[active=true]:bg-primary data-[active=true]:text-primary-foreground`;
 const KEYCAP_OUTLINE = `${KEYCAP_ACTION} bg-card text-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent active:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 data-[active=true]:border-primary/40 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:[--keycap-edge:color-mix(in_oklab,var(--primary)_45%,var(--edge))]`;
 
+const ICON_SWAP =
+    'absolute inset-0 size-4 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none';
+
+/** Closed folder that swings open while its page is showing. */
+function FolderIcon({ open }: { open: boolean }) {
+    return (
+        <span aria-hidden className="relative size-4 shrink-0">
+            <Folder
+                className={cn(ICON_SWAP, open ? 'scale-75 -rotate-12 opacity-0' : 'opacity-100')}
+            />
+            <FolderOpen
+                className={cn(ICON_SWAP, open ? 'opacity-100' : 'scale-75 rotate-12 opacity-0')}
+            />
+        </span>
+    );
+}
+
 interface SidebarProps {
     collapsed?: boolean;
     onCollapsedChange?: (collapsed: boolean) => void;
@@ -76,6 +95,7 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
     const displayName = user?.name?.trim() || user?.email?.split('@')[0] || 'User';
     const initial = (user?.name?.trim()?.[0] || user?.email?.[0] || 'U').toUpperCase();
     const subtitle = user?.email ?? 'Workspace';
+    const recordedActive = location.pathname.startsWith('/recorded');
 
     async function handleLogout() {
         await logout();
@@ -128,12 +148,12 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     asChild
-                                    isActive={location.pathname.startsWith('/recorded')}
+                                    isActive={recordedActive}
                                     tooltip="Recorded"
                                     className={KEYCAP_OUTLINE}
                                 >
                                     <NavLink to="/recorded" className="px-3">
-                                        <FolderOpen />
+                                        <FolderIcon open={recordedActive} />
                                         <span>Recorded</span>
                                     </NavLink>
                                 </SidebarMenuButton>

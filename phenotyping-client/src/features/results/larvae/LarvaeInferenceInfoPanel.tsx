@@ -212,7 +212,7 @@ export function LarvaeCalibrationDetails({
                 </Button>
                 <Button
                     size="sm"
-                    variant="ghost"
+                    variant="outline"
                     className="h-7"
                     onClick={onRedetect}
                     disabled={disabled || redetecting}

@@ -51,14 +51,13 @@ export function AppShell() {
                         {shellTitle}
                     </div>
                     <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon-sm"
                         onClick={toggleTheme}
                         aria-label={
                             theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'
                         }
                         title={theme === 'light' ? 'Dark mode' : 'Light mode'}
-                        className="text-muted-foreground"
                     >
                         <ThemeIcon />
                     </Button>

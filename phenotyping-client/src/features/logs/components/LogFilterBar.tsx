@@ -119,11 +119,11 @@ export const LogFilterBar = memo(function LogFilterBar({
 
             {/* Auto-scroll — the newest entry is at the top of the list. */}
             <Button
-                variant="ghost"
+                variant="outline"
                 size="xs"
                 aria-pressed={autoScroll}
                 aria-label="Auto-scroll to the latest entry"
-                className={autoScroll ? 'text-primary hover:text-primary' : 'text-muted-foreground'}
+                className={autoScroll ? 'text-primary hover:text-primary' : undefined}
                 onClick={() => onAutoScroll(!autoScroll)}
                 title={autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll'}
             >
@@ -136,13 +136,7 @@ export const LogFilterBar = memo(function LogFilterBar({
             </Button>
 
             {/* Clear */}
-            <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                onClick={onClear}
-                title="Clear log display"
-            >
+            <Button variant="secondary" size="xs" onClick={onClear} title="Clear log display">
                 <Trash2 className="size-3.5" aria-hidden />
                 Clear
             </Button>

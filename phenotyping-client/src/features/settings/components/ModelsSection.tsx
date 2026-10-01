@@ -316,9 +316,8 @@ function ModelLibrary({
                                             }
                                         >
                                             <Button
-                                                variant="ghost"
+                                                variant="destructive"
                                                 size="sm"
-                                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                                 onClick={() => onDelete(model.id)}
                                                 disabled={deleteKey === model.id || isActive}
                                             >

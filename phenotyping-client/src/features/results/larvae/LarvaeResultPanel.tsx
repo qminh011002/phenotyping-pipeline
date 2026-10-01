@@ -1202,7 +1202,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                                     <span className="w-10 font-mono text-xs tabular-nums">
                                         {smoothTolerance.toFixed(1)}px
                                     </span>
-                                    <Button size="sm" variant="ghost" onClick={cancelSmooth}>
+                                    <Button size="sm" variant="secondary" onClick={cancelSmooth}>
                                         Cancel
                                     </Button>
                                     <Button size="sm" onClick={applySmooth}>

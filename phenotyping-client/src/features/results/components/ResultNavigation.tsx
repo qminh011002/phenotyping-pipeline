@@ -28,9 +28,9 @@ export function ResultNavigation({ total, currentIndex, onNavigate }: ResultNavi
     }, [currentIndex, hasPrev, hasNext, onNavigate]);
 
     return (
-        <div className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 p-0.5">
+        <div className="inline-flex items-center gap-1">
             <Button
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 disabled={!hasPrev}
                 onClick={() => onNavigate(currentIndex - 1)}
@@ -48,7 +48,7 @@ export function ResultNavigation({ total, currentIndex, onNavigate }: ResultNavi
             </span>
 
             <Button
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 disabled={!hasNext}
                 onClick={() => onNavigate(currentIndex + 1)}

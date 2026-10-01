@@ -28,7 +28,7 @@ export function RecentBatchesTable({ recent, extras }: RecentBatchesTableProps) 
                         Your latest runs, newest first
                     </p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => navigate('/recorded')}>
+                <Button variant="outline" size="sm" onClick={() => navigate('/recorded')}>
                     View all
                     <ArrowRight />
                 </Button>

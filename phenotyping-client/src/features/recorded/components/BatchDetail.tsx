@@ -153,11 +153,10 @@ function BackButton({
 }) {
     return (
         <Button
-            variant="ghost"
+            variant="outline"
             size="xs"
             onClick={onClick}
             title={`Back to ${label.toLowerCase()}`}
-            className="-ml-2 text-muted-foreground hover:text-foreground"
         >
             <ArrowLeft aria-hidden />
             {label}
@@ -227,9 +226,9 @@ function RunDetails({ detail }: { detail: AnalysisBatchDetail }) {
 
                 {config.length > 0 && (
                     <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="ml-auto text-muted-foreground hover:text-foreground"
+                        className="ml-auto"
                         onClick={() => setConfigOpen((open) => !open)}
                         aria-expanded={configOpen}
                         aria-controls="run-details-config"
@@ -810,7 +809,7 @@ export function BatchDetail() {
                     </p>
                     {drivenHere && (
                         <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
                             onClick={() => navigate('/analyze/processing')}
                         >

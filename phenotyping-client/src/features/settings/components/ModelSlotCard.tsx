@@ -58,7 +58,7 @@ export function ModelSlotCard({ assignment, onReplace, onRevert, reverting }: Mo
                 </Button>
                 {!is_default && (
                     <Button
-                        variant="ghost"
+                        variant="secondary"
                         size="sm"
                         onClick={() => onRevert(organism)}
                         disabled={reverting}

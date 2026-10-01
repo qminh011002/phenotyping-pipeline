@@ -125,8 +125,8 @@ export function LarvaeMeasureCard({
                     {run.scope === 'batch' && (
                         <Button
                             size="sm"
-                            variant="ghost"
-                            className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
+                            variant="secondary"
+                            className="h-6 gap-1 px-1.5 text-xs"
                             onClick={onCancelRun}
                             disabled={run.cancelling}
                         >
@@ -207,8 +207,8 @@ export function LarvaeMeasureCard({
                         {!samRefined && (
                             <Button
                                 size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-xs text-muted-foreground"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
                                 onClick={() => onMeasureImage({ refine: true })}
                                 disabled={disabled || !canMeasure}
                                 title="Tighten the outlines with SAM, then measure again — slower, especially without a GPU"
@@ -220,8 +220,8 @@ export function LarvaeMeasureCard({
                         {!outOfDate && (
                             <Button
                                 size="sm"
-                                variant="ghost"
-                                className="h-7 px-2 text-xs text-muted-foreground"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
                                 onClick={() => onMeasureImage()}
                                 disabled={disabled || !canMeasure}
                                 title="Measure this image again"

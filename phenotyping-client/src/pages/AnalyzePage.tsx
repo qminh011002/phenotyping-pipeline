@@ -108,7 +108,7 @@ export default function AnalyzePage() {
             <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2.5">
                 <div className="flex min-w-0 items-center gap-2">
                     <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon-sm"
                         onClick={() => backTo('/')}
                         aria-label="Back to dashboard"
@@ -232,7 +232,7 @@ export default function AnalyzePage() {
                             : 'Next: add the images to analyse.'}
                     </p>
                     <div className="ml-auto flex items-center gap-2">
-                        <Button variant="ghost" onClick={() => backTo('/')}>
+                        <Button variant="secondary" onClick={() => backTo('/')}>
                             Cancel
                         </Button>
                         <Button onClick={handleSubmit} disabled={!canSubmit}>

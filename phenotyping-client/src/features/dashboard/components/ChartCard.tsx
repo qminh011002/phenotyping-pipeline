@@ -39,13 +39,12 @@ export function ChartCard({
                     {controls}
                     {table && (
                         <Button
-                            variant="ghost"
+                            variant="outline"
                             size="icon-sm"
                             onClick={() => setShowTable((v) => !v)}
                             aria-pressed={showTable}
                             aria-label={showTable ? 'Show chart' : 'Show data table'}
                             title={showTable ? 'Show chart' : 'Show data table'}
-                            className="text-muted-foreground"
                         >
                             {showTable ? <ChartNoAxesColumn /> : <Table2 />}
                         </Button>
