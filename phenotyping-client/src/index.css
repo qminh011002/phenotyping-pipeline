@@ -172,6 +172,7 @@
     --color-destructive: var(--destructive);
     --color-destructive-foreground: var(--destructive-foreground);
     --color-border: var(--border);
+    --color-edge: var(--edge);
     --color-input: var(--input);
     --color-ring: var(--ring);
     --color-chart-1: var(--chart-1);
@@ -373,6 +374,8 @@
     --destructive: oklch(0.577 0.245 27.325);
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(0.915 0.004 160);
+    /* Bottom edge of a raised surface — see the keycap utilities below. */
+    --edge: oklch(0.845 0.008 160);
     --input: oklch(0.9 0.004 160);
     --ring: oklch(0.55 0.15 152);
 
@@ -430,6 +433,7 @@
     --destructive: oklch(0.704 0.191 22.216);
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(1 0 0 / 10%);
+    --edge: oklch(0 0 0 / 60%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.62 0.15 155);
 
@@ -494,13 +498,33 @@ h6 {
    Shared surface + type utilities
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* The standard raised panel: hairline border, card surface, soft shadow. */
+/* The standard raised panel, cut like a keycap: hairline border, card
+   surface and a thicker, darker bottom edge instead of a blurred shadow. */
 @utility panel {
     border: 1px solid var(--border);
+    border-bottom: 3px solid var(--edge);
     border-radius: var(--radius-xl);
     background-color: var(--card);
     color: var(--card-foreground);
-    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+}
+
+/* Keycap depth for things you press: a solid bottom edge that the control
+   sinks into while held. Set `--keycap-edge` to the fill's darker tone.
+   Built on Tailwind's shadow variable so focus rings still compose. */
+@utility keycap {
+    --keycap-depth: 2px;
+    --tw-shadow: 0 var(--keycap-depth) 0 0 var(--keycap-edge, var(--edge));
+    box-shadow:
+        var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000),
+        var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+    transition-property: color, background-color, border-color, box-shadow, transform;
+    transition-duration: 100ms;
+    transition-timing-function: ease-out;
+
+    &:active:not(:disabled) {
+        --tw-shadow: 0 0 0 0 var(--keycap-edge, var(--edge));
+        transform: translateY(var(--keycap-depth));
+    }
 }
 
 /* Floating chrome over the editor canvas (toolbars, zoom, hints). */
@@ -544,7 +568,7 @@ h6 {
     justify-content: center;
     padding: 0 0.3rem;
     border: 1px solid var(--border);
-    border-bottom-width: 2px;
+    border-bottom: 2px solid var(--edge);
     border-radius: calc(var(--radius) - 5px);
     background-color: var(--muted);
     font-family: var(--font-mono);

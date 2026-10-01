@@ -692,15 +692,7 @@ class AnalysisService:
             return ActiveBatchResponse(active=False, batch=None)
 
         now = datetime.now(timezone.utc)
-        started_at = batch.created_at
-        since_raw = (batch.config_snapshot or {}).get(_ACTIVE_SINCE_KEY)
-        if isinstance(since_raw, str):
-            try:
-                started_at = datetime.fromisoformat(since_raw)
-            except ValueError:
-                pass
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
+        started_at = self._processing_started_at(batch) or now
         if now - started_at > _ZOMBIE_TIMEOUT:
             if await self._abort_append(batch, db):
                 logger.warning(
@@ -904,6 +896,7 @@ class AnalysisService:
             failed_at=batch.failed_at,
             failure_reason=batch.failure_reason,
             classes=list(batch.classes or []),
+            processing_started_at=self._processing_started_at(batch),
             config_snapshot=self._public_snapshot(batch.config_snapshot),
             notes=batch.notes,
             images=image_summaries,
@@ -1168,6 +1161,22 @@ class AnalysisService:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _processing_started_at(batch: AnalysisBatch) -> datetime | None:
+        """Start of the run in flight, or None when the batch is not processing."""
+        if batch.status != "processing":
+            return None
+        started_at = batch.created_at
+        since_raw = (batch.config_snapshot or {}).get(_ACTIVE_SINCE_KEY)
+        if isinstance(since_raw, str):
+            try:
+                started_at = datetime.fromisoformat(since_raw)
+            except ValueError:
+                pass
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        return started_at
+
+    @staticmethod
     def _public_snapshot(snapshot: dict | None) -> dict:
         """Config snapshot without the internal append bookkeeping keys."""
         return {
@@ -1224,5 +1233,6 @@ class AnalysisService:
             failed_at=batch.failed_at,
             failure_reason=batch.failure_reason,
             classes=list(batch.classes or []),
+            processing_started_at=self._processing_started_at(batch),
             cover_image_id=cover_image_id,
         )

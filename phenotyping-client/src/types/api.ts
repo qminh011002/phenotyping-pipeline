@@ -414,6 +414,8 @@ export interface AnalysisBatchSummary {
     failure_reason: string | null;
     /** Class names defined on the Analyze page; frozen for the batch. */
     classes: string[];
+    /** Start of the run in flight (ISO 8601); null unless `status` is processing. */
+    processing_started_at?: string | null;
     /** First completed image — for cover thumbnails. Set by list endpoints. */
     cover_image_id?: string | null;
 }
@@ -534,6 +536,59 @@ export interface DashboardOverview {
     batches: DashboardBatchRow[];
     attention: DashboardAttention;
     recent_analyses: AnalysisBatchSummary[];
+}
+
+// ── Batch analytics ───────────────────────────────────────────────────────────
+
+export interface BatchAnalyticsImage {
+    id: string;
+    filename: string;
+    status: string;
+    count: number | null;
+    avg_confidence: number | null;
+    elapsed_secs: number | null;
+    /** Detections the model produced, before any review. */
+    model_count: number | null;
+    /** Operator-drawn detections still on the image. */
+    user_added: number;
+    edited: boolean;
+    /** Larvae / pupae only. */
+    measured: number;
+    mean_length_mm: number | null;
+}
+
+export interface BatchCountStats {
+    images: number;
+    total: number;
+    mean: number | null;
+    median: number | null;
+    sd: number | null;
+    /** sd / mean. */
+    cv: number | null;
+    min: number | null;
+    max: number | null;
+}
+
+export interface BatchReviewStats {
+    images_edited: number;
+    model_detections: number;
+    user_added: number;
+    /** Reviewed total minus what the model found. */
+    net_change: number;
+    low_confidence_detections: number;
+    low_confidence_images: number;
+}
+
+export interface BatchAnalytics {
+    batch_id: string;
+    organism: Organism;
+    images: BatchAnalyticsImage[];
+    counts: BatchCountStats;
+    /** Model detections per confidence band (operator-drawn ones excluded). */
+    detection_confidence: DashboardHistogramBin[];
+    classes: Array<{ label: string; count: number }>;
+    review: BatchReviewStats;
+    sizes: DashboardSizeStats[];
 }
 
 // ── Custom Models ────────────────────────────────────────────────────────────

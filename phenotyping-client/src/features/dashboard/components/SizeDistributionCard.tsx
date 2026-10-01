@@ -7,7 +7,7 @@ import { Ruler } from 'lucide-react';
 import { SegmentedControl } from '@/components/common';
 import { formatNumber } from '@/lib/format';
 import { ORGANISM_ORDER, organismMeta } from '@/lib/organism';
-import type { DashboardOverview, DashboardSizeStats, SizeMetric } from '@/types/api';
+import type { DashboardSizeStats, SizeMetric } from '@/types/api';
 
 import { ChartCard, ChartEmpty, DataTable } from './ChartCard';
 import { ColumnChart } from './ColumnChart';
@@ -87,26 +87,36 @@ function Histogram({ stats }: { stats: DashboardSizeStats }) {
     );
 }
 
-export function SizeDistributionCard({ overview }: { overview: DashboardOverview }) {
+interface SizeDistributionCardProps {
+    sizes: DashboardSizeStats[];
+    /** What the distributions cover — worded into the subtitle and empty states. */
+    scope?: 'period' | 'batch';
+}
+
+export function SizeDistributionCard({ sizes, scope = 'period' }: SizeDistributionCardProps) {
     const [metric, setMetric] = useState<SizeMetric>('length_mm');
 
-    const available = useMemo(() => new Set(overview.sizes.map((s) => s.metric)), [overview.sizes]);
+    const available = useMemo(() => new Set(sizes.map((s) => s.metric)), [sizes]);
     // Fall back when the chosen trait has no data in this slice (e.g. weight
     // is only present where the operator entered tray weights).
     const effective = available.has(metric)
         ? metric
         : (METRICS.find((m) => available.has(m.value))?.value ?? metric);
     const panels = ORGANISM_ORDER.map((o) =>
-        overview.sizes.find((s) => s.organism === o && s.metric === effective),
+        sizes.find((s) => s.organism === o && s.metric === effective),
     ).filter((s): s is DashboardSizeStats => s !== undefined);
     const noun = METRICS.find((m) => m.value === effective)?.noun ?? 'size';
 
     return (
         <ChartCard
             title="Size distribution"
-            subtitle={`Measured ${noun} of individual larvae and pupae · bars span the 1st–99th percentile`}
+            subtitle={
+                scope === 'batch'
+                    ? `Measured ${noun} of every individual in this batch · bars span the 1st–99th percentile`
+                    : `Measured ${noun} of individual larvae and pupae · bars span the 1st–99th percentile`
+            }
             controls={
-                overview.sizes.length > 0 ? (
+                sizes.length > 0 ? (
                     <SegmentedControl
                         aria-label="Measured trait"
                         size="sm"
@@ -118,7 +128,7 @@ export function SizeDistributionCard({ overview }: { overview: DashboardOverview
                             disabled: !available.has(m.value),
                             title: available.has(m.value)
                                 ? undefined
-                                : `No ${m.noun} measurements in this period`,
+                                : `No ${m.noun} measurements in this ${scope}`,
                         }))}
                     />
                 ) : undefined
@@ -155,7 +165,9 @@ export function SizeDistributionCard({ overview }: { overview: DashboardOverview
                 <ChartEmpty className="h-56 flex-col gap-2">
                     <Ruler className="size-5 text-muted-foreground/60" aria-hidden />
                     <span>
-                        No size measurements in this period. Open a larvae or pupae batch and choose{' '}
+                        {scope === 'batch'
+                            ? 'Nothing in this batch has been measured yet. Open it in the review tool and choose '
+                            : 'No size measurements in this period. Open a larvae or pupae batch and choose '}
                         <span className="font-medium text-foreground">Measure</span> to add them.
                     </span>
                 </ChartEmpty>

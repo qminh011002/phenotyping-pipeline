@@ -319,6 +319,14 @@ def get_dashboard_service():
 
 
 @lru_cache
+def get_batch_analytics_service():
+    """Return a cached BatchAnalyticsService instance (stateless)."""
+    from app.services.batch_analytics_service import BatchAnalyticsService
+
+    return BatchAnalyticsService()
+
+
+@lru_cache
 def get_app_settings_service() -> AppSettingsService:
     """Return a cached AppSettingsService instance.
 

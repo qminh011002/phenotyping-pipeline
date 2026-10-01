@@ -17,7 +17,12 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 
 from app.database import AsyncSession, get_session
-from app.deps import CurrentUser, get_analysis_service, get_cached_storage_dir
+from app.deps import (
+    CurrentUser,
+    get_analysis_service,
+    get_batch_analytics_service,
+    get_cached_storage_dir,
+)
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.routers.inference_utils import cached_file_response
 from app.schemas.analysis import (
@@ -29,11 +34,13 @@ from app.schemas.analysis import (
     AnalysisImageDetail,
     AnalysisImageResult,
     AnalysisListResponse,
+    BatchAnalytics,
     BatchDownloadRequest,
     EditedAnnotationsUpdate,
     FailBatchRequest,
 )
 from app.services.analysis_service import AnalysisService
+from app.services.batch_analytics_service import BatchAnalyticsService
 from app.services.batch_export import stream_batch_archive
 from app.services.image_artifacts import (
     ensure_polygon_overlay_fresh,
@@ -355,6 +362,35 @@ async def get_analysis(
             detail=f"Analysis batch {batch_id} not found.",
         )
     return detail
+
+
+@router.get(
+    "/{batch_id}/analytics",
+    response_model=BatchAnalytics,
+    summary="Analytics for one batch",
+    responses={
+        200: {"description": "Batch analytics returned"},
+        404: {"description": "Batch not found"},
+    },
+)
+async def get_analysis_analytics(
+    batch_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
+    analytics_svc: BatchAnalyticsService = Depends(get_batch_analytics_service),
+) -> BatchAnalytics:
+    """Per-image count spread, detection-confidence distribution, what review
+    changed and (larvae / pupae) measured size distributions for one batch.
+    """
+    analytics = await analytics_svc.get_analytics(
+        batch_id=batch_id, db=db, user_id=user.id
+    )
+    if analytics is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+    return analytics
 
 
 @router.patch(

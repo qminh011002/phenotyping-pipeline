@@ -44,6 +44,15 @@ export function formatDuration(seconds: number | null | undefined): string {
     return `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
+/** Running clock for something still in flight: "0:42", "12:05", "1:02:33". */
+export function formatElapsed(seconds: number): string {
+    const total = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 export function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

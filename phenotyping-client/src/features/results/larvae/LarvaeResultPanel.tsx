@@ -37,7 +37,8 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { addImagesPath, batchPath } from '@/features/recorded/lib/paths';
+import { addImagesPath, batchPath, isBatchPagePath } from '@/features/recorded/lib/paths';
+import { useBackTo } from '@/hooks/useBackTo';
 import { invalidateAuthedImages } from '@/hooks/useAuthedImage';
 import { readPersistentFlag, usePersistentFlag } from '@/hooks/usePersistentFlag';
 import { queryClient } from '@/lib/queryClient';
@@ -81,7 +82,7 @@ import { LarvaeCalibrationBanner } from './LarvaeCalibrationBanner';
 import { CalibrationCornerEditorChrome } from './CalibrationCornerEditor';
 import { CalibrationManualForm } from './CalibrationManualForm';
 import type { Corners } from './calibrationMath';
-import { calibrationUsable, measureImage, needsMeasuring } from './measureFlow';
+import { MEASURE_STEP_LABEL, calibrationUsable, measureImage, needsMeasuring } from './measureFlow';
 import { usePolygonEdits, type WorkingPolygon } from './usePolygonEdits';
 
 const SMOOTH_MIN = 0;
@@ -123,6 +124,7 @@ const INSPECTOR_TABS: Array<{ value: InspectorTab; label: string }> = [
 
 export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProps) {
     const navigate = useNavigate();
+    const backTo = useBackTo();
     const { batchId, imageId } = useParams<{ batchId: string; imageId?: string }>();
 
     // Batch + one light row per image (counts, calibration — no polygons).
@@ -716,7 +718,9 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             const batch = summaryRef.current;
             const target = batch?.images[idx];
             if (!batch || !target) return;
-            navigate(buildUrl(batch.batch_id, target.image_id));
+            // Replace: stepping through images is not a trail the browser's
+            // Back button should have to unwind one image at a time.
+            navigate(buildUrl(batch.batch_id, target.image_id), { replace: true });
         },
         [navigate, buildUrl],
     );
@@ -749,6 +753,21 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setDirtyNavDialogOpen(false);
         setPendingNavIdx(null);
     }, []);
+
+    /** Close the viewer and return to the batch page once edits are safe. */
+    const leaveToBatch = useCallback(
+        (id: string) => {
+            const go = () => backTo(batchPath(id), (path) => isBatchPagePath(path, id));
+            if (!dirty && !savingPolygons) {
+                go();
+                return;
+            }
+            void flushPendingEdits().then((ok) => {
+                if (ok) go();
+            });
+        },
+        [dirty, savingPolygons, flushPendingEdits, backTo],
+    );
 
     /** Leave the viewer for `path` once edits are safe. */
     const leaveTo = useCallback(
@@ -1065,7 +1084,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                 setSummary((prev) => (prev ? { ...prev, status: updated.status } : prev));
             }
             toast.success('Saved to Records');
-            navigate(batchPath(summary.batch_id));
+            backTo(batchPath(summary.batch_id), (path) => isBatchPagePath(path, summary.batch_id));
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Failed to save to Records');
         } finally {
@@ -1096,7 +1115,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                 isDirty={dirty || savingPolygons}
                 isSaved={isSaved}
                 finishing={finishing}
-                onBack={() => leaveTo('/recorded')}
+                onBack={() => leaveToBatch(summary.batch_id)}
                 onNavigate={requestNavigate}
                 onFinish={handleFinish}
                 onShowShortcuts={() => setShortcutsOpen(true)}
@@ -1243,10 +1262,16 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                             </div>
                         )}
 
-                        {busyOnThisImage && (
-                            // Outlines are being rewritten server-side; edits
-                            // made now would be overwritten.
-                            <div className="absolute inset-0 z-30 cursor-progress bg-background/20" />
+                        {run !== null ? (
+                            // A measuring run rewrites outlines and sizes on
+                            // the server; the canvas stays locked until it ends.
+                            <MeasuringOverlay run={run} />
+                        ) : (
+                            busyOnThisImage && (
+                                // Calibration is being saved; edits made now
+                                // would be overwritten.
+                                <div className="absolute inset-0 z-30 cursor-progress bg-background/20" />
+                            )
                         )}
                     </div>
 
@@ -1576,3 +1601,60 @@ function polygonArea(poly: LarvaePolygon): number {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Covers the canvas while a measuring run is in flight: says what is
+ *  happening and swallows every pointer / wheel event underneath. */
+function MeasuringOverlay({ run }: { run: MeasureRun }) {
+    const batch = run.scope === 'batch';
+    const pct = run.total > 0 ? (run.done / run.total) * 100 : 0;
+    return (
+        <div
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-30 flex cursor-progress items-center justify-center bg-background/40 backdrop-blur-[1px]"
+            onPointerDown={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+        >
+            <div className="floating-panel flex w-72 max-w-[calc(100%-2rem)] flex-col gap-3 px-5 py-4">
+                <div className="flex items-center gap-3">
+                    <Loader2 className="size-5 shrink-0 animate-spin text-primary" aria-hidden />
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold">
+                            {run.cancelling ? 'Stopping…' : 'Measuring…'}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                            {MEASURE_STEP_LABEL[run.step]}
+                        </p>
+                    </div>
+                </div>
+                {batch && (
+                    <div className="flex flex-col gap-1.5">
+                        <div
+                            className="h-1.5 overflow-hidden rounded-full bg-muted"
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={run.total}
+                            aria-valuenow={run.done}
+                        >
+                            <div
+                                className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+                                style={{ width: `${pct}%` }}
+                            />
+                        </div>
+                        <p className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                            <span className="truncate font-mono" title={run.filename}>
+                                {run.filename}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                                {Math.min(run.done + 1, run.total)} of {run.total}
+                            </span>
+                        </p>
+                    </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                    The image is locked until measuring finishes.
+                </p>
+            </div>
+        </div>
+    );
+}

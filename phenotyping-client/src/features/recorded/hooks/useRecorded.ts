@@ -32,12 +32,14 @@ export const DEFAULT_FILTERS: RecordedFilters = {
 
 const PAGE_SIZE = 12;
 const SEARCH_DEBOUNCE_MS = 250;
+/** While a listed batch is processing, poll so its card keeps up. */
+const PROCESSING_POLL_MS = 3000;
 
 // "All" shows drafts alongside saved/failed batches so a batch the operator
-// left via Quit & Save can be found and resumed. Batches still processing
-// stay out of the list.
+// left via Quit & Save can be found and resumed — and batches still being
+// analysed, which render as live progress cards.
 const STATUSES: Record<StatusFilter, string[]> = {
-    all: ['completed', 'failed', 'draft'],
+    all: ['processing', 'completed', 'failed', 'draft'],
     completed: ['completed'],
     draft: ['draft'],
     failed: ['failed'],
@@ -126,6 +128,8 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
                 signal,
             ),
         placeholderData: (previous) => previous,
+        refetchInterval: (q) =>
+            q.state.data?.items.some((b) => b.status === 'processing') ? PROCESSING_POLL_MS : false,
         // Counts change when a batch is edited or extended elsewhere: show the
         // cached page at once, but refresh it every time the list comes back.
         staleTime: 0,

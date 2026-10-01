@@ -8,10 +8,11 @@ Everything is scoped to one user and one look-back window. Reviewed work only:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import Select, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analysis import AnalysisBatch, AnalysisImage
@@ -59,6 +60,97 @@ def bucket_for_days(days: int) -> str:
 
 def _f(value: object) -> float | None:
     return float(value) if value is not None else None  # type: ignore[arg-type]
+
+
+async def size_distributions(
+    db: AsyncSession, organism: str, scope: Callable[[Select], Select]
+) -> list[DashboardSizeStats]:
+    """Distribution of each measured metric over the measurements ``scope`` keeps.
+
+    ``scope`` narrows a statement that already joins measurement → detection →
+    image → batch. Two queries per metric: summary stats, then a histogram
+    whose range is clipped to P1–P99 so one mis-segmented blob doesn't flatten
+    every other bar.
+    """
+    out: list[DashboardSizeStats] = []
+    for key, unit, col in _SIZE_METRICS:
+
+        def scoped(stmt, _col=col):
+            return scope(
+                stmt.select_from(LarvaeMeasurement)
+                .join(
+                    LarvaeDetection,
+                    LarvaeDetection.id == LarvaeMeasurement.detection_id,
+                )
+                .join(AnalysisImage, AnalysisImage.id == LarvaeDetection.image_id)
+                .join(AnalysisBatch, AnalysisBatch.id == AnalysisImage.batch_id)
+                .where(_col.is_not(None))
+                .where(_col > 0)
+            )
+
+        summary = (
+            await db.execute(
+                scoped(
+                    select(
+                        func.count(col),
+                        func.avg(col),
+                        func.min(col),
+                        func.max(col),
+                        func.percentile_cont(0.5).within_group(col),
+                        func.percentile_cont(0.05).within_group(col),
+                        func.percentile_cont(0.95).within_group(col),
+                        func.percentile_cont(0.01).within_group(col),
+                        func.percentile_cont(0.99).within_group(col),
+                    )
+                )
+            )
+        ).one()
+        n = int(summary[0] or 0)
+        if n == 0:
+            continue
+        lo, hi = float(summary[7]), float(summary[8])
+        bins: list[DashboardHistogramBin] = []
+        if hi > lo:
+            band = func.width_bucket(col, lo, hi, _SIZE_BINS).label("band")
+            counts = {
+                int(b): int(c)
+                for b, c in await db.execute(
+                    scoped(select(band, func.count(col)))
+                    .where(col >= lo)
+                    .where(col <= hi)
+                    .group_by(band)
+                )
+                if b is not None
+            }
+            # x == hi lands in bucket _SIZE_BINS + 1; fold into the last bin.
+            counts[_SIZE_BINS] = counts.get(_SIZE_BINS, 0) + counts.pop(
+                _SIZE_BINS + 1, 0
+            )
+            step = (hi - lo) / _SIZE_BINS
+            bins = [
+                DashboardHistogramBin(
+                    start=lo + i * step,
+                    end=lo + (i + 1) * step,
+                    count=counts.get(i + 1, 0),
+                )
+                for i in range(_SIZE_BINS)
+            ]
+        out.append(
+            DashboardSizeStats(
+                organism=organism,
+                metric=key,
+                unit=unit,
+                n=n,
+                mean=_f(summary[1]),
+                min=_f(summary[2]),
+                max=_f(summary[3]),
+                median=_f(summary[4]),
+                p5=_f(summary[5]),
+                p95=_f(summary[6]),
+                bins=bins,
+            )
+        )
+    return out
 
 
 class DashboardService:
@@ -284,98 +376,22 @@ class DashboardService:
         end: datetime,
         organism: str | None,
     ) -> list[DashboardSizeStats]:
-        """Distribution of each measured metric per polygon organism.
-
-        Two queries per (organism, metric): summary stats, then a histogram
-        whose range is clipped to P1–P99 so one mis-segmented blob doesn't
-        flatten every other bar.
-        """
+        """Distribution of each measured metric per polygon organism."""
         organisms = [organism] if organism else list(_POLYGON_ORGANISMS)
         out: list[DashboardSizeStats] = []
         for org in organisms:
             if org not in _POLYGON_ORGANISMS:
                 continue
-            for key, unit, col in _SIZE_METRICS:
 
-                def scoped(stmt, _org: str = org, _col=col):
-                    stmt = (
-                        stmt.select_from(LarvaeMeasurement)
-                        .join(
-                            LarvaeDetection,
-                            LarvaeDetection.id == LarvaeMeasurement.detection_id,
-                        )
-                        .join(
-                            AnalysisImage, AnalysisImage.id == LarvaeDetection.image_id
-                        )
-                        .join(AnalysisBatch, AnalysisBatch.id == AnalysisImage.batch_id)
-                        .where(AnalysisBatch.organism_type == _org)
-                        .where(_col.is_not(None))
-                        .where(_col > 0)
-                    )
-                    return self._scope(stmt, user_id, start, end)
-
-                summary = (
-                    await db.execute(
-                        scoped(
-                            select(
-                                func.count(col),
-                                func.avg(col),
-                                func.min(col),
-                                func.max(col),
-                                func.percentile_cont(0.5).within_group(col),
-                                func.percentile_cont(0.05).within_group(col),
-                                func.percentile_cont(0.95).within_group(col),
-                                func.percentile_cont(0.01).within_group(col),
-                                func.percentile_cont(0.99).within_group(col),
-                            )
-                        )
-                    )
-                ).one()
-                n = int(summary[0] or 0)
-                if n == 0:
-                    continue
-                lo, hi = float(summary[7]), float(summary[8])
-                bins: list[DashboardHistogramBin] = []
-                if hi > lo:
-                    band = func.width_bucket(col, lo, hi, _SIZE_BINS).label("band")
-                    counts = {
-                        int(b): int(c)
-                        for b, c in await db.execute(
-                            scoped(select(band, func.count(col)))
-                            .where(col >= lo)
-                            .where(col <= hi)
-                            .group_by(band)
-                        )
-                        if b is not None
-                    }
-                    # x == hi lands in bucket _SIZE_BINS + 1; fold into the last bin.
-                    counts[_SIZE_BINS] = counts.get(_SIZE_BINS, 0) + counts.pop(
-                        _SIZE_BINS + 1, 0
-                    )
-                    step = (hi - lo) / _SIZE_BINS
-                    bins = [
-                        DashboardHistogramBin(
-                            start=lo + i * step,
-                            end=lo + (i + 1) * step,
-                            count=counts.get(i + 1, 0),
-                        )
-                        for i in range(_SIZE_BINS)
-                    ]
-                out.append(
-                    DashboardSizeStats(
-                        organism=org,
-                        metric=key,
-                        unit=unit,
-                        n=n,
-                        mean=_f(summary[1]),
-                        min=_f(summary[2]),
-                        max=_f(summary[3]),
-                        median=_f(summary[4]),
-                        p5=_f(summary[5]),
-                        p95=_f(summary[6]),
-                        bins=bins,
-                    )
+            def scope(stmt, _org: str = org):
+                return self._scope(
+                    stmt.where(AnalysisBatch.organism_type == _org),
+                    user_id,
+                    start,
+                    end,
                 )
+
+            out.extend(await size_distributions(db, org, scope))
         return out
 
     async def _batch_rows(
