@@ -52,9 +52,13 @@ import { getThumbnailUrl } from '@/services/api';
 import type { RecordedBatchSummary } from '../hooks/useRecorded';
 import { addImagesPath, batchPath } from '../lib/paths';
 
+export type BatchLayout = 'grid' | 'list';
+
 interface BatchCardProps {
     batch: RecordedBatchSummary;
     onDelete?: (batchId: string) => Promise<void>;
+    /** A gallery card, or one row of the list view. */
+    layout?: BatchLayout;
 }
 
 /** "R2" from a name like "Plate 7_R2" — the re-run marker operators append. */
@@ -80,7 +84,7 @@ function Stat({
     );
 }
 
-function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
+function BatchCardImpl({ batch, onDelete, layout = 'grid' }: BatchCardProps) {
     const navigate = useNavigate();
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -112,6 +116,186 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
         } finally {
             setDeleting(false);
         }
+    }
+
+    const menu = (
+        <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+                <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label={`Actions for ${name}`}
+                    className="pointer-events-auto size-7 data-[state=open]:bg-key-hover"
+                >
+                    <MoreHorizontal aria-hidden />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onSelect={() => navigate(href)}>
+                    <FolderOpen aria-hidden />
+                    Open
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                    disabled={processing}
+                    onSelect={() => navigate(addImagesPath(batch.id, batch.organism_type))}
+                >
+                    <ImagePlus aria-hidden />
+                    Add images
+                </DropdownMenuItem>
+                {onDelete && (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            variant="destructive"
+                            // Deleting under a running loop would
+                            // strand it mid-upload.
+                            disabled={processing}
+                            onSelect={() => setConfirmOpen(true)}
+                        >
+                            <Trash2 aria-hidden />
+                            Delete
+                        </DropdownMenuItem>
+                    </>
+                )}
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+
+    const dialog = onDelete && (
+        <AlertDialog open={confirmOpen} onOpenChange={(open) => !deleting && setConfirmOpen(open)}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This will permanently remove{' '}
+                        <span className="font-medium text-foreground">{name}</span> — the{' '}
+                        {meta.label.toLowerCase()} analysis from {formatDate(batch.created_at)} with{' '}
+                        {formatCount(batch.total_image_count)}{' '}
+                        {pluralize(batch.total_image_count, 'image')}. This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                    {/* A plain button, not AlertDialogAction: the dialog stays
+                        up (with a spinner) until the request settles. */}
+                    <Button
+                        variant="destructive"
+                        loading={deleting}
+                        onClick={() => void handleDelete()}
+                    >
+                        Delete
+                    </Button>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    );
+
+    const isList = layout === 'list';
+    const stats = (
+        <>
+            <Stat icon={Images} title="Images in this batch">
+                <span className="font-medium text-foreground">
+                    {formatCount(batch.total_image_count)}
+                </span>
+                {pluralize(batch.total_image_count, 'image')}
+            </Stat>
+            <Stat title={`Total ${meta.nounPlural} counted`}>
+                <span
+                    aria-hidden
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: meta.color }}
+                />
+                {batch.total_count != null ? (
+                    <CountText organism={batch.organism_type} n={batch.total_count} />
+                ) : (
+                    <span>— {meta.nounPlural}</span>
+                )}
+            </Stat>
+            {batch.avg_confidence != null ? (
+                <Stat icon={Gauge} title="Average confidence">
+                    {formatPercent(batch.avg_confidence, 0)}
+                </Stat>
+            ) : (
+                // List rows keep the column, so the next one stays aligned.
+                isList && <span />
+            )}
+            {batch.total_elapsed_secs != null ? (
+                <Stat icon={Clock} title="Processing time">
+                    {formatDuration(batch.total_elapsed_secs)}
+                </Stat>
+            ) : (
+                isList && <span />
+            )}
+        </>
+    );
+
+    if (isList) {
+        return (
+            <div
+                className={cn(
+                    'group/row flex min-w-0 items-center gap-2 pr-3 transition-[opacity,background-color] duration-150 ease-out hover:bg-muted/40',
+                    deleting && 'pointer-events-none opacity-60',
+                )}
+            >
+                <Link
+                    to={href}
+                    draggable={false}
+                    onKeyDown={(e) => {
+                        if (e.key === ' ') {
+                            e.preventDefault();
+                            navigate(href);
+                        }
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-4 rounded-md py-2.5 pl-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                    <Thumbnail
+                        src={coverSrc}
+                        alt=""
+                        className="aspect-[16/10] w-20 shrink-0 rounded-md border border-border"
+                    />
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                            <h3 className="truncate text-sm font-semibold" title={name}>
+                                {name}
+                            </h3>
+                            {version && (
+                                <span className="inline-flex h-5 shrink-0 items-center rounded-md border border-border bg-card px-1.5 text-[11px] font-semibold">
+                                    {version}
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            <OrganismBadge organism={batch.organism_type} />
+                            <StatusBadge status={batch.status} />
+                            {processing ? (
+                                <ProcessingInline batch={batch} />
+                            ) : (
+                                batch.status === 'failed' &&
+                                batch.failure_reason && (
+                                    <span
+                                        className="truncate text-xs text-destructive"
+                                        title={batch.failure_reason}
+                                    >
+                                        {batch.failure_reason}
+                                    </span>
+                                )
+                            )}
+                        </div>
+                    </div>
+                    <div className="hidden shrink-0 grid-cols-[5.5rem_8rem_3.5rem_4.5rem] items-center gap-x-4 text-xs tabular-nums text-muted-foreground md:grid">
+                        {stats}
+                    </div>
+                    <span
+                        className="hidden w-24 shrink-0 truncate text-right text-xs text-muted-foreground sm:block"
+                        title={formatDateTime(batch.created_at)}
+                    >
+                        {timeAgo(batch.created_at)}
+                    </span>
+                </Link>
+                {menu}
+                {dialog}
+            </div>
+        );
     }
 
     return (
@@ -184,34 +368,7 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                     )}
 
                     <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs tabular-nums text-muted-foreground">
-                        <Stat icon={Images} title="Images in this batch">
-                            <span className="font-medium text-foreground">
-                                {formatCount(batch.total_image_count)}
-                            </span>
-                            {pluralize(batch.total_image_count, 'image')}
-                        </Stat>
-                        <Stat title={`Total ${meta.nounPlural} counted`}>
-                            <span
-                                aria-hidden
-                                className="size-1.5 shrink-0 rounded-full"
-                                style={{ backgroundColor: meta.color }}
-                            />
-                            {batch.total_count != null ? (
-                                <CountText organism={batch.organism_type} n={batch.total_count} />
-                            ) : (
-                                <span>— {meta.nounPlural}</span>
-                            )}
-                        </Stat>
-                        {batch.avg_confidence != null && (
-                            <Stat icon={Gauge} title="Average confidence">
-                                {formatPercent(batch.avg_confidence, 0)}
-                            </Stat>
-                        )}
-                        {batch.total_elapsed_secs != null && (
-                            <Stat icon={Clock} title="Processing time">
-                                {formatDuration(batch.total_elapsed_secs)}
-                            </Stat>
-                        )}
+                        {stats}
                     </div>
                 </div>
             </Link>
@@ -222,89 +379,10 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                 <div className="pb-px" aria-hidden>
                     <div className="aspect-[16/10] w-full" />
                 </div>
-                <div className="flex justify-end px-3 pt-3.5">
-                    <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger asChild>
-                            <button
-                                type="button"
-                                aria-label={`Actions for ${name}`}
-                                className={cn(
-                                    'pointer-events-auto inline-flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none',
-                                    'transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground',
-                                    'focus-visible:ring-[3px] focus-visible:ring-ring/50',
-                                    'data-[state=open]:bg-accent data-[state=open]:text-foreground',
-                                )}
-                            >
-                                <MoreHorizontal className="size-4" aria-hidden />
-                            </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                            <DropdownMenuItem onSelect={() => navigate(href)}>
-                                <FolderOpen aria-hidden />
-                                Open
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                                disabled={processing}
-                                onSelect={() =>
-                                    navigate(addImagesPath(batch.id, batch.organism_type))
-                                }
-                            >
-                                <ImagePlus aria-hidden />
-                                Add images
-                            </DropdownMenuItem>
-                            {onDelete && (
-                                <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        variant="destructive"
-                                        // Deleting under a running loop would
-                                        // strand it mid-upload.
-                                        disabled={processing}
-                                        onSelect={() => setConfirmOpen(true)}
-                                    >
-                                        <Trash2 aria-hidden />
-                                        Delete
-                                    </DropdownMenuItem>
-                                </>
-                            )}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                </div>
+                <div className="flex justify-end px-3 pt-3.5">{menu}</div>
             </div>
 
-            {onDelete && (
-                <AlertDialog
-                    open={confirmOpen}
-                    onOpenChange={(open) => !deleting && setConfirmOpen(open)}
-                >
-                    <AlertDialogContent>
-                        <AlertDialogHeader>
-                            <AlertDialogTitle>Delete this batch?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                                This will permanently remove{' '}
-                                <span className="font-medium text-foreground">{name}</span> — the{' '}
-                                {meta.label.toLowerCase()} analysis from{' '}
-                                {formatDate(batch.created_at)} with{' '}
-                                {formatCount(batch.total_image_count)}{' '}
-                                {pluralize(batch.total_image_count, 'image')}. This action cannot be
-                                undone.
-                            </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-                            {/* A plain button, not AlertDialogAction: the dialog stays
-                                up (with a spinner) until the request settles. */}
-                            <Button
-                                variant="destructive"
-                                loading={deleting}
-                                onClick={() => void handleDelete()}
-                            >
-                                Delete
-                            </Button>
-                        </AlertDialogFooter>
-                    </AlertDialogContent>
-                </AlertDialog>
-            )}
+            {dialog}
         </div>
     );
 }
@@ -354,6 +432,29 @@ function ProcessingCover({ batch }: { batch: RecordedBatchSummary }) {
                 </div>
             </div>
         </div>
+    );
+}
+
+/** Progress of a batch still being analysed, sized for a list row. */
+function ProcessingInline({ batch }: { batch: RecordedBatchSummary }) {
+    const total = batch.total_image_count;
+    const done = Math.min(batch.processed_image_count, total);
+    const pct = total > 0 ? (done / total) * 100 : 0;
+    return (
+        <span
+            className="inline-flex min-w-0 items-center gap-1.5 text-xs tabular-nums text-info"
+            role="status"
+            aria-label={`Analysing — ${done} of ${total} images`}
+        >
+            <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
+            {formatCount(done)}/{formatCount(total)}
+            <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+                <span
+                    className="block h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+                    style={{ width: `${pct}%` }}
+                />
+            </span>
+        </span>
     );
 }
 

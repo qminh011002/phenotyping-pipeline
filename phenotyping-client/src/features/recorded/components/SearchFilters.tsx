@@ -1,7 +1,8 @@
 // SearchFilters — the toolbar under the Recorded page title: search, status
-// and organism filters, sort controls and the result count.
+// and organism filters, sort controls, the result count and the grid / list
+// switch.
 
-import { ArrowDown, ArrowUp, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, LayoutGrid, List, Search, X } from 'lucide-react';
 
 import { SegmentedControl, type SegmentedOption } from '@/components/common';
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,7 @@ import { formatCount, pluralize } from '@/lib/format';
 import { ORGANISM_ORDER, organismMeta } from '@/lib/organism';
 import type { Organism } from '@/types/api';
 import type { RecordedFilters, SortDir, SortKey, StatusFilter } from '../hooks/useRecorded';
+import type { BatchLayout } from './BatchCard';
 
 interface SearchFiltersProps {
     filters: RecordedFilters;
@@ -27,6 +29,8 @@ interface SearchFiltersProps {
     total: number;
     /** Hide the count until the first page has loaded. */
     loading?: boolean;
+    layout: BatchLayout;
+    onLayoutChange: (layout: BatchLayout) => void;
 }
 
 const STATUS_OPTIONS: SegmentedOption<StatusFilter>[] = [
@@ -34,6 +38,29 @@ const STATUS_OPTIONS: SegmentedOption<StatusFilter>[] = [
     { value: 'completed', label: 'Saved', title: 'Reviewed and saved' },
     { value: 'draft', label: 'Drafts', title: 'Processed — waiting for review' },
     { value: 'failed', label: 'Failed', title: 'Processing did not finish' },
+];
+
+const LAYOUT_OPTIONS: SegmentedOption<BatchLayout>[] = [
+    {
+        value: 'grid',
+        title: 'Grid',
+        label: (
+            <>
+                <LayoutGrid className="size-3.5" aria-hidden />
+                <span className="sr-only">Grid</span>
+            </>
+        ),
+    },
+    {
+        value: 'list',
+        title: 'List',
+        label: (
+            <>
+                <List className="size-3.5" aria-hidden />
+                <span className="sr-only">List</span>
+            </>
+        ),
+    },
 ];
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -54,6 +81,8 @@ export function SearchFilters({
     hasActiveFilters,
     total,
     loading = false,
+    layout,
+    onLayoutChange,
 }: SearchFiltersProps) {
     const dirLabels = SORT_DIR_LABEL[filters.sortKey];
     const nextDir: SortDir = filters.sortDir === 'desc' ? 'asc' : 'desc';
@@ -154,12 +183,7 @@ export function SearchFilters({
 
             {/* Clear filters */}
             {hasActiveFilters && (
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={onClear}
-                >
+                <Button variant="secondary" size="sm" onClick={onClear}>
                     <X aria-hidden />
                     Clear
                 </Button>
@@ -175,6 +199,14 @@ export function SearchFilters({
                 </span>
                 {pluralize(total, 'batch', 'batches')}
             </span>
+
+            {/* Layout */}
+            <SegmentedControl
+                aria-label="Layout"
+                value={layout}
+                onChange={onLayoutChange}
+                options={LAYOUT_OPTIONS}
+            />
         </div>
     );
 }

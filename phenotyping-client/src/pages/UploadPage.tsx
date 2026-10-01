@@ -781,7 +781,7 @@ export default function UploadPage() {
             <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2.5">
                 <div className="flex min-w-0 items-center gap-2">
                     <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon-sm"
                         onClick={goBack}
                         aria-label={appendBatchId ? 'Back to batch' : 'Back to project setup'}
@@ -902,16 +902,15 @@ export default function UploadPage() {
                                                 {selectedIds.size} selected
                                             </span>
                                             <Button
-                                                variant="ghost"
+                                                variant="destructive"
                                                 size="sm"
-                                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                                 onClick={removeSelected}
                                             >
                                                 <Trash2 />
                                                 Remove
                                             </Button>
                                             <Button
-                                                variant="ghost"
+                                                variant="secondary"
                                                 size="sm"
                                                 onClick={() => setSelectedIds(new Set())}
                                             >
@@ -930,24 +929,23 @@ export default function UploadPage() {
                                         </p>
                                     )}
                                     <div className="flex items-center gap-1">
-                                        <Button variant="ghost" size="sm" onClick={openFilePicker}>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={openFilePicker}
+                                        >
                                             <FileIcon />
                                             Add files
                                         </Button>
                                         <Button
-                                            variant="ghost"
+                                            variant="outline"
                                             size="sm"
                                             onClick={() => void openFolderPicker()}
                                         >
                                             <FolderIcon />
                                             Add folder
                                         </Button>
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="text-muted-foreground"
-                                            onClick={clearAll}
-                                        >
+                                        <Button variant="secondary" size="sm" onClick={clearAll}>
                                             Clear all
                                         </Button>
                                     </div>
@@ -1009,7 +1007,7 @@ export default function UploadPage() {
                             <div className="flex items-center justify-between">
                                 <h2 className="eyebrow">Inference settings</h2>
                                 <Button
-                                    variant="ghost"
+                                    variant="outline"
                                     size="xs"
                                     onClick={() => setConfigOpen(true)}
                                     aria-label="Open inference settings"

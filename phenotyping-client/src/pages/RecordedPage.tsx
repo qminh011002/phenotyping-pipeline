@@ -7,6 +7,7 @@ import { Plus } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { PageHeader } from '@/components/common';
+import { usePersistentFlag } from '@/hooks/usePersistentFlag';
 import { Button } from '@/components/ui/button';
 import { BatchDetail } from '@/features/recorded/components/BatchDetail';
 import { BatchList } from '@/features/recorded/components/BatchList';
@@ -18,6 +19,8 @@ export default function RecordedPage() {
     const navigate = useNavigate();
     const batchId = searchParams.get('batch');
     const scrollRef = useRef<HTMLDivElement>(null);
+    const [listView, setListView] = usePersistentFlag('phenotyping.recorded.list-view', false);
+    const layout = listView ? 'list' : 'grid';
 
     const {
         batches,
@@ -75,6 +78,8 @@ export default function RecordedPage() {
                             hasActiveFilters={hasActiveFilters}
                             total={total}
                             loading={loading}
+                            layout={layout}
+                            onLayoutChange={(next) => setListView(next === 'list')}
                         />
                     </PageHeader>
 
@@ -92,6 +97,7 @@ export default function RecordedPage() {
                         onRetry={refetch}
                         onClearFilters={clearFilters}
                         onDelete={deleteBatch}
+                        layout={layout}
                     />
                 </div>
             </div>

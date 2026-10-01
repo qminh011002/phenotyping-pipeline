@@ -163,7 +163,7 @@ export function AnnotationToolbar({
             aria-label="Annotation toolbar"
             aria-orientation={orientation}
             className={cn(
-                'floating-panel flex items-center gap-0.5 p-1',
+                'floating-panel flex items-center gap-1 p-1 pb-1.5',
                 vertical && 'flex-col',
                 className,
             )}
@@ -179,16 +179,13 @@ export function AnnotationToolbar({
                     <Button
                         key={tool.id}
                         type="button"
-                        variant={isActive ? 'default' : 'ghost'}
+                        variant={isActive ? 'default' : 'outline'}
                         size="icon"
                         disabled={disabled}
                         aria-label={tool.label}
                         aria-pressed={isActive}
                         data-tool-id={tool.id}
-                        className={cn(
-                            'size-8',
-                            !isActive && 'text-muted-foreground hover:text-foreground',
-                        )}
+                        className="size-8"
                         onClick={
                             disabled || !onSelectTool ? undefined : () => onSelectTool(tool.id)
                         }

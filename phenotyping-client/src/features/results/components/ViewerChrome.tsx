@@ -29,14 +29,19 @@ export function ZoomControls({
     className,
 }: ZoomControlsProps) {
     return (
-        <div className={cn('floating-panel pointer-events-auto flex items-center p-1', className)}>
+        <div
+            className={cn(
+                'floating-panel pointer-events-auto flex items-center gap-1 p-1 pb-1.5',
+                className,
+            )}
+        >
             <Button
-                variant="ghost"
+                variant="outline"
                 size="icon-sm"
                 title="Zoom out (−)"
                 aria-label="Zoom out"
                 onClick={onZoomOut}
-                className="size-7 text-muted-foreground hover:text-foreground"
+                className="size-7"
             >
                 <Minus />
             </Button>
@@ -47,29 +52,29 @@ export function ZoomControls({
                 {Math.round(scale * 100)}%
             </div>
             <Button
-                variant="ghost"
+                variant="outline"
                 size="icon-sm"
                 title="Zoom in (+)"
                 aria-label="Zoom in"
                 onClick={onZoomIn}
-                className="size-7 text-muted-foreground hover:text-foreground"
+                className="size-7"
             >
                 <Plus />
             </Button>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             <Button
-                variant="ghost"
+                variant="outline"
                 size="icon-sm"
                 title="Fit to window (0)"
                 aria-label="Fit to window"
                 onClick={onFit}
-                className="size-7 text-muted-foreground hover:text-foreground"
+                className="size-7"
             >
                 <Maximize />
             </Button>
             {onToggleOverlay && (
                 <Button
-                    variant="ghost"
+                    variant="outline"
                     size="icon-sm"
                     title={overlayVisible ? 'Hide detections (or hold Ctrl)' : 'Show detections'}
                     aria-label={overlayVisible ? 'Hide detections' : 'Show detections'}
@@ -77,9 +82,8 @@ export function ZoomControls({
                     onClick={onToggleOverlay}
                     className={cn(
                         'size-7',
-                        overlayVisible
-                            ? 'text-muted-foreground hover:text-foreground'
-                            : 'bg-muted text-foreground',
+                        !overlayVisible &&
+                            'border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
                     )}
                 >
                     {overlayVisible ? <Eye /> : <EyeOff />}

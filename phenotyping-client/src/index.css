@@ -173,6 +173,10 @@
     --color-destructive-foreground: var(--destructive-foreground);
     --color-border: var(--border);
     --color-edge: var(--edge);
+    --color-key: var(--key);
+    --color-key-hover: var(--key-hover);
+    --color-key-muted: var(--key-muted);
+    --color-key-muted-hover: var(--key-muted-hover);
     --color-input: var(--input);
     --color-ring: var(--ring);
     --color-chart-1: var(--chart-1);
@@ -376,6 +380,13 @@
     --border: oklch(0.915 0.004 160);
     /* Bottom edge of a raised surface — see the keycap utilities below. */
     --edge: oklch(0.845 0.008 160);
+    /* Neutral keys (outline and grey/cancel buttons): fill, hover, bottom edge. */
+    --key: oklch(1 0 0);
+    --key-hover: oklch(0.965 0.004 160);
+    --key-edge: oklch(0.82 0.008 160);
+    --key-muted: oklch(0.93 0.004 160);
+    --key-muted-hover: oklch(0.9 0.004 160);
+    --key-muted-edge: oklch(0.75 0.006 160);
     --input: oklch(0.9 0.004 160);
     --ring: oklch(0.55 0.15 152);
 
@@ -434,6 +445,13 @@
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(1 0 0 / 10%);
     --edge: oklch(0 0 0 / 60%);
+    /* Lifted off the near-black page so the solid bottom edge reads. */
+    --key: oklch(0.275 0.004 160);
+    --key-hover: oklch(0.315 0.004 160);
+    --key-edge: oklch(0.115 0.004 160);
+    --key-muted: oklch(0.355 0.004 160);
+    --key-muted-hover: oklch(0.395 0.004 160);
+    --key-muted-edge: oklch(0.2 0.004 160);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.62 0.15 155);
 

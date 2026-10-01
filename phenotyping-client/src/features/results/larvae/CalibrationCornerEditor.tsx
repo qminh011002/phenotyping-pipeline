@@ -69,10 +69,7 @@ export function CalibrationCornerHandles({
         [ctmRef],
     );
 
-    const handlePointerDown = (
-        e: ReactPointerEvent<SVGCircleElement>,
-        idx: 0 | 1 | 2 | 3,
-    ) => {
+    const handlePointerDown = (e: ReactPointerEvent<SVGCircleElement>, idx: 0 | 1 | 2 | 3) => {
         e.stopPropagation();
         e.preventDefault();
         (e.target as SVGCircleElement).setPointerCapture(e.pointerId);
@@ -120,9 +117,7 @@ export function CalibrationCornerHandles({
                         strokeWidth={2}
                         vectorEffect="non-scaling-stroke"
                         style={{ cursor: 'grab', touchAction: 'none' }}
-                        onPointerDown={(e) =>
-                            handlePointerDown(e, i as 0 | 1 | 2 | 3)
-                        }
+                        onPointerDown={(e) => handlePointerDown(e, i as 0 | 1 | 2 | 3)}
                         onPointerMove={handlePointerMove}
                         onPointerUp={handlePointerUp}
                     />
@@ -156,10 +151,7 @@ export function CalibrationCornerEditorChrome({
     onCancel,
     onRedetect,
     redetecting = false,
-}: Pick<
-    CalibrationCornerEditorProps,
-    'realWmm' | 'realHmm' | 'saving' | 'onSave' | 'onCancel'
-> & {
+}: Pick<CalibrationCornerEditorProps, 'realWmm' | 'realHmm' | 'saving' | 'onSave' | 'onCancel'> & {
     corners: Corners;
     onRedetect?: () => void;
     redetecting?: boolean;
@@ -180,7 +172,7 @@ export function CalibrationCornerEditorChrome({
                 </span>
             </div>
             <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                <Button size="sm" variant="secondary" onClick={onCancel} disabled={saving}>
                     Cancel
                 </Button>
                 {onRedetect && (
@@ -194,11 +186,7 @@ export function CalibrationCornerEditorChrome({
                         {redetecting ? 'Re-detecting…' : 'Re-detect'}
                     </Button>
                 )}
-                <Button
-                    size="sm"
-                    onClick={() => onSave(corners)}
-                    disabled={!factors || saving}
-                >
+                <Button size="sm" onClick={() => onSave(corners)} disabled={!factors || saving}>
                     {saving ? 'Saving…' : 'Save calibration'}
                 </Button>
             </div>

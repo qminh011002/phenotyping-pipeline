@@ -150,9 +150,8 @@ export function SamModelsSection({ showHeader = true }: SamModelsSectionProps = 
                         {/* The span carries the tooltip: disabled buttons ignore the pointer. */}
                         <span title={deleteBlockedReason}>
                             <Button
-                                variant="ghost"
+                                variant="destructive"
                                 size="sm"
-                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                 onClick={() => handleDelete(model.filename)}
                                 disabled={!canDelete || deletingFilename === model.filename}
                             >

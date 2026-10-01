@@ -89,7 +89,7 @@ export function CalibrationManualForm({
                 </div>
             </div>
             <div className="flex justify-end gap-2">
-                <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                <Button size="sm" variant="secondary" onClick={onCancel} disabled={saving}>
                     Cancel
                 </Button>
                 <Button
