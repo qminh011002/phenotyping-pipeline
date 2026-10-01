@@ -117,7 +117,7 @@ class _ShrinkingSam:
         self.seen_polygons: list[np.ndarray] = []
         self.enabled_flags: list[bool] = []
 
-    async def refine_candidates_async(self, image, candidates, cfg):
+    async def refine_candidates_async(self, image, candidates, cfg, should_stop=None):
         self.enabled_flags.append(cfg.sam.enabled)
         out = []
         for cand in candidates:

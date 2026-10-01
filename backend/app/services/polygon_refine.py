@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import cv2
 import numpy as np
@@ -69,12 +69,14 @@ async def refine_stored_polygons(
     sam_svc: SamRefinementService,
     cfg: LarvaeConfig | PupaeConfig,
     db: AsyncSession,
+    should_stop: Callable[[], bool] | None = None,
 ) -> RefineResult:
     """Refine the model polygons of one stored image with SAM.
 
     User-drawn detections and polygons the operator has edited are never
     touched. Detections SAM cannot improve keep their current polygon.
-    Stages writes on ``db``; the caller commits.
+    Stages writes on ``db``; the caller commits. ``should_stop`` aborts the
+    SAM pass with ``InferenceCancelledError`` before anything is staged.
     """
     raw_path = raw_path_for(overlay_path)
     if raw_path is None or not raw_path.exists():
@@ -120,7 +122,9 @@ async def refine_stored_polygons(
     sam_cfg = cfg.model_copy(
         update={"sam": cfg.sam.model_copy(update={"enabled": True})}
     )
-    refined = await sam_svc.refine_candidates_async(raw, candidates, sam_cfg)
+    refined = await sam_svc.refine_candidates_async(
+        raw, candidates, sam_cfg, should_stop=should_stop
+    )
 
     threshold = float(sam_cfg.sam.confidence_threshold)
     n_refined = n_failed = n_below = 0

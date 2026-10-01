@@ -58,12 +58,17 @@ export async function ping() {
 // ── Inference ───────────────────────────────────────────────────────────────
 
 /** POST /inference/egg — run egg detection on a single image */
-export async function inferSingleEgg(file: File, batchId?: string): Promise<DetectionResult> {
+export async function inferSingleEgg(
+    file: File,
+    batchId?: string,
+    signal?: AbortSignal,
+): Promise<DetectionResult> {
     return http.postFormData<DetectionResult>(
         'inference/egg',
         'file',
         file,
         batchId ? { batch_id: batchId } : undefined,
+        signal,
     );
 }
 
@@ -73,12 +78,17 @@ export async function inferBatchEgg(files: File[]): Promise<BatchDetectionResult
 }
 
 /** POST /inference/neonate — run neonate detection on a single image */
-export async function inferSingleNeonate(file: File, batchId?: string): Promise<DetectionResult> {
+export async function inferSingleNeonate(
+    file: File,
+    batchId?: string,
+    signal?: AbortSignal,
+): Promise<DetectionResult> {
     return http.postFormData<DetectionResult>(
         'inference/neonate',
         'file',
         file,
         batchId ? { batch_id: batchId } : undefined,
+        signal,
     );
 }
 
@@ -92,9 +102,10 @@ export async function inferSingle(
     organism: Organism,
     file: File,
     batchId?: string,
+    signal?: AbortSignal,
 ): Promise<DetectionResult> {
-    if (organism === 'neonate') return inferSingleNeonate(file, batchId);
-    return inferSingleEgg(file, batchId);
+    if (organism === 'neonate') return inferSingleNeonate(file, batchId, signal);
+    return inferSingleEgg(file, batchId, signal);
 }
 
 function polygonInferenceQuery(
@@ -116,12 +127,14 @@ export async function inferSingleLarvae(
     file: File,
     batchId?: string,
     countOnly = false,
+    signal?: AbortSignal,
 ): Promise<LarvaeDetectionResult> {
     return http.postFormData<LarvaeDetectionResult>(
         'inference/larvae',
         'file',
         file,
         polygonInferenceQuery(batchId, countOnly),
+        signal,
     );
 }
 
@@ -136,12 +149,14 @@ export async function inferSinglePupae(
     file: File,
     batchId?: string,
     countOnly = false,
+    signal?: AbortSignal,
 ): Promise<LarvaeDetectionResult> {
     return http.postFormData<LarvaeDetectionResult>(
         'inference/pupae',
         'file',
         file,
         polygonInferenceQuery(batchId, countOnly),
+        signal,
     );
 }
 
@@ -313,16 +328,24 @@ export async function addImageResult(
         calibration?: CalibrationCorners | null;
         sam_refined?: boolean;
     },
+    signal?: AbortSignal,
 ): Promise<{ status: string; batch_id: string; image_id: string }> {
     return http.post<{ status: string; batch_id: string; image_id: string }>(
         `analyses/${batchId}/images`,
         data,
+        signal,
     );
 }
 
 /** POST /analyses/{batch_id}/complete — finish processing; batch enters 'draft' state */
-export async function completeBatch(batchId: string): Promise<AnalysisBatchDetail> {
-    return http.post<AnalysisBatchDetail>(`analyses/${batchId}/complete`);
+export async function completeBatch(
+    batchId: string,
+    options?: { stoppedEarly?: boolean },
+): Promise<AnalysisBatchDetail> {
+    // `stoppedEarly`: the operator stopped the run and kept what was done —
+    // the server shrinks the batch to the images it actually has.
+    const query = options?.stoppedEarly ? '?stopped_early=true' : '';
+    return http.post<AnalysisBatchDetail>(`analyses/${batchId}/complete${query}`);
 }
 
 /** POST /analyses/{batch_id}/finish — save a draft to Records (draft → completed) */
@@ -640,10 +663,12 @@ export async function saveCalibration(
 export async function measureLarvae(
     imageId: string,
     payload: MeasureLarvaeRequest = {},
+    signal?: AbortSignal,
 ): Promise<LarvaeMeasurementResult> {
     return http.post<LarvaeMeasurementResult>(
         `measure/larvae?image_id=${encodeURIComponent(imageId)}`,
         payload,
+        signal,
     );
 }
 

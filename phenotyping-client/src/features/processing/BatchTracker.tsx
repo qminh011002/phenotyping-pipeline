@@ -107,7 +107,7 @@ function TrackerRow({
 }) {
     const pct = batch.total > 0 ? Math.min(100, (batch.processed / batch.total) * 100) : 0;
     const elapsed = (now - batch.startedAtMs) / 1000;
-    const remaining = estimateRemaining(batch, now);
+    const remaining = batch.paused ? null : estimateRemaining(batch, now);
     const noun = batch.appending ? 'new image' : 'image';
     const detail = batch.local
         ? (batch.stage ?? (batch.currentFile ? `Processing ${batch.currentFile}` : 'Starting…'))
@@ -143,7 +143,10 @@ function TrackerRow({
                 aria-valuenow={batch.processed}
             >
                 <span
-                    className="block h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+                    className={cn(
+                        'block h-full rounded-full transition-[width] duration-300 ease-out',
+                        batch.paused ? 'bg-muted-foreground/50' : 'bg-primary',
+                    )}
                     style={{ width: `${pct}%` }}
                 />
             </span>

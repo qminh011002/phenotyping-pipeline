@@ -21,6 +21,7 @@ _STAGE_MESSAGES = {
     "image.tile": "tile image",
     "image.detect": "run detector",
     "image.dedup": "deduplicate detections",
+    "image.refine": "refine outlines with SAM",
     "image.draw": "draw overlay",
     "image.save": "save results",
 }
@@ -90,15 +91,29 @@ class StageBroker:
                     self._clients.discard(ws)
 
     def emit_stage(
-        self, stage: str, batch_id: str, filename: str, organism: str = "egg"
+        self,
+        stage: str,
+        batch_id: str,
+        filename: str,
+        organism: str = "egg",
+        progress: tuple[int, int] | None = None,
     ) -> None:
-        """Thread-safe stage emission. Safe to call from any thread."""
+        """Thread-safe stage emission. Safe to call from any thread.
+
+        ``progress`` is ``(done, total)`` within a long stage (SAM refines one
+        detection at a time). Progress ticks go to clients only — logging one
+        line per detection would drown the log.
+        """
         payload: dict[str, Any] = {
             "stage": stage,
             "batch_id": batch_id,
             "filename": filename,
             "organism": organism,
         }
+        if progress is not None:
+            payload["done"], payload["total"] = progress
+            self._send(payload)
+            return
         logger.info(
             "%s for %s",
             _STAGE_MESSAGES.get(stage, stage),
@@ -113,6 +128,9 @@ class StageBroker:
                 }
             },
         )
+        self._send(payload)
+
+    def _send(self, payload: dict[str, Any]) -> None:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
@@ -133,6 +151,12 @@ def get_broker() -> StageBroker:
     return _broker
 
 
-def emit_stage(stage: str, batch_id: str, filename: str, organism: str = "egg") -> None:
+def emit_stage(
+    stage: str,
+    batch_id: str,
+    filename: str,
+    organism: str = "egg",
+    progress: tuple[int, int] | None = None,
+) -> None:
     """Module-level convenience wrapper around the singleton broker."""
-    get_broker().emit_stage(stage, batch_id, filename, organism)
+    get_broker().emit_stage(stage, batch_id, filename, organism, progress)

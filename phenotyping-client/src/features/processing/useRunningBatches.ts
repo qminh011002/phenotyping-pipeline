@@ -38,6 +38,8 @@ export interface RunningBatch {
     /** File being processed right now — local runs only. */
     currentFile: string | null;
     failed: number;
+    /** Held between images by the operator — local runs only. */
+    paused: boolean;
     /** Adding images to an existing batch rather than creating one. */
     appending: boolean;
 }
@@ -54,6 +56,7 @@ function fromServer(batch: AnalysisBatchSummary): RunningBatch {
         stage: null,
         currentFile: null,
         failed: 0,
+        paused: false,
         appending: false,
     };
 }
@@ -71,6 +74,7 @@ export function useRunningBatches(): RunningBatch[] {
     const appendingToName = useProcessingStore((s) => s.appendingToName);
     const runStartedAtMs = useProcessingStore((s) => s.runStartedAtMs);
     const completedBatchId = useProcessingStore((s) => s.completedBatchId);
+    const pauseState = useProcessingStore((s) => s.pauseState);
 
     const query = useQuery({
         queryKey: RUNNING_BATCHES_KEY,
@@ -123,7 +127,13 @@ export function useRunningBatches(): RunningBatch[] {
             // the seconds before the first poll comes back.
             startedAtMs: known?.startedAtMs ?? runStartedAtMs ?? Date.now(),
             local: true,
-            stage,
+            stage:
+                pauseState === 'paused'
+                    ? 'Paused'
+                    : pauseState === 'pausing'
+                      ? 'Pausing after the current image…'
+                      : stage,
+            paused: pauseState === 'paused',
             currentFile: current,
             failed,
             appending: appendingToName !== null,
@@ -142,6 +152,7 @@ export function useRunningBatches(): RunningBatch[] {
         appendingToName,
         runStartedAtMs,
         completedBatchId,
+        pauseState,
     ]);
 }
 

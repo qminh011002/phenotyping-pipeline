@@ -13,11 +13,23 @@ import {
     ChevronDown,
     CircleDashed,
     Loader2,
+    Pause,
     PauseCircle,
+    Play,
     ScanLine,
+    Square,
 } from 'lucide-react';
 
 import { OrganismBadge } from '@/components/common';
+import {
+    AlertDialog,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
@@ -36,7 +48,9 @@ import {
     discardInterruptedBatch,
     finalizeInterruptedBatch,
     isManagerRunning,
+    pauseProcessing,
     resumeActiveBatchIfAny,
+    resumeProcessing,
 } from '@/services/processingManager';
 
 const logTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -336,6 +350,9 @@ export default function ProcessingPage() {
     const appendingToName = useProcessingStore((s) => s.appendingToName);
     const analysisMode = useProcessingStore((s) => s.analysisMode);
     const completedDurations = useProcessingStore((s) => s.completedDurations);
+    const pauseState = useProcessingStore((s) => s.pauseState);
+    const cancelling = useProcessingStore((s) => s.cancelling);
+    const [stopDialogOpen, setStopDialogOpen] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -401,9 +418,17 @@ export default function ProcessingPage() {
     const anyError = errorCount > 0;
     const allDone = !isProcessing && totalImages > 0 && allCompleted;
 
-    function handleCancel() {
-        cancelProcessing();
+    function handleDiscard() {
+        setStopDialogOpen(false);
+        cancelProcessing('discard');
         navigate('/', { replace: true });
+    }
+
+    // The loop finalises the batch with what it has; this page then follows
+    // the completed batch into its results, like any finished run.
+    function handleStopAndKeep() {
+        setStopDialogOpen(false);
+        cancelProcessing('keep');
     }
 
     async function handleInterruptedViewResults() {
@@ -463,7 +488,9 @@ export default function ProcessingPage() {
     }
 
     let status: string;
-    if (isProcessing) {
+    if (isProcessing && pauseState === 'pausing' && !cancelling) {
+        status = stage ? `Pausing after this image — ${stage}` : 'Pausing after the current image…';
+    } else if (isProcessing) {
         if (stage) {
             status = stage;
         } else {
@@ -489,7 +516,12 @@ export default function ProcessingPage() {
         completedDurations.length > 0
             ? completedDurations.reduce((a, b) => a + b, 0) / completedDurations.length
             : null;
-    const eta = isProcessing && avgSeconds != null && remaining > 0 ? avgSeconds * remaining : null;
+    const paused = pauseState === 'paused';
+    const eta =
+        isProcessing && !paused && avgSeconds != null && remaining > 0
+            ? avgSeconds * remaining
+            : null;
+    const appending = appendingToName !== null;
     const title = appendingToName ?? projectName ?? 'Analysis';
 
     return (
@@ -528,9 +560,45 @@ export default function ProcessingPage() {
                                 </div>
                             </div>
                             {isProcessing && (
-                                <Button variant="outline" size="sm" onClick={handleCancel}>
-                                    Cancel
-                                </Button>
+                                <div className="flex shrink-0 items-center gap-2">
+                                    {pauseState === 'running' ? (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={pauseProcessing}
+                                            disabled={cancelling}
+                                            title="Finish the current image, then wait"
+                                        >
+                                            <Pause aria-hidden />
+                                            Pause
+                                        </Button>
+                                    ) : (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={resumeProcessing}
+                                            disabled={cancelling}
+                                            title={
+                                                paused
+                                                    ? 'Continue with the next image'
+                                                    : 'Keep going after the current image'
+                                            }
+                                        >
+                                            <Play aria-hidden />
+                                            {paused ? 'Resume' : 'Don’t pause'}
+                                        </Button>
+                                    )}
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => setStopDialogOpen(true)}
+                                        loading={cancelling}
+                                        title="Stop this run"
+                                    >
+                                        <Square aria-hidden />
+                                        Cancel
+                                    </Button>
+                                </div>
                             )}
                         </div>
 
@@ -551,11 +619,13 @@ export default function ProcessingPage() {
                             <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground tabular-nums">
                                 <span>{Math.round(progress)}%</span>
                                 <span>
-                                    {eta != null
-                                        ? `About ${formatDuration(eta)} left`
-                                        : isProcessing
-                                          ? 'Estimating time left…'
-                                          : ''}
+                                    {paused
+                                        ? 'Paused'
+                                        : eta != null
+                                          ? `About ${formatDuration(eta)} left`
+                                          : isProcessing
+                                            ? 'Estimating time left…'
+                                            : ''}
                                 </span>
                             </div>
                         </div>
@@ -586,6 +656,43 @@ export default function ProcessingPage() {
                     <LiveProcessingLog logs={liveLogs} />
                 </div>
             </div>
+
+            <AlertDialog open={stopDialogOpen} onOpenChange={setStopDialogOpen}>
+                {/* Three actions need more room than the default dialog. */}
+                <AlertDialogContent className="sm:max-w-xl">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Stop this run?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {processedSoFar > 0 ? (
+                                <>
+                                    <span className="font-medium text-foreground">
+                                        {processedSoFar} of {totalImages}
+                                    </span>{' '}
+                                    {pluralize(totalImages, 'image')} processed so far. The image in
+                                    progress is dropped either way. Keep what is done and review it,
+                                    or discard{' '}
+                                    {appending ? 'everything this run added' : 'the batch'}.
+                                </>
+                            ) : appending ? (
+                                'No new image has finished yet. Stopping leaves the batch as it was before this run.'
+                            ) : (
+                                'No image has finished yet, so stopping discards the batch.'
+                            )}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep running</AlertDialogCancel>
+                        <Button variant="destructive" onClick={handleDiscard}>
+                            {appending ? 'Discard new images' : 'Discard batch'}
+                        </Button>
+                        {processedSoFar > 0 && (
+                            <Button onClick={handleStopAndKeep}>
+                                Stop and keep {processedSoFar} {pluralize(processedSoFar, 'image')}
+                            </Button>
+                        )}
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -29,7 +29,16 @@ from uuid import UUID
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -52,6 +61,7 @@ from app.routers.inference_utils import (
     map_inference_error,
     parse_and_verify_optional_batch,
     read_image_upload,
+    run_until_disconnect,
     unique_stem_in_batch,
     validate_image_extension,
     verify_batch_owned,
@@ -259,6 +269,7 @@ async def run_larvae_inference(
     inference_svc: AnnotatedLarvaeInferenceService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
     file: Annotated[UploadFile, File(description="Image file (JPG, PNG, TIFF, BMP)")],
     batch_id: Annotated[
         str | None,
@@ -289,12 +300,16 @@ async def run_larvae_inference(
     # egg flow. Either way no DB row is written here — the caller registers
     # the image via POST /analyses/{batch_id}/images using this result.
     try:
-        return await inference_svc.process_single(
-            data,
-            stem,
-            resolved_batch_id,
-            raw_suffix=suffix,
-            refine=False if count_only else None,
+        return await run_until_disconnect(
+            request,
+            lambda cancel: inference_svc.process_single(
+                data,
+                stem,
+                resolved_batch_id,
+                raw_suffix=suffix,
+                refine=False if count_only else None,
+                cancel=cancel,
+            ),
         )
     except (InvalidImageError, ModelNotLoadedError) as exc:
         raise map_inference_error(exc) from exc
@@ -727,6 +742,7 @@ async def refine_image_polygons(
     sam_svc: AnnotatedSamRefinementService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
 ) -> RefineResult:
     """Run SAM over the detections of an image that was processed count-only.
 
@@ -755,8 +771,16 @@ async def refine_image_polygons(
 
     organism = await _image_organism(image, db)
     try:
-        result = await refine_stored_polygons(
-            image, overlay_path, sam_svc, _polygon_config_for(organism), db
+        result = await run_until_disconnect(
+            request,
+            lambda cancel: refine_stored_polygons(
+                image,
+                overlay_path,
+                sam_svc,
+                _polygon_config_for(organism),
+                db,
+                should_stop=cancel.is_set,
+            ),
         )
     except RefineError as exc:
         raise HTTPException(

@@ -30,6 +30,9 @@ export interface ProcessingImage {
     backendImageId?: string;
 }
 
+/** `pausing`: asked to pause, the image in flight is finishing first. */
+export type PauseState = 'running' | 'pausing' | 'paused';
+
 export interface InterruptedBatchInfo {
     id: string;
     name: string;
@@ -78,6 +81,9 @@ interface ProcessingStore {
     completedFirstImageId: string | null;
 
     // Runtime fields written by the manager — used to render ETA / errors / etc.
+    pauseState: PauseState;
+    /** The run is being stopped; the loop has not unwound yet. */
+    cancelling: boolean;
     /** When this tab started (or resumed) driving the run, epoch ms. */
     runStartedAtMs: number | null;
     currentImageStartMs: number | null;
@@ -107,6 +113,8 @@ interface ProcessingStore {
     setCompletedBatch: (batchId: string | null, firstImageId?: string | null) => void;
 
     // Runtime updaters used by the manager
+    setPauseState: (pauseState: PauseState) => void;
+    setCancelling: (cancelling: boolean) => void;
     setCurrentImageStart: (ms: number | null) => void;
     pushCompletedDuration: (seconds: number) => void;
     setTotalElapsed: (seconds: number) => void;
@@ -134,6 +142,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     isRestoredFromBackend: false,
     completedBatchId: null,
     completedFirstImageId: null,
+    pauseState: 'running',
+    cancelling: false,
     runStartedAtMs: null,
     currentImageStartMs: null,
     completedDurations: [],
@@ -151,6 +161,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     startProcessing: (totalImages) =>
         set({
             isProcessing: true,
+            pauseState: 'running',
+            cancelling: false,
             runStartedAtMs: Date.now(),
             totalImages,
             images: [],
@@ -184,7 +196,14 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             return { images };
         }),
 
-    finishProcessing: () => set({ isProcessing: false, currentImageStartMs: null, stage: null }),
+    finishProcessing: () =>
+        set({
+            isProcessing: false,
+            currentImageStartMs: null,
+            stage: null,
+            pauseState: 'running',
+            cancelling: false,
+        }),
 
     reset: () =>
         set({
@@ -198,6 +217,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             isRestoredFromBackend: false,
             completedBatchId: null,
             completedFirstImageId: null,
+            pauseState: 'running',
+            cancelling: false,
             runStartedAtMs: null,
             currentImageStartMs: null,
             completedDurations: [],
@@ -235,7 +256,13 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             isProcessing: false,
             currentImageStartMs: null,
             stage: null,
+            pauseState: 'running',
+            cancelling: false,
         }),
+
+    setPauseState: (pauseState) => set({ pauseState }),
+
+    setCancelling: (cancelling) => set({ cancelling }),
 
     setCurrentImageStart: (ms) => set({ currentImageStartMs: ms }),
 

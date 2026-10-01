@@ -712,6 +712,13 @@ async def complete_analysis(
     db: Annotated[AsyncSession, Depends(get_session)],
     user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
+    stopped_early: bool = Query(
+        default=False,
+        description=(
+            "The run was stopped before every image was processed; shrink the "
+            "batch to the images it actually has."
+        ),
+    ),
 ) -> AnalysisBatchDetail:
     """Finalize the processing phase. Computes aggregates and moves the batch
     from ``processing`` to ``draft``. Drafts are visible to the ResultViewer
@@ -720,7 +727,7 @@ async def complete_analysis(
     Call this after all images have been recorded via POST /analyses/{id}/images.
     """
     completed = await analysis_svc.complete_batch(
-        batch_id=batch_id, db=db, user_id=user.id
+        batch_id=batch_id, db=db, user_id=user.id, stopped_early=stopped_early
     )
     if completed is None:
         raise HTTPException(
