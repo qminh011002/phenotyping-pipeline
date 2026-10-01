@@ -92,6 +92,7 @@ async def run_pupae_inference(
                 refine=False if count_only else None,
                 cancel=cancel,
             ),
+            batch_id=bid,
         )
     except (InvalidImageError, ModelNotLoadedError) as exc:
         raise map_inference_error(exc) from exc

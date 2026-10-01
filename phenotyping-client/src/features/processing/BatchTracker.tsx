@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { getAnalysisDetail } from '@/services/api';
 import { useAuthStore } from '@/stores/authStore';
 
+import { RunControls } from './RunControls';
 import {
     estimateRemaining,
     useNow,
@@ -111,71 +112,86 @@ function TrackerRow({
     const noun = batch.appending ? 'new image' : 'image';
     const detail = batch.local
         ? (batch.stage ?? (batch.currentFile ? `Processing ${batch.currentFile}` : 'Starting…'))
-        : 'Running in another tab or device';
+        : 'Started in another tab or device';
+
+    const openTitle = batch.local ? 'Open the live run' : 'Open this batch';
 
     return (
-        <button
-            type="button"
-            onClick={onOpen}
-            title={batch.local ? 'Open the live run' : 'Open this batch'}
-            className="group flex w-full flex-col gap-2 px-3.5 py-3 text-left outline-none transition-colors duration-150 hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05]"
-        >
-            <span className="flex min-w-0 items-center gap-2">
-                <span
-                    className="min-w-0 flex-1 truncate text-[13px] font-medium"
-                    title={batch.name}
+        // Two siblings, not one big button: the controls must not nest inside
+        // the element that opens the batch.
+        <div className="group flex flex-col gap-2 px-3.5 py-3 transition-colors duration-150 hover:bg-foreground/[0.03]">
+            <div className="flex min-w-0 items-center gap-2">
+                <button
+                    type="button"
+                    onClick={onOpen}
+                    title={openTitle}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
-                    {batch.name}
-                </span>
-                <OrganismBadge organism={batch.organism} />
-                <ChevronRight
-                    className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5"
-                    aria-hidden
-                />
-            </span>
+                    <span className="min-w-0 truncate text-[13px] font-medium" title={batch.name}>
+                        {batch.name}
+                    </span>
+                    <OrganismBadge organism={batch.organism} />
+                    <ChevronRight
+                        className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5"
+                        aria-hidden
+                    />
+                </button>
+                <RunControls run={batch} compact />
+            </div>
 
-            <span
-                className="h-1.5 overflow-hidden rounded-full bg-muted"
-                role="progressbar"
-                aria-label={`${batch.name} progress`}
-                aria-valuemin={0}
-                aria-valuemax={batch.total}
-                aria-valuenow={batch.processed}
+            {/* The same link again for the pointer; the name above serves keyboards. */}
+            <button
+                type="button"
+                tabIndex={-1}
+                onClick={onOpen}
+                title={openTitle}
+                className="flex flex-col gap-2 text-left outline-none"
             >
                 <span
-                    className={cn(
-                        'block h-full rounded-full transition-[width] duration-300 ease-out',
-                        batch.paused ? 'bg-muted-foreground/50' : 'bg-primary',
-                    )}
-                    style={{ width: `${pct}%` }}
-                />
-            </span>
+                    className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-label={`${batch.name} progress`}
+                    aria-valuemin={0}
+                    aria-valuemax={batch.total}
+                    aria-valuenow={batch.processed}
+                >
+                    <span
+                        className={cn(
+                            'block h-full rounded-full transition-[width] duration-300 ease-out',
+                            batch.paused ? 'bg-muted-foreground/50' : 'bg-primary',
+                        )}
+                        style={{ width: `${pct}%` }}
+                    />
+                </span>
 
-            <span className="flex items-center justify-between gap-3 text-xs tabular-nums text-muted-foreground">
-                <span>
-                    <span className="font-medium text-foreground">
-                        {formatCount(batch.processed)}
-                    </span>{' '}
-                    of {formatCount(batch.total)} {pluralize(batch.total, noun)} · {Math.round(pct)}
-                    %
-                    {batch.failed > 0 && (
-                        <span className="text-destructive"> · {batch.failed} failed</span>
+                <span className="flex w-full items-center justify-between gap-3 text-xs tabular-nums text-muted-foreground">
+                    <span>
+                        <span className="font-medium text-foreground">
+                            {formatCount(batch.processed)}
+                        </span>{' '}
+                        of {formatCount(batch.total)} {pluralize(batch.total, noun)} ·{' '}
+                        {Math.round(pct)}%
+                        {batch.failed > 0 && (
+                            <span className="text-destructive"> · {batch.failed} failed</span>
+                        )}
+                    </span>
+                    <span className="shrink-0" title="Time since this run started">
+                        {formatElapsed(elapsed)}
+                    </span>
+                </span>
+
+                <span className="flex w-full items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span className="min-w-0 truncate" title={detail}>
+                        {detail}
+                    </span>
+                    {remaining !== null && (
+                        <span className="shrink-0 tabular-nums">
+                            ≈ {formatElapsed(remaining)} left
+                        </span>
                     )}
                 </span>
-                <span className="shrink-0" title="Time since this run started">
-                    {formatElapsed(elapsed)}
-                </span>
-            </span>
-
-            <span className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span className="min-w-0 truncate" title={detail}>
-                    {detail}
-                </span>
-                {remaining !== null && (
-                    <span className="shrink-0 tabular-nums">≈ {formatElapsed(remaining)} left</span>
-                )}
-            </span>
-        </button>
+            </button>
+        </div>
     );
 }
 

@@ -70,6 +70,8 @@ import {
 } from '../lib/paths';
 import { BatchAnalytics } from './BatchAnalytics';
 import { DownloadBatchDialog } from './DownloadBatchDialog';
+import { RunControls } from '@/features/processing/RunControls';
+import { useProcessingStore } from '@/stores/processingStore';
 
 // The processed-images grid. These two constants must stay in sync with
 // IMAGE_GRID below — the page size (exactly two rows) is derived from them.
@@ -436,6 +438,13 @@ export function BatchDetail() {
     const [columns, setColumns] = useState(6);
     const [transitioning, setTransitioning] = useState(false);
     const [downloadOpen, setDownloadOpen] = useState(false);
+    // The run this tab drives can be paused from here; any run can be stopped.
+    const drivenHere = useProcessingStore(
+        (s) => s.isProcessing && batchId !== null && s.activeBatchId === batchId,
+    );
+    const runProcessed = useProcessingStore((s) => s.processedCount);
+    const runTotal = useProcessingStore((s) => s.totalImages);
+    const runAppending = useProcessingStore((s) => s.appendingToName !== null);
 
     const detailQuery = useQuery({
         queryKey: detailKey(batchId),
@@ -784,6 +793,43 @@ export function BatchDetail() {
                 onOpenChange={setDownloadOpen}
                 batch={detail}
             />
+
+            {processing && (
+                <div
+                    role="status"
+                    className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-info/25 bg-info/10 px-4 py-3 text-sm"
+                >
+                    <Loader2 className="size-4 shrink-0 animate-spin text-info" aria-hidden />
+                    <p className="min-w-0 flex-1 basis-64">
+                        <span className="font-medium">This batch is being analysed.</span>{' '}
+                        <span className="text-muted-foreground">
+                            {drivenHere
+                                ? 'Pause holds the run after the current image.'
+                                : 'It was started in another tab or device — it can be stopped here, but only paused from the tab that runs it.'}
+                        </span>
+                    </p>
+                    {drivenHere && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate('/analyze/processing')}
+                        >
+                            Live view
+                            <ArrowRight aria-hidden />
+                        </Button>
+                    )}
+                    <RunControls
+                        run={{
+                            id: detail.id,
+                            local: drivenHere,
+                            processed: drivenHere ? runProcessed : detail.processed_image_count,
+                            total: drivenHere ? runTotal : detail.total_image_count,
+                            appending: drivenHere && runAppending,
+                        }}
+                        onStopped={() => void detailQuery.refetch()}
+                    />
+                </div>
+            )}
 
             {detail.status === 'failed' && detail.failure_reason && (
                 <div

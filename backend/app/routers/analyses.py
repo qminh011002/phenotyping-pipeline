@@ -24,7 +24,7 @@ from app.deps import (
     get_cached_storage_dir,
 )
 from app.models.analysis import AnalysisBatch, AnalysisImage
-from app.routers.inference_utils import cached_file_response
+from app.routers.inference_utils import cached_file_response, cancel_batch_inference
 from app.schemas.analysis import (
     ActiveBatchResponse,
     AnalysisBatchAppend,
@@ -211,6 +211,8 @@ async def fail_analysis(
         batch_id=batch_id, error=data.reason, db=db, user_id=user.id
     )
     await db.commit()
+    # The run is over: stop whatever is still being inferred for it.
+    cancel_batch_inference(batch_id)
     if failed is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -729,6 +731,8 @@ async def complete_analysis(
     completed = await analysis_svc.complete_batch(
         batch_id=batch_id, db=db, user_id=user.id, stopped_early=stopped_early
     )
+    if stopped_early:
+        cancel_batch_inference(batch_id)
     if completed is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

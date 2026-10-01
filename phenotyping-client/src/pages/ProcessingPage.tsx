@@ -13,26 +13,15 @@ import {
     ChevronDown,
     CircleDashed,
     Loader2,
-    Pause,
     PauseCircle,
-    Play,
     ScanLine,
-    Square,
 } from 'lucide-react';
 
 import { OrganismBadge } from '@/components/common';
-import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
+import { RunControls } from '@/features/processing/RunControls';
 import { formatDuration, formatPercent, pluralize } from '@/lib/format';
 import { isPolygonOrganism, organismMeta } from '@/lib/organism';
 import { cn } from '@/lib/utils';
@@ -44,13 +33,10 @@ import {
 import { useProcessingStore } from '@/stores/processingStore';
 import type { ImageStatus, ProcessingImage, ProcessingLogEntry } from '@/stores/processingStore';
 import {
-    cancelProcessing,
     discardInterruptedBatch,
     finalizeInterruptedBatch,
     isManagerRunning,
-    pauseProcessing,
     resumeActiveBatchIfAny,
-    resumeProcessing,
 } from '@/services/processingManager';
 
 const logTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -352,7 +338,6 @@ export default function ProcessingPage() {
     const completedDurations = useProcessingStore((s) => s.completedDurations);
     const pauseState = useProcessingStore((s) => s.pauseState);
     const cancelling = useProcessingStore((s) => s.cancelling);
-    const [stopDialogOpen, setStopDialogOpen] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -417,19 +402,6 @@ export default function ProcessingPage() {
     const processedSoFar = doneCount + errorCount + needsCalibrationCount;
     const anyError = errorCount > 0;
     const allDone = !isProcessing && totalImages > 0 && allCompleted;
-
-    function handleDiscard() {
-        setStopDialogOpen(false);
-        cancelProcessing('discard');
-        navigate('/', { replace: true });
-    }
-
-    // The loop finalises the batch with what it has; this page then follows
-    // the completed batch into its results, like any finished run.
-    function handleStopAndKeep() {
-        setStopDialogOpen(false);
-        cancelProcessing('keep');
-    }
 
     async function handleInterruptedViewResults() {
         try {
@@ -560,45 +532,20 @@ export default function ProcessingPage() {
                                 </div>
                             </div>
                             {isProcessing && (
-                                <div className="flex shrink-0 items-center gap-2">
-                                    {pauseState === 'running' ? (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={pauseProcessing}
-                                            disabled={cancelling}
-                                            title="Finish the current image, then wait"
-                                        >
-                                            <Pause aria-hidden />
-                                            Pause
-                                        </Button>
-                                    ) : (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={resumeProcessing}
-                                            disabled={cancelling}
-                                            title={
-                                                paused
-                                                    ? 'Continue with the next image'
-                                                    : 'Keep going after the current image'
-                                            }
-                                        >
-                                            <Play aria-hidden />
-                                            {paused ? 'Resume' : 'Don’t pause'}
-                                        </Button>
-                                    )}
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setStopDialogOpen(true)}
-                                        loading={cancelling}
-                                        title="Stop this run"
-                                    >
-                                        <Square aria-hidden />
-                                        Cancel
-                                    </Button>
-                                </div>
+                                <RunControls
+                                    run={{
+                                        id: activeBatchId,
+                                        local: true,
+                                        processed: processedSoFar,
+                                        total: totalImages,
+                                        appending,
+                                    }}
+                                    onStopped={(mode) => {
+                                        // A kept run finalises and this page
+                                        // follows it into its results.
+                                        if (mode === 'discard') navigate('/', { replace: true });
+                                    }}
+                                />
                             )}
                         </div>
 
@@ -656,43 +603,6 @@ export default function ProcessingPage() {
                     <LiveProcessingLog logs={liveLogs} />
                 </div>
             </div>
-
-            <AlertDialog open={stopDialogOpen} onOpenChange={setStopDialogOpen}>
-                {/* Three actions need more room than the default dialog. */}
-                <AlertDialogContent className="sm:max-w-xl">
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Stop this run?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            {processedSoFar > 0 ? (
-                                <>
-                                    <span className="font-medium text-foreground">
-                                        {processedSoFar} of {totalImages}
-                                    </span>{' '}
-                                    {pluralize(totalImages, 'image')} processed so far. The image in
-                                    progress is dropped either way. Keep what is done and review it,
-                                    or discard{' '}
-                                    {appending ? 'everything this run added' : 'the batch'}.
-                                </>
-                            ) : appending ? (
-                                'No new image has finished yet. Stopping leaves the batch as it was before this run.'
-                            ) : (
-                                'No image has finished yet, so stopping discards the batch.'
-                            )}
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Keep running</AlertDialogCancel>
-                        <Button variant="destructive" onClick={handleDiscard}>
-                            {appending ? 'Discard new images' : 'Discard batch'}
-                        </Button>
-                        {processedSoFar > 0 && (
-                            <Button onClick={handleStopAndKeep}>
-                                Stop and keep {processedSoFar} {pluralize(processedSoFar, 'image')}
-                            </Button>
-                        )}
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </div>
     );
 }

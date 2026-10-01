@@ -205,8 +205,25 @@ async def _client_gone(request: Request) -> None:
             return
 
 
+# Cancel flags of the inference requests in flight, by the batch they feed.
+# Lets "stop this run" reach a request another tab is still waiting on. One
+# registry per worker process: a stop handled by a different gunicorn worker
+# does not see it, and that request then ends when its client disconnects.
+_batch_cancels: dict[str, set[threading.Event]] = {}
+
+
+def cancel_batch_inference(batch_id: UUID | str) -> int:
+    """Stop every in-flight inference feeding ``batch_id``. Returns how many."""
+    events = _batch_cancels.get(str(batch_id), ())
+    for event in events:
+        event.set()
+    return len(events)
+
+
 async def run_until_disconnect(
-    request: Request, work: Callable[[threading.Event], Awaitable[_T]]
+    request: Request,
+    work: Callable[[threading.Event], Awaitable[_T]],
+    batch_id: UUID | str | None = None,
 ) -> _T:
     """Run ``work(cancel)`` and set ``cancel`` if the client hangs up first.
 
@@ -214,8 +231,13 @@ async def run_until_disconnect(
     run in the browser only drops the connection: the server keeps refining
     and holds the single inference worker, so the next request queues behind
     work nobody will read.
+
+    With ``batch_id`` the work can also be stopped by ``cancel_batch_inference``.
     """
     cancel = threading.Event()
+    key = str(batch_id) if batch_id is not None else None
+    if key is not None:
+        _batch_cancels.setdefault(key, set()).add(cancel)
     task = asyncio.ensure_future(work(cancel))
     watcher = asyncio.ensure_future(_client_gone(request))
     try:
@@ -225,7 +247,7 @@ async def run_until_disconnect(
         return await task
     except InferenceCancelledError as exc:
         logger.info(
-            "Inference cancelled — client disconnected",
+            "Inference cancelled — client disconnected or run stopped",
             extra={"context": {"path": request.url.path}},
         )
         raise HTTPException(
@@ -235,3 +257,9 @@ async def run_until_disconnect(
         # Also covers the server cancelling this handler outright.
         cancel.set()
         watcher.cancel()
+        if key is not None:
+            events = _batch_cancels.get(key)
+            if events is not None:
+                events.discard(cancel)
+                if not events:
+                    del _batch_cancels[key]

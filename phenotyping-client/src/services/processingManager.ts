@@ -238,6 +238,36 @@ export function cancelProcessing(mode: CancelMode = 'discard'): void {
 }
 
 /**
+ * Stop the run of `batchId`, wherever it is being driven from.
+ *
+ * The run this tab drives goes through `cancelProcessing`. Any other — another
+ * tab or device, or a run orphaned by a reload — is ended on the server,
+ * which also stops the image it is still inferring.
+ */
+export async function stopBatchRun(batchId: string, mode: CancelMode): Promise<void> {
+    if (runtime.running && runtime.dbBatchId === batchId) {
+        cancelProcessing(mode);
+        return;
+    }
+    if (mode === 'keep') {
+        await completeBatch(batchId, { stoppedEarly: true });
+    } else {
+        await failBatch(batchId, 'User cancelled');
+    }
+    // This tab may still hold the remains of that run (an interrupted batch
+    // found on load): it is over now.
+    const store = useProcessingStore.getState();
+    if (store.activeBatchId === batchId || store.interruptedBatch?.id === batchId) {
+        store.reset();
+        clearProcessingSession();
+    }
+    queryClient.removeQueries({ queryKey: ['analysis-detail', batchId] });
+    void queryClient.invalidateQueries({ queryKey: ['running-batches'] });
+    void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
+    void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
+}
+
+/**
  * Pause before the next image. Aborting the image in flight would throw away
  * minutes of work on a measured run, so it is allowed to finish first; the
  * store reads `pausing` until then, `paused` after.
