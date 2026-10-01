@@ -61,10 +61,24 @@ function setStage(stage: string | null): void {
     }
 }
 
+/** What a cancelled run leaves behind. */
+export type CancelMode =
+    /** Throw the run away: a new batch is marked failed, an append is undone. */
+    | 'discard'
+    /** Keep the images already processed and open them for review. */
+    | 'keep';
+
 interface RuntimeState {
     running: boolean;
     dbBatchId: string | null;
     cancelled: boolean;
+    cancelMode: CancelMode;
+    /** Hold before the next image. The image in flight always finishes. */
+    paused: boolean;
+    /** Wakes the loop out of a pause (resume or cancel). */
+    wake: (() => void) | null;
+    /** Aborts the requests of the image in flight. */
+    abort: AbortController | null;
     // Tracks any in-flight resume probe so concurrent callers share one promise.
     resumeProbe: Promise<boolean> | null;
     organism: Organism;
@@ -74,6 +88,10 @@ const runtime: RuntimeState = {
     running: false,
     dbBatchId: null,
     cancelled: false,
+    cancelMode: 'discard',
+    paused: false,
+    wake: null,
+    abort: null,
     resumeProbe: null,
     organism: 'egg',
 };
@@ -202,9 +220,88 @@ export async function resumeActiveBatchIfAny(): Promise<boolean> {
     return runtime.resumeProbe;
 }
 
-/** Cancel the running loop. Resolves once the loop reaches a safe point. */
-export function cancelProcessing(): void {
+/**
+ * Stop the run now. The image in flight is aborted — its request is dropped
+ * and the server stops working on it — rather than left to finish.
+ *
+ * `discard` throws the run away; `keep` finalises the batch with the images
+ * already processed (falling back to `discard` when there are none).
+ */
+export function cancelProcessing(mode: CancelMode = 'discard'): void {
+    if (!runtime.running || runtime.cancelled) return;
     runtime.cancelled = true;
+    runtime.cancelMode = mode;
+    useProcessingStore.getState().setCancelling(true);
+    setStage(mode === 'keep' ? 'Stopping — keeping processed images…' : 'Cancelling…');
+    runtime.abort?.abort();
+    wakeLoop();
+}
+
+/**
+ * Stop the run of `batchId`, wherever it is being driven from.
+ *
+ * The run this tab drives goes through `cancelProcessing`. Any other — another
+ * tab or device, or a run orphaned by a reload — is ended on the server,
+ * which also stops the image it is still inferring.
+ */
+export async function stopBatchRun(batchId: string, mode: CancelMode): Promise<void> {
+    if (runtime.running && runtime.dbBatchId === batchId) {
+        cancelProcessing(mode);
+        return;
+    }
+    if (mode === 'keep') {
+        await completeBatch(batchId, { stoppedEarly: true });
+    } else {
+        await failBatch(batchId, 'User cancelled');
+    }
+    // This tab may still hold the remains of that run (an interrupted batch
+    // found on load): it is over now.
+    const store = useProcessingStore.getState();
+    if (store.activeBatchId === batchId || store.interruptedBatch?.id === batchId) {
+        store.reset();
+        clearProcessingSession();
+    }
+    queryClient.removeQueries({ queryKey: ['analysis-detail', batchId] });
+    void queryClient.invalidateQueries({ queryKey: ['running-batches'] });
+    void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
+    void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
+}
+
+/**
+ * Pause before the next image. Aborting the image in flight would throw away
+ * minutes of work on a measured run, so it is allowed to finish first; the
+ * store reads `pausing` until then, `paused` after.
+ */
+export function pauseProcessing(): void {
+    if (!runtime.running || runtime.cancelled || runtime.paused) return;
+    runtime.paused = true;
+    useProcessingStore.getState().setPauseState('pausing');
+}
+
+export function resumeProcessing(): void {
+    if (!runtime.paused) return;
+    runtime.paused = false;
+    const store = useProcessingStore.getState();
+    // Resuming a pause that never took hold needs no log line.
+    if (store.pauseState === 'paused') store.addLiveLog({ level: 'INFO', message: 'Resumed' });
+    store.setPauseState('running');
+    wakeLoop();
+}
+
+function wakeLoop(): void {
+    const wake = runtime.wake;
+    runtime.wake = null;
+    wake?.();
+}
+
+/** Park the loop while the run is paused. Returns at once when it is not. */
+async function holdWhilePaused(): Promise<void> {
+    if (!runtime.paused || runtime.cancelled) return;
+    useProcessingStore.getState().setPauseState('paused');
+    setStage('Paused');
+    await new Promise<void>((resolve) => {
+        runtime.wake = resolve;
+    });
 }
 
 /** User chose to discard an interrupted batch. Marks it failed and clears state.
@@ -373,22 +470,27 @@ async function processBboxImage(
     fileObj: File,
     dbBatchId: string,
     label: string,
+    signal: AbortSignal,
 ): Promise<ImageOutcome | null> {
     // Backend drives per-image stages (decode/tile/detect/dedup/draw/save)
     // via the stages WS — those overwrite this label as they arrive.
     setStage(`Uploading — ${label}…`);
-    const result = await inferSingle(runtime.organism, fileObj, dbBatchId);
+    const result = await inferSingle(runtime.organism, fileObj, dbBatchId, signal);
     if (runtime.cancelled) return null;
 
     setStage(`Persisting result — ${label}…`);
-    const { image_id } = await addImageResult(dbBatchId, {
-        filename: result.filename,
-        count: result.count,
-        avg_confidence: result.avg_confidence,
-        elapsed_seconds: result.elapsed_seconds,
-        annotations: result.annotations,
-        overlay_url: result.overlay_url,
-    });
+    const { image_id } = await addImageResult(
+        dbBatchId,
+        {
+            filename: result.filename,
+            count: result.count,
+            avg_confidence: result.avg_confidence,
+            elapsed_seconds: result.elapsed_seconds,
+            annotations: result.annotations,
+            overlay_url: result.overlay_url,
+        },
+        signal,
+    );
     return {
         status: 'done',
         count: result.count,
@@ -419,33 +521,38 @@ async function processPolygonImage(
     dbBatchId: string,
     label: string,
     filename: string,
+    signal: AbortSignal,
 ): Promise<ImageOutcome | null> {
     const store = useProcessingStore.getState();
     const countOnly = store.analysisMode === 'count';
 
     setStage(`${countOnly ? 'Counting' : 'Inferring'} — ${label}…`);
     const infer = runtime.organism === 'pupae' ? inferSinglePupae : inferSingleLarvae;
-    const result = await infer(fileObj, dbBatchId, countOnly);
+    const result = await infer(fileObj, dbBatchId, countOnly, signal);
     if (runtime.cancelled) return null;
 
     setStage(`Persisting result — ${label}…`);
     // The shared /analyses/{batch_id}/images endpoint takes a generic
     // `annotations: list[dict]`. Polygon annotations carry polygons alongside
     // bbox/confidence — they ride through the same field.
-    const { image_id } = await addImageResult(dbBatchId, {
-        filename: result.filename,
-        count: result.count,
-        avg_confidence: result.avg_confidence,
-        elapsed_seconds: result.elapsed_seconds,
-        annotations: result.annotations as unknown as Array<{
-            label: string;
-            bbox: [number, number, number, number];
-            confidence: number;
-        }>,
-        overlay_url: result.overlay_url,
-        calibration: result.calibration ?? null,
-        sam_refined: result.sam_refined ?? false,
-    });
+    const { image_id } = await addImageResult(
+        dbBatchId,
+        {
+            filename: result.filename,
+            count: result.count,
+            avg_confidence: result.avg_confidence,
+            elapsed_seconds: result.elapsed_seconds,
+            annotations: result.annotations as unknown as Array<{
+                label: string;
+                bbox: [number, number, number, number];
+                confidence: number;
+            }>,
+            overlay_url: result.overlay_url,
+            calibration: result.calibration ?? null,
+            sam_refined: result.sam_refined ?? false,
+        },
+        signal,
+    );
 
     let status: ImageStatus = 'done';
     if (!countOnly) {
@@ -460,8 +567,10 @@ async function processPolygonImage(
         } else if (!runtime.cancelled && result.count > 0) {
             setStage(`Measuring — ${label}…`);
             try {
-                await measureLarvae(image_id);
+                await measureLarvae(image_id, {}, signal);
             } catch (err) {
+                // The image is already stored; a cancel just skips its sizes.
+                if (runtime.cancelled) return null;
                 const msg = err instanceof Error ? err.message : String(err);
                 store.addLiveLog({
                     level: 'WARN',
@@ -490,6 +599,8 @@ async function runProcessLoop(
 ): Promise<void> {
     runtime.running = true;
     runtime.cancelled = false;
+    runtime.cancelMode = 'discard';
+    runtime.paused = false;
     const store = useProcessingStore.getState();
     const startTime = Date.now();
     const total = stored.length;
@@ -499,9 +610,12 @@ async function runProcessLoop(
     let firstImageId: string | null = null;
 
     for (let i = startFrom; i < stored.length; i++) {
+        await holdWhilePaused();
         if (runtime.cancelled) break;
 
         const file = stored[i];
+        const abort = new AbortController();
+        runtime.abort = abort;
         const label = `${file.name} (${i + 1}/${total})`;
         store.setCurrentImageStart(Date.now());
         store.updateImage(file.id, { status: 'processing' });
@@ -518,8 +632,8 @@ async function runProcessLoop(
             if (runtime.cancelled) break;
 
             const outcome = polygon
-                ? await processPolygonImage(fileObj, dbBatchId, label, file.name)
-                : await processBboxImage(fileObj, dbBatchId, label);
+                ? await processPolygonImage(fileObj, dbBatchId, label, file.name, abort.signal)
+                : await processBboxImage(fileObj, dbBatchId, label, abort.signal);
             if (outcome === null) break; // cancelled mid-image
 
             firstImageId ??= outcome.backendImageId;
@@ -543,10 +657,21 @@ async function runProcessLoop(
             store.addLiveLog({ level: 'ERROR', message: `${file.name}: ${msg}` });
         } finally {
             store.setCurrentImageStart(null);
+            runtime.abort = null;
         }
     }
 
-    if (runtime.cancelled) {
+    // Stopped early. Nothing processed leaves nothing worth keeping, so
+    // "keep" falls back to discarding the run.
+    const stoppedEarly = runtime.cancelled;
+    const keep =
+        stoppedEarly &&
+        // Read through a cast: TS narrowed the field at the reset above and
+        // cannot see cancelProcessing() changing it while the loop awaited.
+        (runtime.cancelMode as CancelMode) === 'keep' &&
+        useProcessingStore.getState().processedCount > 0;
+    runtime.paused = false;
+    if (stoppedEarly && !keep) {
         try {
             await failBatch(dbBatchId, 'User cancelled');
         } catch {
@@ -554,6 +679,7 @@ async function runProcessLoop(
         }
         useProcessingStore.getState().reset();
         clearProcessingSession();
+        void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
         runtime.running = false;
         runtime.dbBatchId = null;
         runtime.cancelled = false;
@@ -565,7 +691,7 @@ async function runProcessLoop(
 
     setStage('Finalizing batch…');
     try {
-        await completeBatch(dbBatchId);
+        await completeBatch(dbBatchId, { stoppedEarly });
         setStage('Loading results…');
         const imageIds = await storeCompletedDetail(dbBatchId);
         // A resumed run may not have processed anything itself; open on the
@@ -586,6 +712,7 @@ async function runProcessLoop(
     store.setCompletedBatch(dbBatchId, firstImageId);
     runtime.running = false;
     runtime.dbBatchId = null;
+    runtime.cancelled = false;
 }
 
 // Quick liveness probe — blob URLs become invalid after a tab reload.

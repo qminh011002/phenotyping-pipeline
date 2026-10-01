@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -13,6 +14,7 @@ import cv2
 import numpy as np
 
 from app.config import PipelineConfigManager
+from app.errors.exceptions import InferenceCancelledError
 from app.schemas.calibration import CalibrationCorners
 from app.services.inference.calibration import CalibrationService
 from app.services.inference.egg import InvalidImageError
@@ -242,10 +244,16 @@ class PolygonSegmentationService:
 
         return [candidates[i] for i in selected]
 
-    def _stage(self, code: str, filename: str, batch_id: str) -> None:
+    def _stage(
+        self,
+        code: str,
+        filename: str,
+        batch_id: str,
+        progress: tuple[int, int] | None = None,
+    ) -> None:
         from app.services.stage_broker import emit_stage
 
-        emit_stage(code, batch_id, filename, organism=self._organism)
+        emit_stage(code, batch_id, filename, organism=self._organism, progress=progress)
 
     def _run_inference(
         self,
@@ -255,6 +263,7 @@ class PolygonSegmentationService:
         raw_image_data: bytes | None = None,
         raw_suffix: str = ".png",
         refine: bool | None = None,
+        cancel: threading.Event | None = None,
     ) -> Any:
         """Run tiled inference on one decoded image.
 
@@ -262,7 +271,15 @@ class PolygonSegmentationService:
         ``False`` skips SAM (count-only runs — the detection count is final
         after MWIS dedup, SAM only tightens outlines), ``True`` forces it,
         ``None`` follows the config.
+
+        ``cancel`` is set when the caller has gone away; it is checked between
+        detector batches and between SAM candidates, and ends the run with
+        ``InferenceCancelledError`` before anything is written to disk.
         """
+
+        def stopped() -> bool:
+            return cancel is not None and cancel.is_set()
+
         cfg = self._get_config()
         model: "YOLO" = self._model_registry.model_for(self._organism)
         t_start = time.time()
@@ -283,6 +300,8 @@ class PolygonSegmentationService:
         candidates: list[dict[str, Any]] = []
         device_arg = self._model_registry.device_for(self._organism)
         for i in range(0, len(tiles), int(cfg.batch_size)):
+            if stopped():
+                raise InferenceCancelledError("inference cancelled")
             batch_tiles = tiles[i : i + int(cfg.batch_size)]
             batch_coords = coords[i : i + int(cfg.batch_size)]
 
@@ -364,7 +383,15 @@ class PolygonSegmentationService:
                     update={"sam": cfg.sam.model_copy(update={"enabled": True})}
                 )
             )
-            selected = self._sam_svc.refine_candidates(image, selected, sam_cfg)
+            selected = self._sam_svc.refine_candidates(
+                image,
+                selected,
+                sam_cfg,
+                should_stop=stopped,
+                on_progress=lambda done, total: self._stage(
+                    "image.refine", filename, batch_id, progress=(done, total)
+                ),
+            )
             sam_refined = True
 
         calibration, corners_float = self._calibration_svc.detect_with_ordered(
@@ -475,6 +502,7 @@ class PolygonSegmentationService:
         batch_id: str,
         raw_suffix: str = ".png",
         refine: bool | None = None,
+        cancel: threading.Event | None = None,
     ) -> Any:
         self._stage("image.decode", filename, batch_id)
 
@@ -493,10 +521,13 @@ class PolygonSegmentationService:
         device = self._model_registry.device_for(self._organism)
 
         async with self._semaphore:
+            # The run may have been cancelled while it waited for the worker.
+            if cancel is not None and cancel.is_set():
+                raise InferenceCancelledError("inference cancelled")
             result = await loop.run_in_executor(
                 self._executor,
                 lambda: self._run_inference(
-                    image, filename, batch_id, image_data, raw_suffix, refine
+                    image, filename, batch_id, image_data, raw_suffix, refine, cancel
                 ),
             )
 

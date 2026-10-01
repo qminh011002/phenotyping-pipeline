@@ -34,13 +34,16 @@ interface StageEvent {
     batch_id: string;
     filename?: string;
     organism?: string;
+    /** Progress inside a long stage — SAM refines one detection at a time. */
+    done?: number;
+    total?: number;
 }
 
 interface StageHeartbeat {
     type: 'heartbeat';
 }
 
-function composeStageText(code: string, filename?: string): string {
+function composeStageText(code: string, filename?: string, progress?: string): string {
     const base = STAGE_LABELS[code] ?? code;
     const state = useProcessingStore.getState();
     const index =
@@ -48,7 +51,7 @@ function composeStageText(code: string, filename?: string): string {
     const total = state.totalImages;
     const indexPart = total > 0 ? ` (${Math.min(index, total)}/${total})` : '';
     const filePart = filename ? ` — ${filename}` : '';
-    return `${base}${filePart}${indexPart}…`;
+    return `${base}${progress ?? ''}${filePart}${indexPart}…`;
 }
 
 function currentImagePosition(filename?: string): { index: number; total: number } {
@@ -155,8 +158,19 @@ function openSocket(): void {
         if (!active) return;
         if (evt.batch_id !== active) return;
         if (DEV) console.debug('[stageTracker] 📥', evt.stage, '—', evt.filename);
-        useProcessingStore.getState().setStage(composeStageText(evt.stage, evt.filename));
-        appendStageLog(evt.stage, evt.filename);
+        // A cancel or pause owns the status line until the loop catches up.
+        const state = useProcessingStore.getState();
+        if (state.cancelling) return;
+        const tick = typeof evt.done === 'number' && typeof evt.total === 'number';
+        state.setStage(
+            composeStageText(
+                evt.stage,
+                evt.filename,
+                tick ? ` ${Math.min(evt.done! + 1, evt.total!)}/${evt.total}` : undefined,
+            ),
+        );
+        // One log line per stage, not one per detection.
+        if (!tick) appendStageLog(evt.stage, evt.filename);
     };
     sock.onerror = (e) => {
         if (DEV) console.warn('[stageTracker] ws error:', e);

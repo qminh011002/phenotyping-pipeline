@@ -393,6 +393,7 @@ class AnalysisService:
         batch_id: UUID,
         db: AsyncSession,
         user_id: UUID,
+        stopped_early: bool = False,
     ) -> AnalysisBatch | None:
         """End the processing phase: compute aggregates and move the batch to ``draft``.
 
@@ -400,6 +401,10 @@ class AnalysisService:
         annotations) but hidden from the Records list. Promotion to
         ``completed`` happens in ``finish_batch`` when the operator clicks
         Finish.
+
+        ``stopped_early``: the operator stopped the run and kept what was
+        done. The images that never ran are dropped from the batch's size, so
+        it does not read as "4 of 10 processed" forever.
         """
         stmt_batch = (
             select(AnalysisBatch)
@@ -418,6 +423,8 @@ class AnalysisService:
         # ``draft`` for review.
         resume_status = self._pop_append_markers(batch)
         batch.status = "completed" if resume_status == "completed" else "draft"
+        if stopped_early:
+            batch.total_image_count = await self._count_images(batch_id, db)
         batch.total_count = total_count
         batch.avg_confidence = avg_conf
         batch.total_elapsed_secs = total_elapsed

@@ -16,7 +16,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
 
 from app.database import AsyncSession, get_session
 from app.deps import (
@@ -29,6 +29,7 @@ from app.routers.inference_utils import (
     map_inference_error,
     parse_and_verify_optional_batch,
     read_image_upload,
+    run_until_disconnect,
     unique_stem_in_batch,
     validate_image_extension,
 )
@@ -51,6 +52,7 @@ async def run_pupae_inference(
     inference_svc: AnnotatedPupaeInferenceService,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
     file: Annotated[UploadFile, File(description="Image file (JPG, PNG, TIFF, BMP)")],
     batch_id: Annotated[
         str | None,
@@ -80,12 +82,17 @@ async def run_pupae_inference(
     # Same as larvae: the frontend follows with POST /analyses/{id}/images to
     # persist; no AnalysisImage row is written here.
     try:
-        return await inference_svc.process_single(
-            data,
-            stem,
-            resolved_batch_id,
-            raw_suffix=suffix,
-            refine=False if count_only else None,
+        return await run_until_disconnect(
+            request,
+            lambda cancel: inference_svc.process_single(
+                data,
+                stem,
+                resolved_batch_id,
+                raw_suffix=suffix,
+                refine=False if count_only else None,
+                cancel=cancel,
+            ),
+            batch_id=bid,
         )
     except (InvalidImageError, ModelNotLoadedError) as exc:
         raise map_inference_error(exc) from exc

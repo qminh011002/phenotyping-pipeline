@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from pathlib import PurePath
+from typing import TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, Request, UploadFile, status
@@ -12,11 +16,14 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 
 from app.database import AsyncSession
+from app.errors.exceptions import InferenceCancelledError
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.services.inference.egg import InvalidImageError
 from app.services.model_registry import ModelNotLoadedError
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 ALLOWED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"})
 MAX_IMAGE_BYTES = 100 * 1024 * 1024
@@ -180,3 +187,79 @@ def map_inference_error(exc: Exception) -> HTTPException:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=f"Inference failed: {exc}",
     )
+
+
+# nginx's "client closed request" — never delivered, but it labels the log line.
+_CLIENT_CLOSED_REQUEST = 499
+
+
+async def _client_gone(request: Request) -> None:
+    """Return once the client has disconnected.
+
+    The body is already read by the time a handler runs, so the only message
+    left on the channel is the disconnect.
+    """
+    while True:
+        message = await request.receive()
+        if message["type"] == "http.disconnect":
+            return
+
+
+# Cancel flags of the inference requests in flight, by the batch they feed.
+# Lets "stop this run" reach a request another tab is still waiting on. One
+# registry per worker process: a stop handled by a different gunicorn worker
+# does not see it, and that request then ends when its client disconnects.
+_batch_cancels: dict[str, set[threading.Event]] = {}
+
+
+def cancel_batch_inference(batch_id: UUID | str) -> int:
+    """Stop every in-flight inference feeding ``batch_id``. Returns how many."""
+    events = _batch_cancels.get(str(batch_id), ())
+    for event in events:
+        event.set()
+    return len(events)
+
+
+async def run_until_disconnect(
+    request: Request,
+    work: Callable[[threading.Event], Awaitable[_T]],
+    batch_id: UUID | str | None = None,
+) -> _T:
+    """Run ``work(cancel)`` and set ``cancel`` if the client hangs up first.
+
+    An image with SAM refinement can take minutes. Without this, cancelling a
+    run in the browser only drops the connection: the server keeps refining
+    and holds the single inference worker, so the next request queues behind
+    work nobody will read.
+
+    With ``batch_id`` the work can also be stopped by ``cancel_batch_inference``.
+    """
+    cancel = threading.Event()
+    key = str(batch_id) if batch_id is not None else None
+    if key is not None:
+        _batch_cancels.setdefault(key, set()).add(cancel)
+    task = asyncio.ensure_future(work(cancel))
+    watcher = asyncio.ensure_future(_client_gone(request))
+    try:
+        await asyncio.wait({task, watcher}, return_when=asyncio.FIRST_COMPLETED)
+        if not task.done():
+            cancel.set()
+        return await task
+    except InferenceCancelledError as exc:
+        logger.info(
+            "Inference cancelled — client disconnected or run stopped",
+            extra={"context": {"path": request.url.path}},
+        )
+        raise HTTPException(
+            status_code=_CLIENT_CLOSED_REQUEST, detail="Inference cancelled"
+        ) from exc
+    finally:
+        # Also covers the server cancelling this handler outright.
+        cancel.set()
+        watcher.cancel()
+        if key is not None:
+            events = _batch_cancels.get(key)
+            if events is not None:
+                events.discard(cancel)
+                if not events:
+                    del _batch_cancels[key]

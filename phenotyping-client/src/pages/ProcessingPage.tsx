@@ -21,6 +21,7 @@ import { OrganismBadge } from '@/components/common';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingScreen } from '@/components/LoadingScreen';
+import { RunControls } from '@/features/processing/RunControls';
 import { formatDuration, formatPercent, pluralize } from '@/lib/format';
 import { isPolygonOrganism, organismMeta } from '@/lib/organism';
 import { cn } from '@/lib/utils';
@@ -32,7 +33,6 @@ import {
 import { useProcessingStore } from '@/stores/processingStore';
 import type { ImageStatus, ProcessingImage, ProcessingLogEntry } from '@/stores/processingStore';
 import {
-    cancelProcessing,
     discardInterruptedBatch,
     finalizeInterruptedBatch,
     isManagerRunning,
@@ -336,6 +336,8 @@ export default function ProcessingPage() {
     const appendingToName = useProcessingStore((s) => s.appendingToName);
     const analysisMode = useProcessingStore((s) => s.analysisMode);
     const completedDurations = useProcessingStore((s) => s.completedDurations);
+    const pauseState = useProcessingStore((s) => s.pauseState);
+    const cancelling = useProcessingStore((s) => s.cancelling);
 
     useEffect(() => {
         let cancelled = false;
@@ -401,11 +403,6 @@ export default function ProcessingPage() {
     const anyError = errorCount > 0;
     const allDone = !isProcessing && totalImages > 0 && allCompleted;
 
-    function handleCancel() {
-        cancelProcessing();
-        navigate('/', { replace: true });
-    }
-
     async function handleInterruptedViewResults() {
         try {
             await finalizeInterruptedBatch();
@@ -463,7 +460,9 @@ export default function ProcessingPage() {
     }
 
     let status: string;
-    if (isProcessing) {
+    if (isProcessing && pauseState === 'pausing' && !cancelling) {
+        status = stage ? `Pausing after this image — ${stage}` : 'Pausing after the current image…';
+    } else if (isProcessing) {
         if (stage) {
             status = stage;
         } else {
@@ -489,7 +488,12 @@ export default function ProcessingPage() {
         completedDurations.length > 0
             ? completedDurations.reduce((a, b) => a + b, 0) / completedDurations.length
             : null;
-    const eta = isProcessing && avgSeconds != null && remaining > 0 ? avgSeconds * remaining : null;
+    const paused = pauseState === 'paused';
+    const eta =
+        isProcessing && !paused && avgSeconds != null && remaining > 0
+            ? avgSeconds * remaining
+            : null;
+    const appending = appendingToName !== null;
     const title = appendingToName ?? projectName ?? 'Analysis';
 
     return (
@@ -528,9 +532,20 @@ export default function ProcessingPage() {
                                 </div>
                             </div>
                             {isProcessing && (
-                                <Button variant="outline" size="sm" onClick={handleCancel}>
-                                    Cancel
-                                </Button>
+                                <RunControls
+                                    run={{
+                                        id: activeBatchId,
+                                        local: true,
+                                        processed: processedSoFar,
+                                        total: totalImages,
+                                        appending,
+                                    }}
+                                    onStopped={(mode) => {
+                                        // A kept run finalises and this page
+                                        // follows it into its results.
+                                        if (mode === 'discard') navigate('/', { replace: true });
+                                    }}
+                                />
                             )}
                         </div>
 
@@ -551,11 +566,13 @@ export default function ProcessingPage() {
                             <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground tabular-nums">
                                 <span>{Math.round(progress)}%</span>
                                 <span>
-                                    {eta != null
-                                        ? `About ${formatDuration(eta)} left`
-                                        : isProcessing
-                                          ? 'Estimating time left…'
-                                          : ''}
+                                    {paused
+                                        ? 'Paused'
+                                        : eta != null
+                                          ? `About ${formatDuration(eta)} left`
+                                          : isProcessing
+                                            ? 'Estimating time left…'
+                                            : ''}
                                 </span>
                             </div>
                         </div>

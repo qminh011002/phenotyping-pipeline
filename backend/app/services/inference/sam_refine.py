@@ -20,10 +20,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import cv2
 import numpy as np
+
+from app.errors.exceptions import InferenceCancelledError
 
 if TYPE_CHECKING:
     from ultralytics import SAM as _SAMType  # noqa: N811
@@ -302,12 +304,19 @@ class SamRefinementService:
         image: np.ndarray,
         candidates: list[dict[str, Any]],
         cfg: "LarvaeConfig | PupaeConfig",
+        should_stop: Callable[[], bool] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Refine every candidate polygon in-place (returns a new list).
 
         Candidates below ``sam.confidence_threshold`` are passed through
         unchanged. Failures (SAM error, empty mask, ...) also pass through
         unchanged — refinement is best-effort and must never lose detections.
+
+        SAM runs once per candidate (about a second each on CPU), so this is
+        by far the longest step of an image. ``should_stop`` is polled between
+        candidates and aborts with ``InferenceCancelledError``; ``on_progress``
+        receives ``(done, total)`` after each one.
         """
         sam_cfg = cfg.sam
         if not sam_cfg.enabled or not candidates:
@@ -347,7 +356,16 @@ class SamRefinementService:
         n_failed = 0
         t0 = time.time()
         with self._refine_lock:
-            for idx in needs_refine:
+            for done, idx in enumerate(needs_refine):
+                if should_stop is not None and should_stop():
+                    logger.info(
+                        "SAM refine cancelled after %d of %d",
+                        done,
+                        len(needs_refine),
+                    )
+                    raise InferenceCancelledError("SAM refinement cancelled")
+                if on_progress is not None:
+                    on_progress(done, len(needs_refine))
                 cand = candidates[idx]
                 new = self._refine_one(
                     model,
@@ -389,6 +407,7 @@ class SamRefinementService:
         image: np.ndarray,
         candidates: list[dict[str, Any]],
         cfg: "LarvaeConfig | PupaeConfig",
+        should_stop: Callable[[], bool] | None = None,
     ) -> list[dict[str, Any]]:
         if not cfg.sam.enabled or not candidates:
             return candidates
@@ -396,5 +415,7 @@ class SamRefinementService:
         async with self._semaphore:
             return await loop.run_in_executor(
                 self._executor,
-                lambda: self.refine_candidates(image, candidates, cfg),
+                lambda: self.refine_candidates(
+                    image, candidates, cfg, should_stop=should_stop
+                ),
             )
