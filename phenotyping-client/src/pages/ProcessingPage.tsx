@@ -347,7 +347,7 @@ export default function ProcessingPage() {
                     const sessionBatchId = loadBatchId();
                     const stored = loadProcessingFiles();
                     if (!sessionBatchId || stored.length === 0) {
-                        navigate('/analyze');
+                        navigate('/analyze', { replace: true });
                     }
                 }
             }
@@ -372,7 +372,9 @@ export default function ProcessingPage() {
                 : organism === 'pupae'
                   ? `${base}?organism=pupae`
                   : base;
-        navigate(url);
+        // Replace: the finished run must not sit behind the results, or Back
+        // would land here and be bounced straight forward again.
+        navigate(url, { replace: true });
     }, [completedBatchId, completedFirstImageId, navigate, organism]);
 
     const { doneCount, errorCount, needsCalibrationCount, allCompleted, countedSoFar } =
@@ -401,7 +403,7 @@ export default function ProcessingPage() {
 
     function handleCancel() {
         cancelProcessing();
-        navigate('/');
+        navigate('/', { replace: true });
     }
 
     async function handleInterruptedViewResults() {
@@ -411,11 +413,11 @@ export default function ProcessingPage() {
             const batchId = stored?.id;
             const firstImageId = stored?.images?.[0]?.id;
             if (batchId && firstImageId) {
-                navigate(`/analyze/results/${batchId}/images/${firstImageId}`);
+                navigate(`/analyze/results/${batchId}/images/${firstImageId}`, { replace: true });
             } else if (batchId) {
-                navigate(`/analyze/results/${batchId}`);
+                navigate(`/analyze/results/${batchId}`, { replace: true });
             } else {
-                navigate('/analyze/results');
+                navigate('/analyze/results', { replace: true });
             }
         } catch (err) {
             console.error('finalizeInterruptedBatch failed', err);
@@ -424,7 +426,7 @@ export default function ProcessingPage() {
 
     function handleInterruptedDiscard() {
         discardInterruptedBatch();
-        navigate('/analyze');
+        navigate('/analyze', { replace: true });
     }
 
     if (interruptedBatch) {
@@ -445,7 +447,10 @@ export default function ProcessingPage() {
                 status="Processing failed"
                 counter={error}
                 action={
-                    <Button variant="outline" onClick={() => navigate('/analyze')}>
+                    <Button
+                        variant="outline"
+                        onClick={() => navigate('/analyze', { replace: true })}
+                    >
                         Go Back
                     </Button>
                 }

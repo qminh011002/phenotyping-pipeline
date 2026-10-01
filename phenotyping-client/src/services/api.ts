@@ -12,6 +12,7 @@ import type {
     AnalysisListResponse,
     AssignmentsResponse,
     AssignResultResponse,
+    BatchAnalytics,
     BatchDetectionResult,
     BboxConfig,
     CalibrationCorners,
@@ -386,6 +387,14 @@ export async function getAnalysisDetail(
     return http.get<AnalysisBatchDetail>(path, signal);
 }
 
+/** GET /analyses/{batch_id}/analytics — count spread, confidence, review and sizes. */
+export async function getBatchAnalytics(
+    batchId: string,
+    signal?: AbortSignal,
+): Promise<BatchAnalytics> {
+    return http.get<BatchAnalytics>(`analyses/${batchId}/analytics`, signal);
+}
+
 /** GET /analyses/{batch_id}/images/{image_id} — single-image detail with annotations.
  *
  * Used by ResultViewer to lazy-fetch annotations one image at a time, so
@@ -644,10 +653,7 @@ export async function setImageTotalWeight(
     imageId: string,
     payload: ImageTotalWeightUpdate,
 ): Promise<ImageTotalWeightResult> {
-    return http.put<ImageTotalWeightResult>(
-        `analyses/images/${imageId}/total-weight`,
-        payload,
-    );
+    return http.put<ImageTotalWeightResult>(`analyses/images/${imageId}/total-weight`, payload);
 }
 
 /** PUT /analyses/{batch_id}/images/{image_id}/polygons — save polygon edits. */

@@ -4,7 +4,16 @@
 
 import { memo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clock, FolderOpen, Gauge, ImagePlus, Images, MoreHorizontal, Trash2 } from 'lucide-react';
+import {
+    Clock,
+    FolderOpen,
+    Gauge,
+    ImagePlus,
+    Images,
+    Loader2,
+    MoreHorizontal,
+    Trash2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { OrganismBadge, StatusBadge, Thumbnail } from '@/components/common';
@@ -30,12 +39,15 @@ import {
     formatDate,
     formatDateTime,
     formatDuration,
+    formatElapsed,
     formatPercent,
     pluralize,
     timeAgo,
 } from '@/lib/format';
 import { countLabel, organismMeta } from '@/lib/organism';
+import { useNow } from '@/features/processing/useRunningBatches';
 import { cn } from '@/lib/utils';
+import { useProcessingStore } from '@/stores/processingStore';
 import { getThumbnailUrl } from '@/services/api';
 import type { RecordedBatchSummary } from '../hooks/useRecorded';
 import { addImagesPath, batchPath } from '../lib/paths';
@@ -76,8 +88,12 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
     const name = batch.name || 'Untitled batch';
     const meta = organismMeta(batch.organism_type);
     const version = versionTag(batch.name);
-    const href = batchPath(batch.id);
     const processing = batch.status === 'processing';
+    // The run this tab drives has a live page; any other opens as a batch.
+    const drivenHere = useProcessingStore(
+        (s) => processing && s.isProcessing && s.activeBatchId === batch.id,
+    );
+    const href = drivenHere ? '/analyze/processing' : batchPath(batch.id);
     // The overlay variant: it shows the detections, and it always exists for a
     // cover image (the raw upload may not have been kept).
     const coverSrc = batch.cover_image_id
@@ -132,6 +148,7 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                         aria-hidden
                         className="pointer-events-none absolute inset-0 bg-foreground/0 transition-colors duration-150 ease-out group-hover/card:bg-foreground/5"
                     />
+                    {processing && <ProcessingCover batch={batch} />}
                     {version && (
                         <span className="absolute left-2 top-2 inline-flex h-5 items-center rounded-md border border-border bg-card/90 px-1.5 text-[11px] font-semibold text-foreground">
                             {version}
@@ -240,6 +257,9 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem
                                         variant="destructive"
+                                        // Deleting under a running loop would
+                                        // strand it mid-upload.
+                                        disabled={processing}
                                         onSelect={() => setConfirmOpen(true)}
                                     >
                                         <Trash2 aria-hidden />
@@ -285,6 +305,54 @@ function BatchCardImpl({ batch, onDelete }: BatchCardProps) {
                     </AlertDialogContent>
                 </AlertDialog>
             )}
+        </div>
+    );
+}
+
+/** Live state over the cover of a batch that is still being analysed: a
+ *  scrim, the progress so far and a clock running from the run's start. */
+function ProcessingCover({ batch }: { batch: RecordedBatchSummary }) {
+    const now = useNow(true);
+    const total = batch.total_image_count;
+    const done = Math.min(batch.processed_image_count, total);
+    const pct = total > 0 ? (done / total) * 100 : 0;
+    const startedAt = new Date(batch.processing_started_at ?? batch.created_at).getTime();
+    return (
+        <div
+            className="absolute inset-0 flex flex-col justify-between bg-background/70 p-3 backdrop-blur-[2px]"
+            role="status"
+            aria-label={`Analysing — ${done} of ${total} images`}
+        >
+            <span className="inline-flex h-6 w-fit items-center gap-1.5 rounded-md border border-info/25 bg-card/90 px-2 text-xs font-medium text-info">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                Analysing
+            </span>
+            <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums">
+                    <span>
+                        <span className="text-sm font-semibold">{formatCount(done)}</span>
+                        <span className="text-muted-foreground">
+                            {' '}
+                            of {formatCount(total)} {pluralize(total, 'image')}
+                        </span>
+                    </span>
+                    <span className="text-muted-foreground" title="Time since this run started">
+                        {Math.round(pct)}% · {formatElapsed((now - startedAt) / 1000)}
+                    </span>
+                </div>
+                <div
+                    className="h-1.5 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={total}
+                    aria-valuenow={done}
+                >
+                    <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+                        style={{ width: `${pct}%` }}
+                    />
+                </div>
+            </div>
         </div>
     );
 }

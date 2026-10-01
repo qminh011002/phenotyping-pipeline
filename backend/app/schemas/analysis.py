@@ -167,6 +167,9 @@ class AnalysisBatchSummary(BaseModel):
     failed_at: datetime | None = None
     failure_reason: str | None = None
     classes: list[str] = Field(default_factory=list)
+    # When the run in flight began — the batch's creation for a new batch, the
+    # append for images being added to an existing one. None unless processing.
+    processing_started_at: datetime | None = None
     # First image of the batch — lets list views request a cover thumbnail
     # without fetching the batch detail. Populated by list endpoints only.
     cover_image_id: UUID | None = None
@@ -308,6 +311,72 @@ class DashboardOverview(BaseModel):
     batches: list[DashboardBatchRow] = Field(default_factory=list)
     attention: DashboardAttention = Field(default_factory=DashboardAttention)
     recent_analyses: list[AnalysisBatchSummary] = Field(default_factory=list)
+
+
+# ── Batch analytics ───────────────────────────────────────────────────────────
+
+
+class BatchAnalyticsImage(BaseModel):
+    """One image of the batch, with what review and measurement did to it."""
+
+    id: UUID
+    filename: str
+    status: str
+    count: int | None = None
+    avg_confidence: float | None = None
+    elapsed_secs: float | None = None
+    # Detections the model produced, before any review.
+    model_count: int | None = None
+    # Detections drawn by the operator that are still on the image.
+    user_added: int = 0
+    edited: bool = False
+    # Polygon organisms only.
+    measured: int = 0
+    mean_length_mm: float | None = None
+
+
+class BatchCountStats(BaseModel):
+    """Spread of the per-image count across the completed images."""
+
+    images: int = 0
+    total: int = 0
+    mean: float | None = None
+    median: float | None = None
+    sd: float | None = None
+    cv: float | None = Field(default=None, description="sd / mean")
+    min: int | None = None
+    max: int | None = None
+
+
+class BatchClassRow(BaseModel):
+    label: str
+    count: int
+
+
+class BatchReviewStats(BaseModel):
+    images_edited: int = 0
+    model_detections: int = 0
+    user_added: int = 0
+    # Reviewed total minus what the model found (negative = net removals).
+    net_change: int = 0
+    low_confidence_detections: int = 0
+    low_confidence_images: int = 0
+
+
+class BatchAnalytics(BaseModel):
+    """Response for GET /analyses/{batch_id}/analytics."""
+
+    batch_id: UUID
+    organism: str
+    images: list[BatchAnalyticsImage] = Field(default_factory=list)
+    counts: BatchCountStats = Field(default_factory=BatchCountStats)
+    detection_confidence: list[DashboardHistogramBin] = Field(
+        default_factory=list,
+        description="Model detections per confidence band (operator-drawn excluded)",
+    )
+    classes: list[BatchClassRow] = Field(default_factory=list)
+    review: BatchReviewStats = Field(default_factory=BatchReviewStats)
+    sizes: list[DashboardSizeStats] = Field(default_factory=list)
 
 
 class ActiveBatchResponse(BaseModel):

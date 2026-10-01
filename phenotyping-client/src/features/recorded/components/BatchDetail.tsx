@@ -2,7 +2,10 @@
 //
 // Layout:
 //   - Header: back link, inline-editable name, organism / status chips, date,
-//     and the actions (Add images, Download, Continue edit).
+//     and the actions (Analytics, Add images, Download, Continue edit).
+//   - Below the header, one of two views, chosen by `?view=`:
+//       overview (default) — the sections listed next;
+//       analytics — <BatchAnalytics>, charts and a per-image table.
 //   - A 4-up row of stat tiles (images, total count, time, confidence).
 //   - "Run details": device / mode / classes, the config snapshot and notes.
 //   - Processed images as a grid of compact cards (server-built thumbnail on
@@ -17,6 +20,7 @@ import {
     ArrowLeft,
     ArrowRight,
     Calendar,
+    ChartNoAxesColumn,
     CheckCircle2,
     ChevronDown,
     Clock,
@@ -52,11 +56,19 @@ import {
 } from '@/lib/format';
 import { listContainerVariants, listItemVariants } from '@/lib/motion';
 import { countLabel, isPolygonOrganism, organismMeta } from '@/lib/organism';
+import { useBackTo } from '@/hooks/useBackTo';
 import { cn } from '@/lib/utils';
 import { getAnalysisDetail, getThumbnailUrl, renameBatch } from '@/services/api';
 import type { AnalysisBatchDetail, AnalysisImageSummary } from '@/types/api';
 import { openBatchInResults } from '../lib/openBatchInResults';
-import { addImagesPath } from '../lib/paths';
+import {
+    addImagesPath,
+    batchAnalyticsPath,
+    batchPath,
+    isBatchOverviewPath,
+    isRecordedListPath,
+} from '../lib/paths';
+import { BatchAnalytics } from './BatchAnalytics';
 import { DownloadBatchDialog } from './DownloadBatchDialog';
 
 // The processed-images grid. These two constants must stay in sync with
@@ -130,17 +142,23 @@ function WithHint({ title, children }: { title: string; children: React.ReactNod
     );
 }
 
-function BackButton({ onClick }: { onClick: () => void }) {
+function BackButton({
+    onClick,
+    label = 'Recorded batches',
+}: {
+    onClick: () => void;
+    label?: string;
+}) {
     return (
         <Button
             variant="ghost"
             size="xs"
             onClick={onClick}
-            title="Back to recorded batches"
+            title={`Back to ${label.toLowerCase()}`}
             className="-ml-2 text-muted-foreground hover:text-foreground"
         >
             <ArrowLeft aria-hidden />
-            Recorded batches
+            {label}
         </Button>
     );
 }
@@ -406,7 +424,9 @@ function DetailSkeleton({ onBack }: { onBack: () => void }) {
 export function BatchDetail() {
     const [searchParams] = useSearchParams();
     const batchId = searchParams.get('batch');
+    const analyticsView = searchParams.get('view') === 'analytics';
     const navigate = useNavigate();
+    const backTo = useBackTo();
     const queryClient = useQueryClient();
     // Page state for the processed-images grid. Page size is derived from the
     // measured grid width (see gridRef / columns below) so that exactly two
@@ -474,7 +494,7 @@ export function BatchDetail() {
             ro.disconnect();
             if (rafId) cancelAnimationFrame(rafId);
         };
-    }, [hasDetail]);
+    }, [hasDetail, analyticsView]);
 
     const imageCount = detail?.images.length ?? 0;
 
@@ -525,7 +545,7 @@ export function BatchDetail() {
         }
     }
 
-    async function openSingleImage(image: AnalysisImageSummary) {
+    async function openSingleImage(image: Pick<AnalysisImageSummary, 'id'>) {
         if (!detail) return;
         setTransitioning(true);
         const full = await loadFullDetailForEdit();
@@ -579,7 +599,12 @@ export function BatchDetail() {
         }
     }
 
-    const backToList = () => navigate('/recorded');
+    // Both back controls close a screen, so neither adds a history entry —
+    // see useBackTo.
+    const backToList = () => backTo('/recorded', isRecordedListPath);
+    const closeAnalytics = () => {
+        if (batchId) backTo(batchPath(batchId), (path) => isBatchOverviewPath(path, batchId));
+    };
 
     if (transitioning) {
         return <LoadingScreen status="Opening batch..." />;
@@ -634,7 +659,11 @@ export function BatchDetail() {
             {/* Header */}
             <header className="flex flex-col gap-2">
                 <div>
-                    <BackButton onClick={backToList} />
+                    {analyticsView ? (
+                        <BackButton onClick={closeAnalytics} label="Batch overview" />
+                    ) : (
+                        <BackButton onClick={backToList} />
+                    )}
                 </div>
 
                 <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -667,6 +696,35 @@ export function BatchDetail() {
                     </div>
 
                     <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <WithHint
+                            title={
+                                !canContinue
+                                    ? 'No completed images to analyse'
+                                    : analyticsView
+                                      ? 'Back to the image overview'
+                                      : 'Count spread, confidence and sizes for this batch'
+                            }
+                        >
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={!canContinue && !analyticsView}
+                                aria-pressed={analyticsView}
+                                onClick={() =>
+                                    analyticsView
+                                        ? closeAnalytics()
+                                        : navigate(batchAnalyticsPath(detail.id))
+                                }
+                                className={cn(
+                                    analyticsView &&
+                                        'border-primary/40 bg-primary/10 text-primary [--keycap-edge:color-mix(in_oklab,var(--primary)_45%,transparent)] hover:bg-primary/15 hover:text-primary dark:border-primary/40 dark:bg-primary/15 dark:hover:bg-primary/20',
+                                )}
+                            >
+                                <ChartNoAxesColumn aria-hidden />
+                                Analytics
+                            </Button>
+                        </WithHint>
+
                         <WithHint
                             title={
                                 processing
@@ -737,133 +795,147 @@ export function BatchDetail() {
                 </div>
             )}
 
-            {/* Summary */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <StatTile
-                    label="Images processed"
-                    icon={Images}
-                    value={formatCount(completedCount)}
-                    unit={`of ${formatCount(detail.total_image_count)}`}
-                    hint={
-                        failedCount > 0 ? (
-                            <span className="font-medium text-destructive">
-                                +{formatCount(failedCount)} failed
+            {analyticsView ? (
+                <BatchAnalytics
+                    batchId={detail.id}
+                    organism={detail.organism_type}
+                    avgConfidence={detail.avg_confidence}
+                    onOpenImage={(imageId) => void openSingleImage({ id: imageId })}
+                />
+            ) : (
+                <>
+                    {/* Summary */}
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <StatTile
+                            label="Images processed"
+                            icon={Images}
+                            value={formatCount(completedCount)}
+                            unit={`of ${formatCount(detail.total_image_count)}`}
+                            hint={
+                                failedCount > 0 ? (
+                                    <span className="font-medium text-destructive">
+                                        +{formatCount(failedCount)} failed
+                                    </span>
+                                ) : completedCount < detail.total_image_count ? (
+                                    `${formatCount(detail.total_image_count - completedCount)} not processed yet`
+                                ) : (
+                                    'All images processed'
+                                )
+                            }
+                        />
+                        <StatTile
+                            label={`Total ${meta.nounPlural}`}
+                            icon={Sigma}
+                            value={formatCount(detail.total_count)}
+                            hint={
+                                detail.total_count !== null && completedCount > 0
+                                    ? `≈ ${formatNumber(detail.total_count / completedCount)} per image`
+                                    : undefined
+                            }
+                        />
+                        <StatTile
+                            label="Processing time"
+                            icon={Clock}
+                            value={formatDuration(detail.total_elapsed_secs)}
+                            hint={stats.timing && <span title={stats.timing}>{stats.timing}</span>}
+                        />
+                        <StatTile
+                            label="Average confidence"
+                            icon={Gauge}
+                            value={formatPercent(detail.avg_confidence)}
+                            hint={
+                                detail.avg_confidence !== null && (
+                                    <ConfidenceBar
+                                        value={detail.avg_confidence}
+                                        className="mt-1.5 h-1.5"
+                                    />
+                                )
+                            }
+                        />
+                    </div>
+
+                    <RunDetails detail={detail} />
+
+                    {/* Processed images */}
+                    <section aria-labelledby="processed-images-title">
+                        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <h2 id="processed-images-title" className="text-sm font-semibold">
+                                Processed images
+                            </h2>
+                            <span className="text-xs tabular-nums text-muted-foreground">
+                                {formatCount(detail.images.length)}{' '}
+                                {pluralize(detail.images.length, 'image')}
                             </span>
-                        ) : completedCount < detail.total_image_count ? (
-                            `${formatCount(detail.total_image_count - completedCount)} not processed yet`
-                        ) : (
-                            'All images processed'
-                        )
-                    }
-                />
-                <StatTile
-                    label={`Total ${meta.nounPlural}`}
-                    icon={Sigma}
-                    value={formatCount(detail.total_count)}
-                    hint={
-                        detail.total_count !== null && completedCount > 0
-                            ? `≈ ${formatNumber(detail.total_count / completedCount)} per image`
-                            : undefined
-                    }
-                />
-                <StatTile
-                    label="Processing time"
-                    icon={Clock}
-                    value={formatDuration(detail.total_elapsed_secs)}
-                    hint={stats.timing && <span title={stats.timing}>{stats.timing}</span>}
-                />
-                <StatTile
-                    label="Average confidence"
-                    icon={Gauge}
-                    value={formatPercent(detail.avg_confidence)}
-                    hint={
-                        detail.avg_confidence !== null && (
-                            <ConfidenceBar value={detail.avg_confidence} className="mt-1.5 h-1.5" />
-                        )
-                    }
-                />
-            </div>
+                            {failedCount > 0 && (
+                                <span className="inline-flex h-5 items-center gap-1 rounded-md border border-destructive/25 bg-destructive/10 px-1.5 text-[11px] font-medium tabular-nums text-destructive">
+                                    <AlertCircle className="size-3" aria-hidden />
+                                    {formatCount(failedCount)} failed
+                                </span>
+                            )}
+                            {pageCount > 1 && (
+                                <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                                    Showing {pageStart + 1}–{pageEnd} of {detail.images.length}
+                                </span>
+                            )}
+                        </div>
 
-            <RunDetails detail={detail} />
-
-            {/* Processed images */}
-            <section aria-labelledby="processed-images-title">
-                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <h2 id="processed-images-title" className="text-sm font-semibold">
-                        Processed images
-                    </h2>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                        {formatCount(detail.images.length)}{' '}
-                        {pluralize(detail.images.length, 'image')}
-                    </span>
-                    {failedCount > 0 && (
-                        <span className="inline-flex h-5 items-center gap-1 rounded-md border border-destructive/25 bg-destructive/10 px-1.5 text-[11px] font-medium tabular-nums text-destructive">
-                            <AlertCircle className="size-3" aria-hidden />
-                            {formatCount(failedCount)} failed
-                        </span>
-                    )}
-                    {pageCount > 1 && (
-                        <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                            Showing {pageStart + 1}–{pageEnd} of {detail.images.length}
-                        </span>
-                    )}
-                </div>
-
-                {/* Stable wrapper — this div never unmounts across page flips, so
+                        {/* Stable wrapper — this div never unmounts across page flips, so
                     the ResizeObserver stays attached. The motion.div inside takes
                     `key={currentPage}` to replay the stagger on each page change,
                     but the outer width is what we measure. */}
-                <div ref={gridRef} className="w-full scroll-mt-14">
-                    {detail.images.length === 0 ? (
-                        <div className="panel px-4 py-10 text-center text-sm text-muted-foreground">
-                            This batch has no images yet.
-                        </div>
-                    ) : (
-                        <motion.div
-                            className={IMAGE_GRID}
-                            variants={listContainerVariants}
-                            initial="hidden"
-                            animate="visible"
-                            key={currentPage}
-                        >
-                            {pageImages.map((image) => (
+                        <div ref={gridRef} className="w-full scroll-mt-14">
+                            {detail.images.length === 0 ? (
+                                <div className="panel px-4 py-10 text-center text-sm text-muted-foreground">
+                                    This batch has no images yet.
+                                </div>
+                            ) : (
                                 <motion.div
-                                    key={image.id}
-                                    variants={listItemVariants}
-                                    className="h-full min-w-0"
+                                    className={IMAGE_GRID}
+                                    variants={listContainerVariants}
+                                    initial="hidden"
+                                    animate="visible"
+                                    key={currentPage}
                                 >
-                                    <ImageCard
-                                        image={image}
-                                        batchId={detail.id}
-                                        organism={detail.organism_type}
-                                        onOpen={openSingleImage}
-                                    />
+                                    {pageImages.map((image) => (
+                                        <motion.div
+                                            key={image.id}
+                                            variants={listItemVariants}
+                                            className="h-full min-w-0"
+                                        >
+                                            <ImageCard
+                                                image={image}
+                                                batchId={detail.id}
+                                                organism={detail.organism_type}
+                                                onOpen={openSingleImage}
+                                            />
+                                        </motion.div>
+                                    ))}
                                 </motion.div>
-                            ))}
-                        </motion.div>
-                    )}
-                </div>
+                            )}
+                        </div>
 
-                {pageCount > 1 && (
-                    <div className="mt-6">
-                        <PaginationBar
-                            page={currentPage}
-                            pageCount={pageCount}
-                            onChange={(p) => {
-                                setPage(p);
-                                // Scroll back to the top of the grid so the new
-                                // page is visible without extra scrolling.
-                                requestAnimationFrame(() => {
-                                    gridRef.current?.scrollIntoView({
-                                        behavior: 'smooth',
-                                        block: 'start',
-                                    });
-                                });
-                            }}
-                        />
-                    </div>
-                )}
-            </section>
+                        {pageCount > 1 && (
+                            <div className="mt-6">
+                                <PaginationBar
+                                    page={currentPage}
+                                    pageCount={pageCount}
+                                    onChange={(p) => {
+                                        setPage(p);
+                                        // Scroll back to the top of the grid so the new
+                                        // page is visible without extra scrolling.
+                                        requestAnimationFrame(() => {
+                                            gridRef.current?.scrollIntoView({
+                                                behavior: 'smooth',
+                                                block: 'start',
+                                            });
+                                        });
+                                    }}
+                                />
+                            </div>
+                        )}
+                    </section>
+                </>
+            )}
         </Shell>
     );
 }

@@ -33,6 +33,12 @@ export interface ColumnMarker {
     label: string;
 }
 
+/** A horizontal reference line at a y value (e.g. the mean). */
+export interface ColumnReference {
+    value: number;
+    label: string;
+}
+
 interface ColumnChartProps {
     series: ColumnSeries[];
     data: ColumnDatum[];
@@ -42,6 +48,9 @@ interface ColumnChartProps {
     /** Shown after the total in the tooltip when there are several series. */
     totalLabel?: string;
     markers?: ColumnMarker[];
+    references?: ColumnReference[];
+    /** Makes columns actionable (click / Enter), e.g. to open what one stands for. */
+    onSelect?: (index: number) => void;
     /** Label under the x axis (e.g. the unit). */
     xCaption?: ReactNode;
     ariaLabel: string;
@@ -54,13 +63,15 @@ export function ColumnChart({
     formatValue = (v) => v.toLocaleString(),
     totalLabel,
     markers,
+    references,
+    onSelect,
     xCaption,
     ariaLabel,
 }: ColumnChartProps) {
     const [active, setActive] = useState<number | null>(null);
     const tooltipId = useId();
     const totals = data.map((d) => d.values.reduce((a, b) => a + b, 0));
-    const ticks = niceTicks(Math.max(0, ...totals));
+    const ticks = niceTicks(Math.max(0, ...totals, ...(references ?? []).map((r) => r.value)));
     const top = ticks[ticks.length - 1];
     const labelled = labelIndices(data.length);
     const activeDatum = active !== null ? data[active] : null;
@@ -131,6 +142,19 @@ export function ColumnChart({
                             </div>
                         ))}
 
+                        {references?.map((r) => (
+                            <div
+                                key={r.label}
+                                aria-hidden
+                                className="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-foreground/55"
+                                style={{ top: `${(1 - r.value / top) * 100}%` }}
+                            >
+                                <span className="absolute right-0 bottom-0.5 rounded-sm bg-card px-1 text-[10px] font-medium whitespace-nowrap text-foreground">
+                                    {r.label}
+                                </span>
+                            </div>
+                        ))}
+
                         <div className="absolute inset-0 flex items-end">
                             {data.map((d, i) => {
                                 const lastFilled = d.values.reduce(
@@ -154,10 +178,23 @@ export function ColumnChart({
                                         }
                                         onFocus={() => setActive(i)}
                                         onBlur={() => setActive((a) => (a === i ? null : a))}
+                                        role={onSelect ? 'button' : undefined}
+                                        onClick={onSelect ? () => onSelect(i) : undefined}
+                                        onKeyDown={
+                                            onSelect
+                                                ? (e) => {
+                                                      if (e.key === 'Enter' || e.key === ' ') {
+                                                          e.preventDefault();
+                                                          onSelect(i);
+                                                      }
+                                                  }
+                                                : undefined
+                                        }
                                         className={cn(
                                             'group relative flex h-full min-w-0 flex-1 flex-col-reverse items-center rounded-sm px-px outline-none',
                                             'focus-visible:ring-[2px] focus-visible:ring-ring/60',
                                             active === i && 'bg-foreground/[0.04]',
+                                            onSelect && 'cursor-pointer',
                                         )}
                                     >
                                         {d.values.map((v, idx) =>

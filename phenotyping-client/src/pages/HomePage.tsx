@@ -242,7 +242,7 @@ export default function HomePage() {
                                     </div>
                                     <BatchComparisonCard overview={overview} />
                                     <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
-                                        <SizeDistributionCard overview={overview} />
+                                        <SizeDistributionCard sizes={overview.sizes} />
                                         <ConfidenceCard overview={overview} organism={organism} />
                                     </div>
                                     <RecentBatchesTable

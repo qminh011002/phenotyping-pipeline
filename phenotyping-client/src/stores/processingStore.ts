@@ -78,6 +78,8 @@ interface ProcessingStore {
     completedFirstImageId: string | null;
 
     // Runtime fields written by the manager — used to render ETA / errors / etc.
+    /** When this tab started (or resumed) driving the run, epoch ms. */
+    runStartedAtMs: number | null;
     currentImageStartMs: number | null;
     completedDurations: number[];
     totalElapsedSeconds: number;
@@ -132,6 +134,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     isRestoredFromBackend: false,
     completedBatchId: null,
     completedFirstImageId: null,
+    runStartedAtMs: null,
     currentImageStartMs: null,
     completedDurations: [],
     totalElapsedSeconds: 0,
@@ -148,6 +151,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     startProcessing: (totalImages) =>
         set({
             isProcessing: true,
+            runStartedAtMs: Date.now(),
             totalImages,
             images: [],
             imageIndexById: new Map(),
@@ -194,6 +198,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             isRestoredFromBackend: false,
             completedBatchId: null,
             completedFirstImageId: null,
+            runStartedAtMs: null,
             currentImageStartMs: null,
             completedDurations: [],
             totalElapsedSeconds: 0,
@@ -211,12 +216,13 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     setToastId: (toastId) => set({ toastId }),
 
     setActiveBatch: (batchId, processedCount, totalImages) =>
-        set({
+        set((state) => ({
             isProcessing: true,
             activeBatchId: batchId,
             processedCount,
             totalImages,
-        }),
+            runStartedAtMs: state.runStartedAtMs ?? Date.now(),
+        })),
 
     incrementProcessed: () => set((state) => ({ processedCount: state.processedCount + 1 })),
 

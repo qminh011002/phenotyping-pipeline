@@ -8,6 +8,8 @@ import { RedirectIfAuthed } from '@/components/auth/RedirectIfAuthed';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { recordLocation } from '@/lib/navTrail';
+import { BatchTracker } from '@/features/processing/BatchTracker';
 import { BootProvider } from '@/providers/BootProvider';
 import { onForceLogout } from '@/services/http';
 import { startStageTracker, stopStageTracker } from '@/services/stageTracker';
@@ -37,11 +39,13 @@ function RouteFallback() {
     );
 }
 
-// Root layout — wraps every page so ProcessingToast is always in router context
+// Root layout — wraps every page, so the batch tracker follows the operator
+// to any route while an analysis is running.
 function RootLayout() {
     return (
         <TooltipProvider delayDuration={300}>
             <Toaster />
+            <BatchTracker />
             <Suspense fallback={<RouteFallback />}>
                 <Outlet />
             </Suspense>
@@ -94,6 +98,12 @@ const router = createBrowserRouter([
         ],
     },
 ]);
+
+// Feed the navigation trail that back controls read (see useBackTo).
+const trackLocation = (location: { pathname: string; search: string }) =>
+    recordLocation(location.pathname + location.search);
+trackLocation(router.state.location);
+router.subscribe((state) => trackLocation(state.location));
 
 export default function App() {
     useEffect(() => {

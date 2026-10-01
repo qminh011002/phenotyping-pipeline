@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { useBackTo } from '@/hooks/useBackTo';
 import { useProcessingStore } from '@/stores/processingStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +37,7 @@ import { getModelAssignments } from '@/services/api';
 
 export default function AnalyzePage() {
     const navigate = useNavigate();
+    const backTo = useBackTo();
     const isProcessing = useProcessingStore((s) => s.isProcessing);
     const setProjectNameStore = useProcessingStore((s) => s.setProjectName);
     const setOrganismStore = useProcessingStore((s) => s.setOrganism);
@@ -108,7 +110,7 @@ export default function AnalyzePage() {
                     <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={() => navigate('/')}
+                        onClick={() => backTo('/')}
                         aria-label="Back to dashboard"
                     >
                         <ArrowLeft />
@@ -230,7 +232,7 @@ export default function AnalyzePage() {
                             : 'Next: add the images to analyse.'}
                     </p>
                     <div className="ml-auto flex items-center gap-2">
-                        <Button variant="ghost" onClick={() => navigate('/')}>
+                        <Button variant="ghost" onClick={() => backTo('/')}>
                             Cancel
                         </Button>
                         <Button onClick={handleSubmit} disabled={!canSubmit}>

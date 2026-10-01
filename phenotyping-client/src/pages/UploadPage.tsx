@@ -28,6 +28,8 @@ import {
     X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useBackTo } from '@/hooks/useBackTo';
+import { batchPath, isBatchPagePath } from '@/features/recorded/lib/paths';
 
 import { OrganismBadge, PaginationBar } from '@/components/common';
 import { Spinner } from '@/components/common/Spinner';
@@ -391,6 +393,7 @@ function SettingsSummary({
 
 export default function UploadPage() {
     const navigate = useNavigate();
+    const backTo = useBackTo();
     const queryClient = useQueryClient();
     const [searchParams] = useSearchParams();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -667,7 +670,9 @@ export default function UploadPage() {
             storeAppendTarget(null);
         }
         void startProcessingFromSession();
-        navigate('/analyze/processing');
+        // Replace: the file picker is spent once the run starts, so Back from
+        // the run should not land on it.
+        navigate('/analyze/processing', { replace: true });
     }
 
     const totalBytes = useMemo(() => files.reduce((sum, f) => sum + f.file.size, 0), [files]);
@@ -709,7 +714,12 @@ export default function UploadPage() {
 
     const previewEntry = previewId ? (files.find((f) => f.id === previewId) ?? null) : null;
 
-    const backTarget = appendBatchId ? `/recorded?batch=${appendBatchId}` : '/analyze';
+    // Back closes this screen: to the batch being extended (either of its
+    // views), else to project setup.
+    const goBack = () =>
+        appendBatchId
+            ? backTo(batchPath(appendBatchId), (path) => isBatchPagePath(path, appendBatchId))
+            : backTo('/analyze');
     const appendBlocked = appendBatch?.status === 'processing';
     const canProcess = hasFiles && !uploadProgress && modelReady && !appendBlocked;
     const what = hasFiles ? `${files.length} ${pluralize(files.length, 'image')}` : 'images';
@@ -730,7 +740,7 @@ export default function UploadPage() {
                         It may have been deleted, or it belongs to another account.
                     </p>
                 </div>
-                <Button variant="outline" onClick={() => navigate('/recorded')}>
+                <Button variant="outline" onClick={() => backTo('/recorded')}>
                     <ArrowLeft />
                     Back to Recorded
                 </Button>
@@ -773,7 +783,7 @@ export default function UploadPage() {
                     <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={() => navigate(backTarget)}
+                        onClick={goBack}
                         aria-label={appendBatchId ? 'Back to batch' : 'Back to project setup'}
                     >
                         <ArrowLeft />

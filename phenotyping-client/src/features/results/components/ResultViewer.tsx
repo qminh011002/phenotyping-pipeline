@@ -36,7 +36,14 @@ import {
     storeBatchDetail,
 } from '@/features/upload/lib/processingSession';
 import { consumeStartIndex } from '@/features/recorded/lib/openBatchInResults';
-import { addImagesPath } from '@/features/recorded/lib/paths';
+import {
+    addImagesPath,
+    batchPath,
+    isBatchPagePath,
+    isRecordedListPath,
+} from '@/features/recorded/lib/paths';
+import { useBackTo } from '@/hooks/useBackTo';
+import { previousPath } from '@/lib/navTrail';
 import { invalidateAuthedImages } from '@/hooks/useAuthedImage';
 import { usePersistentFlag } from '@/hooks/usePersistentFlag';
 import {
@@ -75,6 +82,7 @@ type SaveEditsArgs = {
 
 export function ResultViewer({ className }: ResultViewerProps) {
     const navigate = useNavigate();
+    const backTo = useBackTo();
     const queryClient = useQueryClient();
     // Path params: /analyze/results/:batchId/images/:imageId
     // Both segments are optional; the component canonicalizes missing
@@ -737,15 +745,29 @@ export function ResultViewer({ className }: ResultViewerProps) {
         setQuitDialogOpen(true);
     }, []);
 
+    // Leaving the viewer closes it: return to the batch page when that is
+    // where the operator came from, and never leave the viewer behind in
+    // history for the browser's Back button to reopen.
+    const leaveToBatch = useCallback(
+        (batchId: string) => backTo(batchPath(batchId), (path) => isBatchPagePath(path, batchId)),
+        [backTo],
+    );
+
     const handleQuitWithoutSaving = useCallback(() => {
         setQuitDialogOpen(false);
-        navigate('/');
-    }, [navigate]);
+        // Opened from Records → back to that batch; straight after a run the
+        // unsaved batch has no page worth returning to, so go home.
+        if (batchDetail && isBatchPagePath(previousPath() ?? '', batchDetail.id)) {
+            leaveToBatch(batchDetail.id);
+        } else {
+            navigate('/', { replace: true });
+        }
+    }, [batchDetail, leaveToBatch, navigate]);
 
     const handleSaveAndQuit = useCallback(async () => {
         if (!batchDetail) {
             setQuitDialogOpen(false);
-            navigate('/recorded');
+            backTo('/recorded', isRecordedListPath);
             return;
         }
         try {
@@ -767,9 +789,9 @@ export function ResultViewer({ className }: ResultViewerProps) {
             toast.error('Failed to save draft');
         } finally {
             setQuitDialogOpen(false);
-            navigate(`/recorded?batch=${batchDetail.id}`);
+            leaveToBatch(batchDetail.id);
         }
-    }, [batchDetail, handleSaveEdits, isDirty, navigate, savingEdits]);
+    }, [backTo, batchDetail, handleSaveEdits, isDirty, leaveToBatch, savingEdits]);
 
     const handleSelectTool = useCallback((tool: OverlayImageTool) => {
         setEditorTool(tool);
@@ -866,13 +888,13 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 storeBatchDetail(nextDetail);
             }
             toast.success('Saved to Records');
-            navigate(`/recorded?batch=${batchDetail.id}`);
+            leaveToBatch(batchDetail.id);
         } catch {
             toast.error('Failed to save to Records');
         } finally {
             setFinishing(false);
         }
-    }, [batchDetail, finishing, handleSaveEdits, isDirty, navigate]);
+    }, [batchDetail, finishing, handleSaveEdits, isDirty, leaveToBatch]);
 
     const handleImageDimensions = useCallback(() => {
         // Image dimensions are tracked internally by OverlayImage (Konva).

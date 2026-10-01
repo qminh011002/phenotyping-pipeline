@@ -71,12 +71,12 @@ export function SegmentedControl<T extends string | number>({
                             }
                         }}
                         className={cn(
-                            'inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,box-shadow] duration-150 ease-out',
+                            'inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent font-medium whitespace-nowrap transition-[color,background-color,border-color] duration-150 ease-out',
                             'focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
                             'disabled:pointer-events-none disabled:opacity-50',
                             size === 'sm' ? 'h-6 px-2 text-xs' : 'h-7 px-2.5 text-[13px]',
                             selected
-                                ? 'bg-card text-foreground shadow-xs'
+                                ? 'border border-b-2 border-border border-b-edge bg-card text-foreground'
                                 : 'text-muted-foreground hover:text-foreground',
                         )}
                     >
