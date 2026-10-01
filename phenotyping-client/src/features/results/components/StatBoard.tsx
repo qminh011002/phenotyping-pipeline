@@ -1,26 +1,24 @@
-// StatBoard — sidebar panel for the bbox (egg / neonate) result viewer.
-// One scrollable column of section blocks instead of stacked cards, so the
-// hierarchy reads "count → filter → distribution → inference → params" at
-// a glance. Parameters section collapses to keep the default view focused
-// on the metrics the operator actually acts on.
+// StatBoard — inspector for the bbox (egg / neonate) result viewer.
+// One scrollable column of section blocks, so the hierarchy reads
+// "count → filter → distribution → inference → params" at a glance. The
+// parameters section collapses to keep the default view on the numbers the
+// operator actually acts on.
 
 import { useMemo, useState } from 'react';
-import {
-    ChevronDown,
-    Clock,
-    Microscope,
-    Settings2,
-    SlidersHorizontal,
-} from 'lucide-react';
+import { ChevronDown, Clock, Microscope, Settings2, SlidersHorizontal } from 'lucide-react';
 
 import { AnimatedNumber } from '@/components/common/AnimatedNumber';
-import { Badge } from '@/components/ui/badge';
+import { OrganismBadge } from '@/components/common';
 import { Slider } from '@/components/ui/slider';
-import type { BBox, DetectionResult } from '@/types/api';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { organismMeta } from '@/lib/organism';
+import type { BBox, DetectionResult, Organism } from '@/types/api';
 import { cn } from '@/lib/utils';
 
 interface StatBoardProps {
     result: DetectionResult;
+    /** Organism of the batch — drives the wording ("Eggs counted"). */
+    organism?: Organism;
     /** The config snapshot recorded when processing started */
     config?: Record<string, unknown> | null;
     /** Annotations currently visible (filtered by confidenceThreshold) */
@@ -29,13 +27,15 @@ interface StatBoardProps {
     onConfidenceChange: (value: number) => void;
     /** FS-009: editor is active */
     editMode?: boolean;
-    /** FS-009: original model boxes (for computing added/removed/modified) */
+    /** Original model boxes — baseline for the "Edits" summary. */
     modelBoxes?: BBox[];
-    /** FS-009: current session boxes (for computing added/removed/modified) */
+    /** Current session boxes — compared against `modelBoxes`. */
     sessionBoxes?: BBox[];
 }
 
 const PRESETS: number[] = [0, 0.5, 0.7, 0.9];
+
+const EMPTY_BOXES: BBox[] = [];
 
 const CONFIG_KEYS: Array<[string, string]> = [
     ['confidence_threshold', 'Confidence threshold'],
@@ -48,12 +48,15 @@ const CONFIG_KEYS: Array<[string, string]> = [
     ['batch_size', 'Batch size'],
 ];
 
+// Confidence bands are an ordinal, status-like scale: good → weak.
 const BUCKETS = [
-    { label: '≥ 90%', bar: 'bg-emerald-500', dot: 'bg-emerald-500' },
-    { label: '70–89%', bar: 'bg-emerald-400/75', dot: 'bg-emerald-400' },
-    { label: '50–69%', bar: 'bg-amber-400', dot: 'bg-amber-400' },
-    { label: '< 50%', bar: 'bg-rose-400', dot: 'bg-rose-400' },
+    { label: '≥ 90%', color: 'bg-success' },
+    { label: '70–89%', color: 'bg-success/60' },
+    { label: '50–69%', color: 'bg-warning' },
+    { label: '< 50%', color: 'bg-destructive' },
 ] as const;
+
+const boxKey = (b: BBox) => b.bbox.join(',');
 
 function SectionHeader({
     label,
@@ -66,8 +69,8 @@ function SectionHeader({
 }) {
     return (
         <div className="mb-3 flex min-h-5 items-center gap-2">
-            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {Icon && <Icon className="h-3.5 w-3.5" />}
+            <h3 className="eyebrow flex items-center gap-1.5">
+                {Icon && <Icon className="size-3.5" aria-hidden />}
                 {label}
             </h3>
             {aside !== undefined && <div className="ml-auto flex items-center">{aside}</div>}
@@ -82,17 +85,17 @@ function ConfBadge({ value }: { value: number }) {
         <span
             className={cn(
                 'inline-flex items-center gap-1.5 font-mono text-xs font-semibold tabular-nums',
-                ok && 'text-emerald-600 dark:text-emerald-400',
-                mid && 'text-amber-600 dark:text-amber-400',
-                !ok && !mid && 'text-rose-600 dark:text-rose-400',
+                'text-foreground',
             )}
         >
+            {/* The dot carries the status colour; the number stays in ink. */}
             <span
+                aria-hidden
                 className={cn(
-                    'h-1.5 w-1.5 rounded-full',
-                    ok && 'bg-emerald-500',
-                    mid && 'bg-amber-500',
-                    !ok && !mid && 'bg-rose-500',
+                    'size-1.5 rounded-full',
+                    ok && 'bg-success',
+                    mid && 'bg-warning',
+                    !ok && !mid && 'bg-destructive',
                 )}
             />
             {value > 0 ? `${(value * 100).toFixed(1)}%` : '—'}
@@ -102,17 +105,40 @@ function ConfBadge({ value }: { value: number }) {
 
 export function StatBoard({
     result,
+    organism,
     config,
     visibleAnnotations,
     confidenceThreshold,
     onConfidenceChange,
-    editMode: _editMode = false,
-    modelBoxes = [],
-    sessionBoxes = [],
+    editMode = false,
+    modelBoxes = EMPTY_BOXES,
+    sessionBoxes = EMPTY_BOXES,
 }: StatBoardProps) {
-    // Reserved for the upcoming edit-summary section (added / removed / kept).
-    void modelBoxes;
-    void sessionBoxes;
+    const meta = organismMeta(organism ?? result.organism);
+    const nounPlural = meta.nounPlural;
+    const heroLabel = `${nounPlural.charAt(0).toUpperCase()}${nounPlural.slice(1)} counted`;
+
+    // What the reviewer changed relative to the model output. A moved or
+    // resized box counts once on each side (it left the model set and a new
+    // one appeared).
+    const model = useMemo(() => {
+        const refs = new Set<BBox>(modelBoxes);
+        const keys = new Set<string>();
+        for (const b of modelBoxes) keys.add(boxKey(b));
+        return { refs, keys };
+    }, [modelBoxes]);
+    const edits = useMemo(() => {
+        if (!editMode) return null;
+        let kept = 0;
+        // Untouched boxes are usually the very same objects; only the rest
+        // need the geometry comparison.
+        for (const b of sessionBoxes) {
+            if (model.refs.has(b) || model.keys.has(boxKey(b))) kept += 1;
+        }
+        const added = sessionBoxes.length - kept;
+        const removed = modelBoxes.length - kept;
+        return added > 0 || removed > 0 ? { added, removed } : null;
+    }, [editMode, model, modelBoxes.length, sessionBoxes]);
 
     const totalCount = result.annotations.length;
     const visibleCount = visibleAnnotations.length;
@@ -149,11 +175,11 @@ export function StatBoard({
             {/* ── Detections (hero) ───────────────────────────────────────── */}
             <section className="px-5 py-5">
                 <SectionHeader
-                    label="Detections"
+                    label={heroLabel}
                     icon={Microscope}
                     aside={
                         confidenceThreshold > 0 ? (
-                            <span className="rounded-sm bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                            <span className="rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
                                 Filtered
                             </span>
                         ) : null
@@ -174,8 +200,8 @@ export function StatBoard({
                         {confidenceThreshold > 0
                             ? `at ≥ ${(confidenceThreshold * 100).toFixed(0)}% confidence`
                             : totalCount === 0
-                              ? 'no detections'
-                              : 'showing all detections'}
+                              ? `no ${nounPlural} detected`
+                              : `showing all ${nounPlural}`}
                     </span>
                     {totalCount > 0 && (
                         <span className="font-mono font-medium tabular-nums">
@@ -191,6 +217,33 @@ export function StatBoard({
                         />
                     </div>
                 )}
+                {edits && (
+                    <div className="mt-4 flex items-center justify-between gap-2 text-xs">
+                        <span className="text-muted-foreground">Your edits vs model</span>
+                        <span className="flex items-center gap-1.5 font-mono font-medium tabular-nums">
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <span className="rounded-sm border border-border bg-muted px-1.5 py-0.5">
+                                        +{edits.added}
+                                    </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">
+                                    Boxes you drew, moved or resized
+                                </TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <span className="rounded-sm border border-border bg-muted px-1.5 py-0.5">
+                                        −{edits.removed}
+                                    </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">
+                                    Model boxes you deleted, moved or resized
+                                </TooltipContent>
+                            </Tooltip>
+                        </span>
+                    </div>
+                )}
             </section>
 
             {/* ── Confidence filter (slider + avg + presets) ──────────────── */}
@@ -201,9 +254,7 @@ export function StatBoard({
                     aside={
                         visibleCount > 0 ? (
                             <span className="inline-flex items-center gap-1.5">
-                                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                                    Avg
-                                </span>
+                                <span className="eyebrow text-[10px]">Avg</span>
                                 <ConfBadge value={avgConfVisible} />
                             </span>
                         ) : null
@@ -256,14 +307,15 @@ export function StatBoard({
                             </span>
                         }
                     />
-                    <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+                    {/* 2px surface gap between segments keeps adjacent bands apart. */}
+                    <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
                         {BUCKETS.map((b, i) => {
                             const pct = (breakdown[i] / totalCount) * 100;
                             if (pct <= 0) return null;
                             return (
                                 <div
                                     key={b.label}
-                                    className={cn('h-full', b.bar)}
+                                    className={cn('h-full', b.color)}
                                     style={{ width: `${pct}%` }}
                                     title={`${b.label}: ${breakdown[i]}`}
                                 />
@@ -273,7 +325,10 @@ export function StatBoard({
                     <ul className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
                         {BUCKETS.map((b, i) => (
                             <li key={b.label} className="flex items-center gap-2 text-xs">
-                                <span className={cn('h-2 w-2 shrink-0 rounded-sm', b.dot)} />
+                                <span
+                                    aria-hidden
+                                    className={cn('size-2 shrink-0 rounded-sm', b.color)}
+                                />
                                 <span className="text-muted-foreground">{b.label}</span>
                                 <span className="ml-auto font-mono font-medium tabular-nums">
                                     {breakdown[i]}
@@ -291,9 +346,7 @@ export function StatBoard({
                     <div className="flex items-center justify-between">
                         <dt className="text-muted-foreground">Organism</dt>
                         <dd>
-                            <Badge variant="secondary" className="font-mono text-[11px] capitalize">
-                                {result.organism}
-                            </Badge>
+                            <OrganismBadge organism={meta.id} />
                         </dd>
                     </div>
                     <div className="flex items-center justify-between">
@@ -319,8 +372,8 @@ export function StatBoard({
                             'focus:outline-none focus-visible:ring-[2px] focus-visible:ring-ring/60',
                         )}
                     >
-                        <span className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                            <Settings2 className="h-3.5 w-3.5" />
+                        <span className="eyebrow flex items-center gap-1.5">
+                            <Settings2 className="size-3.5" aria-hidden />
                             Inference Parameters
                         </span>
                         <ChevronDown

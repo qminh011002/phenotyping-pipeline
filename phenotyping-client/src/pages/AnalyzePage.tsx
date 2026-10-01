@@ -29,7 +29,8 @@ const PREVIEW_ASSETS: Partial<Record<Organism, { before: string; after: string }
 };
 import { MODES, PROJECT_TYPES, type Mode, type Organism } from '@/features/analyze/constants';
 import { storeProjectClasses } from '@/features/upload/lib/processingSession';
-import { Camera, Upload as UploadIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Camera, Upload as UploadIcon } from 'lucide-react';
+import { FlowSteps } from '@/features/analyze/components/FlowSteps';
 import { useBoot } from '@/providers/BootProvider';
 import { getModelAssignments } from '@/services/api';
 
@@ -101,21 +102,31 @@ export default function AnalyzePage() {
 
     return (
         <div className="fixed inset-0 z-50 flex flex-col bg-background">
+            {/* Top bar */}
+            <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2.5">
+                <div className="flex min-w-0 items-center gap-2">
+                    <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => navigate('/')}
+                        aria-label="Back to dashboard"
+                    >
+                        <ArrowLeft />
+                    </Button>
+                    <p className="truncate text-sm font-semibold">New analysis</p>
+                </div>
+                <FlowSteps current={1} className="hidden md:flex" />
+                <div />
+            </header>
+
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-screen-2xl px-6 py-10">
-                    {/* Page title */}
+                <div className="mx-auto w-full max-w-screen-xl px-6 py-8">
                     <div className="flex flex-col">
-                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                            New analysis
-                        </p>
-                        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-                            Create a project
-                        </h1>
+                        <h1 className="text-2xl font-semibold tracking-tight">Create a project</h1>
                         <p className="mt-1.5 max-w-xl text-sm text-muted-foreground">
-                            A project groups images analysed together under the same organism
-                            type. Pick a name, capture mode, and the organism the model should
-                            detect.
+                            A project groups images analysed together under the same organism type.
+                            Pick a name, capture mode, and the organism the model should detect.
                         </p>
                     </div>
 
@@ -129,10 +140,14 @@ export default function AnalyzePage() {
                                 id="project-name"
                                 placeholder="e.g. Neonate Batch 03"
                                 value={projectName}
-                                className="h-9 w-96"
+                                autoFocus
+                                className="h-9 w-96 max-w-full"
                                 onChange={(e) => {
                                     setProjectName(e.target.value);
                                     if (e.target.value.trim().length > 0) setShowNameError(false);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSubmit();
                                 }}
                                 aria-invalid={showNameError}
                             />
@@ -149,7 +164,7 @@ export default function AnalyzePage() {
                         </div>
                     </div>
 
-                    {/* Project Type + Mode preview placeholder */}
+                    {/* Project type + preview */}
                     <section className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] lg:items-stretch">
                         <div className="flex flex-col">
                             <div className="mb-2 flex items-baseline justify-between">
@@ -158,7 +173,7 @@ export default function AnalyzePage() {
                                     {PROJECT_TYPES.length} available
                                 </span>
                             </div>
-                            <div className="flex-1 divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+                            <div className="panel flex-1 divide-y divide-border overflow-hidden">
                                 {PROJECT_TYPES.map((t) => (
                                     <ProjectTypeCard
                                         key={t.id}
@@ -172,7 +187,7 @@ export default function AnalyzePage() {
                             </div>
                         </div>
 
-                        <div className="flex flex-col">
+                        <div className="flex min-h-72 flex-col">
                             <div className="mb-2 flex items-baseline">
                                 <Label className="text-xs font-medium">Preview</Label>
                             </div>
@@ -184,9 +199,9 @@ export default function AnalyzePage() {
                                     afterLabel="Detected"
                                 />
                             ) : (
-                                <div className="flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-muted/20">
-                                    <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                                        <div className="flex size-12 items-center justify-center rounded-full bg-muted/60">
+                                <div className="flex flex-1 items-center justify-center overflow-hidden rounded-xl border border-dashed border-input bg-card">
+                                    <div className="flex flex-col items-center gap-3 px-6 text-center text-muted-foreground">
+                                        <div className="flex size-12 items-center justify-center rounded-full bg-muted">
                                             {mode === 'camera' ? (
                                                 <Camera className="h-5 w-5" />
                                             ) : (
@@ -196,7 +211,7 @@ export default function AnalyzePage() {
                                         <span className="text-sm">
                                             {mode === 'camera'
                                                 ? 'Camera preview will appear after creation.'
-                                                : 'Upload preview will appear after creation.'}
+                                                : 'Pick an organism to see what the model detects.'}
                                         </span>
                                     </div>
                                 </div>
@@ -207,14 +222,22 @@ export default function AnalyzePage() {
             </div>
 
             {/* Fixed footer */}
-            <footer className="shrink-0 border-t border-border bg-background">
-                <div className="mx-auto flex w-full max-w-screen-2xl items-center justify-end gap-2 px-6 py-3">
-                    <Button variant="ghost" onClick={() => navigate('/')}>
-                        Cancel
-                    </Button>
-                    <Button onClick={handleSubmit} disabled={!canSubmit}>
-                        Create project
-                    </Button>
+            <footer className="shrink-0 border-t border-border bg-card">
+                <div className="mx-auto flex w-full max-w-screen-xl items-center justify-between gap-3 px-6 py-3">
+                    <p className="hidden text-xs text-muted-foreground sm:block">
+                        {organism === 'larvae' || organism === 'pupae'
+                            ? 'Next: add images. Larvae and pupae are counted first — sizes are measured on demand.'
+                            : 'Next: add the images to analyse.'}
+                    </p>
+                    <div className="ml-auto flex items-center gap-2">
+                        <Button variant="ghost" onClick={() => navigate('/')}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSubmit} disabled={!canSubmit}>
+                            Create project
+                            <ArrowRight />
+                        </Button>
+                    </div>
                 </div>
             </footer>
         </div>

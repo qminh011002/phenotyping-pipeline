@@ -195,6 +195,33 @@ export function hitTestBody(annotations: BBox[], px: number, py: number): number
     return null;
 }
 
+/**
+ * Which box is under (px, py)? Considers only the boxes listed in `indices`
+ * and returns the *smallest* one containing the point, so a box nested inside
+ * (or overlapped by) a larger one can still be picked. Ties go to the box
+ * drawn last. Returns the index into `annotations`, or null.
+ */
+export function pickBoxAt(
+    annotations: BBox[],
+    indices: ArrayLike<number>,
+    px: number,
+    py: number,
+): number | null {
+    let best: number | null = null;
+    let bestArea = Infinity;
+    for (let i = 0; i < indices.length; i++) {
+        const index = indices[i];
+        const b = annotations[index].bbox;
+        if (px < b[0] || px > b[2] || py < b[1] || py > b[3]) continue;
+        const area = (b[2] - b[0]) * (b[3] - b[1]);
+        if (area <= bestArea) {
+            best = index;
+            bestArea = area;
+        }
+    }
+    return best;
+}
+
 /** Full hit test: handle → body → empty. */
 export function hitTest(
     annotations: BBox[],

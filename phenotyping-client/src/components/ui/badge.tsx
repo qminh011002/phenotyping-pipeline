@@ -17,10 +17,8 @@ const badgeVariants = cva(
                     'border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
                 ghost: '[a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
                 link: 'text-primary underline-offset-4 [a&]:hover:underline',
-                success:
-                    'bg-green-100 text-green-900 dark:bg-green-900/30 dark:text-green-300 [a&]:hover:bg-green-200 dark:[a&]:hover:bg-green-900/50',
-                warning:
-                    'bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-300 [a&]:hover:bg-amber-200 dark:[a&]:hover:bg-amber-900/50',
+                success: 'border-success/25 bg-success/10 text-success [a&]:hover:bg-success/15',
+                warning: 'border-warning/30 bg-warning/10 text-warning [a&]:hover:bg-warning/15',
             },
         },
         defaultVariants: {

@@ -1,10 +1,11 @@
-// SearchFilters — search bar, organism filter, sort controls.
-// Composed inside the Recorded page header.
+// SearchFilters — the toolbar under the Recorded page title: search, status
+// and organism filters, sort controls and the result count.
 
-import { useCallback } from 'react';
-import { Search, X, ArrowDown, ArrowUp } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import { ArrowDown, ArrowUp, Search, X } from 'lucide-react';
+
+import { SegmentedControl, type SegmentedOption } from '@/components/common';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
     Select,
     SelectContent,
@@ -12,132 +13,143 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
-import type { RecordedFilters, SortKey } from '../hooks/useRecorded';
+import { formatCount, pluralize } from '@/lib/format';
+import { ORGANISM_ORDER, organismMeta } from '@/lib/organism';
 import type { Organism } from '@/types/api';
+import type { RecordedFilters, SortDir, SortKey, StatusFilter } from '../hooks/useRecorded';
 
 interface SearchFiltersProps {
     filters: RecordedFilters;
     onFiltersChange: (updates: Partial<RecordedFilters>) => void;
+    /** Resets search, organism and status (sort is kept). */
+    onClear: () => void;
+    hasActiveFilters: boolean;
     total: number;
+    /** Hide the count until the first page has loaded. */
+    loading?: boolean;
 }
 
-const ORGANISM_OPTIONS: { value: Organism | 'all'; label: string }[] = [
-    { value: 'all', label: 'All organisms' },
-    { value: 'egg', label: 'Egg' },
-    { value: 'larvae', label: 'Larvae' },
-    { value: 'pupae', label: 'Pupae' },
-    { value: 'neonate', label: 'Neonate' },
+const STATUS_OPTIONS: SegmentedOption<StatusFilter>[] = [
+    { value: 'all', label: 'All', title: 'Saved, draft and failed batches' },
+    { value: 'completed', label: 'Saved', title: 'Reviewed and saved' },
+    { value: 'draft', label: 'Drafts', title: 'Processed — waiting for review' },
+    { value: 'failed', label: 'Failed', title: 'Processing did not finish' },
 ];
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
     { value: 'created_at', label: 'Date' },
-    { value: 'total_count', label: 'Egg count' },
+    { value: 'total_count', label: 'Count' },
 ];
 
-export function SearchFilters({ filters, onFiltersChange, total }: SearchFiltersProps) {
-    const handleSearchChange = useCallback(
-        (e: React.ChangeEvent<HTMLInputElement>) => {
-            onFiltersChange({ q: e.target.value });
-        },
-        [onFiltersChange],
-    );
+// What each direction means for each sort key, and what a click switches to.
+const SORT_DIR_LABEL: Record<SortKey, Record<SortDir, string>> = {
+    created_at: { desc: 'Newest', asc: 'Oldest' },
+    total_count: { desc: 'Highest', asc: 'Lowest' },
+};
 
-    const clearSearch = useCallback(() => {
-        onFiltersChange({ q: '' });
-    }, [onFiltersChange]);
-
-    const toggleSortDir = useCallback(() => {
-        onFiltersChange({ sortDir: filters.sortDir === 'desc' ? 'asc' : 'desc' });
-    }, [filters.sortDir, onFiltersChange]);
-
-    const hasActiveFilters = filters.q !== '' || filters.organism !== '';
+export function SearchFilters({
+    filters,
+    onFiltersChange,
+    onClear,
+    hasActiveFilters,
+    total,
+    loading = false,
+}: SearchFiltersProps) {
+    const dirLabels = SORT_DIR_LABEL[filters.sortKey];
+    const nextDir: SortDir = filters.sortDir === 'desc' ? 'asc' : 'desc';
+    const DirIcon = filters.sortDir === 'desc' ? ArrowDown : ArrowUp;
 
     return (
         <div className="flex flex-wrap items-center gap-2">
             {/* Search */}
-            <div className="relative min-w-52 flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <div className="relative min-w-52 max-w-sm flex-1">
+                <Search
+                    className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                    aria-hidden
+                />
                 <Input
-                    placeholder="Search by name or filename…"
+                    type="search"
+                    placeholder="Search name or filename…"
+                    aria-label="Search batches by name or filename"
                     value={filters.q}
-                    onChange={handleSearchChange}
-                    className="h-9 pl-9 pr-8"
+                    onChange={(e) => onFiltersChange({ q: e.target.value })}
+                    className="h-8 rounded-md pl-8 pr-8 [&::-webkit-search-cancel-button]:hidden"
                 />
                 {filters.q && (
                     <button
                         type="button"
-                        onClick={clearSearch}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
+                        onClick={() => onFiltersChange({ q: '' })}
+                        className="absolute right-1.5 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                         aria-label="Clear search"
                     >
-                        <X className="h-3.5 w-3.5" />
+                        <X className="size-3.5" aria-hidden />
                     </button>
                 )}
             </div>
 
-            {/* Organism filter */}
+            {/* Status */}
+            <SegmentedControl
+                aria-label="Filter by status"
+                value={filters.status}
+                onChange={(status) => onFiltersChange({ status })}
+                options={STATUS_OPTIONS}
+            />
+
+            {/* Organism */}
             <Select
                 value={filters.organism || 'all'}
                 onValueChange={(val) =>
                     onFiltersChange({ organism: val === 'all' ? '' : (val as Organism) })
                 }
             >
-                <SelectTrigger
-                    className={cn(
-                        'h-9 w-40',
-                        filters.organism && 'border-primary/60 text-primary',
-                    )}
-                >
+                <SelectTrigger size="sm" className="w-40" aria-label="Filter by organism">
                     <SelectValue placeholder="Organism" />
                 </SelectTrigger>
                 <SelectContent>
-                    {ORGANISM_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                        </SelectItem>
-                    ))}
+                    <SelectItem value="all">All organisms</SelectItem>
+                    {ORGANISM_ORDER.map((id) => {
+                        const meta = organismMeta(id);
+                        return (
+                            <SelectItem key={id} value={id}>
+                                <span
+                                    aria-hidden
+                                    className="size-1.5 shrink-0 rounded-full"
+                                    style={{ backgroundColor: meta.color }}
+                                />
+                                {meta.label}
+                            </SelectItem>
+                        );
+                    })}
                 </SelectContent>
             </Select>
 
-            {/* Sort by */}
+            {/* Sort key */}
             <Select
                 value={filters.sortKey}
                 onValueChange={(val) => onFiltersChange({ sortKey: val as SortKey })}
             >
-                <SelectTrigger className="h-9 w-36">
+                <SelectTrigger size="sm" className="w-36" aria-label="Sort by">
                     <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                     {SORT_OPTIONS.map((opt) => (
                         <SelectItem key={opt.value} value={opt.value}>
-                            Sort by {opt.label}
+                            Sort by {opt.label.toLowerCase()}
                         </SelectItem>
                     ))}
                 </SelectContent>
             </Select>
 
-            {/* Sort direction toggle */}
+            {/* Sort direction */}
             <Button
                 variant="outline"
                 size="sm"
-                className="h-9 gap-1.5 px-2.5"
-                onClick={toggleSortDir}
-                title={
-                    filters.sortDir === 'desc'
-                        ? 'Newest first — click for oldest first'
-                        : 'Oldest first — click for newest first'
-                }
+                onClick={() => onFiltersChange({ sortDir: nextDir })}
+                title={`${dirLabels[filters.sortDir]} first — click for ${dirLabels[nextDir].toLowerCase()} first`}
+                aria-label={`Sort direction: ${dirLabels[filters.sortDir].toLowerCase()} first`}
             >
-                {filters.sortDir === 'desc' ? (
-                    <ArrowDown className="h-3.5 w-3.5" />
-                ) : (
-                    <ArrowUp className="h-3.5 w-3.5" />
-                )}
-                <span className="text-xs">
-                    {filters.sortDir === 'desc' ? 'Newest' : 'Oldest'}
-                </span>
+                <DirIcon aria-hidden />
+                {dirLabels[filters.sortDir]}
             </Button>
 
             {/* Clear filters */}
@@ -145,24 +157,24 @@ export function SearchFilters({ filters, onFiltersChange, total }: SearchFilters
                 <Button
                     variant="ghost"
                     size="sm"
-                    className="h-9 text-muted-foreground hover:text-foreground"
-                    onClick={() => onFiltersChange({ q: '', organism: '' })}
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={onClear}
                 >
-                    <X className="h-3.5 w-3.5 mr-1" />
+                    <X aria-hidden />
                     Clear
                 </Button>
             )}
 
             {/* Result count */}
-            <Badge
-                variant="secondary"
-                className="ml-auto h-6 gap-1 rounded-md px-2 text-[11px] font-medium tabular-nums"
+            <span
+                className="ml-auto inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground"
+                aria-live="polite"
             >
-                {total.toLocaleString()}
-                <span className="text-muted-foreground">
-                    batch{total !== 1 ? 'es' : ''}
+                <span className="font-medium tabular-nums text-foreground">
+                    {loading ? '—' : formatCount(total)}
                 </span>
-            </Badge>
+                {pluralize(total, 'batch', 'batches')}
+            </span>
         </div>
     );
 }

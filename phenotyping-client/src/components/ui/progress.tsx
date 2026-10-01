@@ -7,7 +7,7 @@ const progressFillVariants = cva('h-full flex-1 transition-[width] duration-300 
     variants: {
         variant: {
             default: 'bg-primary',
-            success: 'bg-green-500',
+            success: 'bg-success',
             destructive: 'bg-destructive',
         },
     },

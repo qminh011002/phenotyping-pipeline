@@ -3,14 +3,34 @@
 
 import { useRef, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { WifiOff } from 'lucide-react';
+import { ListFilter, Terminal, WifiOff, type LucideIcon } from 'lucide-react';
+
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Skeleton } from '@/components/ui/skeleton';
 import { LogFilterBar } from './LogFilterBar';
 import { LogEntryRow } from './LogEntry';
 import { useLogs } from '../hooks/useLogs';
 
 const AUTO_SCROLL_THRESHOLD = 60; // px from top to consider "at live edge"
+
+function LogPlaceholder({
+    icon: Icon,
+    title,
+    description,
+}: {
+    icon: LucideIcon;
+    title: string;
+    description: string;
+}) {
+    return (
+        <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div className="mb-3 flex size-10 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground">
+                <Icon className="size-5" aria-hidden />
+            </div>
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
+        </div>
+    );
+}
 
 export function LogViewer() {
     const {
@@ -56,6 +76,16 @@ export function LogViewer() {
         return () => vp.removeEventListener('scroll', onScroll);
     }, [isAtLiveEdge, setAutoScroll]);
 
+    // Resuming from the toolbar jumps back to the live edge, so follow mode
+    // actually picks up again instead of waiting for a manual scroll to the top.
+    const handleAutoScroll = useCallback(
+        (next: boolean) => {
+            setAutoScroll(next);
+            if (next) scrollRef.current?.scrollTo({ top: 0 });
+        },
+        [setAutoScroll],
+    );
+
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
             {/* Controls */}
@@ -67,28 +97,31 @@ export function LogViewer() {
                 totalCount={allLogs.length}
                 onToggle={toggleFilter}
                 onClear={clearLogs}
-                onAutoScroll={setAutoScroll}
+                onAutoScroll={handleAutoScroll}
             />
 
             {/* Log list */}
             <ScrollArea className="min-h-0 flex-1" ref={scrollRef}>
                 {filteredLogs.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full py-16 text-center gap-3">
-                        {wsStatus === 'disconnected' ? (
-                            <>
-                                <WifiOff className="h-8 w-8 text-muted-foreground" />
-                                <p className="text-base font-medium">Connection lost</p>
-                                <p className="text-sm text-muted-foreground">
-                                    The log stream disconnected. Reconnecting automatically…
-                                </p>
-                            </>
-                        ) : (
-                            <>
-                                <Skeleton className="h-4 w-40" />
-                                <p className="text-sm text-muted-foreground">Waiting for logs…</p>
-                            </>
-                        )}
-                    </div>
+                    wsStatus === 'disconnected' ? (
+                        <LogPlaceholder
+                            icon={WifiOff}
+                            title="Connection lost"
+                            description="The log stream disconnected. Reconnecting automatically…"
+                        />
+                    ) : allLogs.length > 0 ? (
+                        <LogPlaceholder
+                            icon={ListFilter}
+                            title="No entries match the selected levels"
+                            description="Turn a level back on in the toolbar to see its entries."
+                        />
+                    ) : (
+                        <LogPlaceholder
+                            icon={Terminal}
+                            title="Waiting for logs…"
+                            description="New entries appear here as the backend writes them."
+                        />
+                    )
                 ) : (
                     <div
                         className="relative py-1"
@@ -101,7 +134,7 @@ export function LogViewer() {
                                     key={virtualRow.key}
                                     ref={rowVirtualizer.measureElement}
                                     data-index={virtualRow.index}
-                                    className="absolute left-0 top-0 w-full"
+                                    className="absolute top-0 left-0 w-full"
                                     style={{ transform: `translateY(${virtualRow.start}px)` }}
                                 >
                                     <LogEntryRow entry={entry} />

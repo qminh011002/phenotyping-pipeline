@@ -179,6 +179,12 @@
     --color-chart-3: var(--chart-3);
     --color-chart-4: var(--chart-4);
     --color-chart-5: var(--chart-5);
+    --color-chart-grid: var(--chart-grid);
+    --color-chart-axis: var(--chart-axis);
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-info: var(--info);
+    --color-canvas: var(--canvas);
     --color-sidebar: var(--sidebar);
     --color-sidebar-foreground: var(--sidebar-foreground);
     --color-sidebar-primary: var(--sidebar-primary);
@@ -347,43 +353,57 @@
     /* Radius: base 10px scale */
     --radius: 0.625rem;
 
-    /* Neutral base + Green primary (shadcn Maia) */
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    /* Surfaces — a faint cool-neutral canvas with white cards on top, so
+       panels read as raised without leaning on shadows. */
+    --background: oklch(0.985 0.002 160);
+    --foreground: oklch(0.17 0.006 160);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.17 0.006 160);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.723 0.219 149.579);
-    --primary-foreground: oklch(0.982 0.018 155.826);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.17 0.006 160);
+    /* Brand green, deep enough that white text on it clears 4.5:1. */
+    --primary: oklch(0.55 0.15 152);
+    --primary-foreground: oklch(0.99 0.01 155);
+    --secondary: oklch(0.96 0.003 160);
+    --secondary-foreground: oklch(0.22 0.006 160);
+    --muted: oklch(0.96 0.003 160);
+    --muted-foreground: oklch(0.5 0.01 160);
+    --accent: oklch(0.955 0.004 160);
+    --accent-foreground: oklch(0.22 0.006 160);
     --destructive: oklch(0.577 0.245 27.325);
     --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.723 0.219 149.579);
+    --border: oklch(0.915 0.004 160);
+    --input: oklch(0.9 0.004 160);
+    --ring: oklch(0.55 0.15 152);
 
-    /* Emerald chart palette */
-    --chart-1: oklch(0.696 0.17 162.48);
-    --chart-2: oklch(0.6 0.118 184.704);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
+    /* Status — state, never identity. Always paired with an icon or label. */
+    --success: oklch(0.56 0.15 150);
+    --warning: oklch(0.68 0.15 70);
+    --info: oklch(0.56 0.14 250);
+
+    /* Chart palette — categorical slots in a fixed order, one per organism
+       (egg, neonate, larvae, pupae). Validated for CVD separation with the
+       dataviz palette validator; do not reorder or re-step by eye. */
+    --chart-1: #2a78d6;
+    --chart-2: #eb6834;
+    --chart-3: #1baf7a;
+    --chart-4: #eda100;
+    --chart-5: #e87ba4;
+    --chart-grid: oklch(0.93 0.003 160);
+    --chart-axis: oklch(0.82 0.004 160);
+
+    /* Editor canvas — the surface behind images in the result viewer. */
+    --canvas: oklch(0.94 0.003 160);
 
     /* Sidebar tokens */
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.723 0.219 149.579);
-    --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.723 0.219 149.579);
+    --sidebar: oklch(0.972 0.003 160);
+    --sidebar-foreground: oklch(0.17 0.006 160);
+    --sidebar-primary: oklch(0.55 0.15 152);
+    --sidebar-primary-foreground: oklch(0.99 0.01 155);
+    --sidebar-accent: oklch(0.94 0.004 160);
+    --sidebar-accent-foreground: oklch(0.2 0.006 160);
+    --sidebar-border: oklch(0.915 0.004 160);
+    --sidebar-ring: oklch(0.55 0.15 152);
 
     --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
     --font-heading: 'Geist', ui-sans-serif, system-ui, sans-serif;
@@ -393,50 +413,62 @@
 .dark {
     --radius: 0.625rem;
 
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.696 0.17 162.48);
-    --primary-foreground: oklch(0.393 0.095 152.535);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    --background: oklch(0.165 0.004 160);
+    --foreground: oklch(0.97 0.003 160);
+    --card: oklch(0.205 0.004 160);
+    --card-foreground: oklch(0.97 0.003 160);
+    --popover: oklch(0.225 0.004 160);
+    --popover-foreground: oklch(0.97 0.003 160);
+    --primary: oklch(0.72 0.17 155);
+    --primary-foreground: oklch(0.18 0.04 155);
+    --secondary: oklch(0.265 0.004 160);
+    --secondary-foreground: oklch(0.97 0.003 160);
+    --muted: oklch(0.265 0.004 160);
+    --muted-foreground: oklch(0.71 0.008 160);
+    --accent: oklch(0.275 0.004 160);
+    --accent-foreground: oklch(0.97 0.003 160);
     --destructive: oklch(0.704 0.191 22.216);
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.527 0.154 150.069);
+    --ring: oklch(0.62 0.15 155);
 
-    --chart-1: oklch(0.696 0.17 162.48);
-    --chart-2: oklch(0.696 0.17 162.48);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
+    --success: oklch(0.72 0.17 155);
+    --warning: oklch(0.79 0.15 80);
+    --info: oklch(0.7 0.13 250);
 
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.696 0.17 162.48);
-    --sidebar-primary-foreground: oklch(0.393 0.095 152.535);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
+    /* Same four hues, stepped for the dark surface. */
+    --chart-1: #3987e5;
+    --chart-2: #d95926;
+    --chart-3: #199e70;
+    --chart-4: #c98500;
+    --chart-5: #d55181;
+    --chart-grid: oklch(1 0 0 / 7%);
+    --chart-axis: oklch(1 0 0 / 16%);
+
+    --canvas: oklch(0.13 0.004 160);
+
+    --sidebar: oklch(0.185 0.004 160);
+    --sidebar-foreground: oklch(0.97 0.003 160);
+    --sidebar-primary: oklch(0.72 0.17 155);
+    --sidebar-primary-foreground: oklch(0.18 0.04 155);
+    --sidebar-accent: oklch(0.255 0.004 160);
+    --sidebar-accent-foreground: oklch(0.97 0.003 160);
     --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.527 0.154 150.069);
+    --sidebar-ring: oklch(0.62 0.15 155);
 
     --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
     --font-heading: 'Geist', ui-sans-serif, system-ui, sans-serif;
     --font-mono: 'Geist Mono', ui-monospace, monospace;
 }
 
-*,
-*::before,
-*::after {
-    border-color: var(--border);
+/* In the base layer so Tailwind's border-colour utilities still win. */
+@layer base {
+    *,
+    *::before,
+    *::after {
+        border-color: var(--border);
+    }
 }
 
 body {
@@ -456,6 +488,70 @@ h5,
 h6 {
     font-family: var(--font-heading);
     letter-spacing: -0.01em;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Shared surface + type utilities
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The standard raised panel: hairline border, card surface, soft shadow. */
+@utility panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background-color: var(--card);
+    color: var(--card-foreground);
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+}
+
+/* Floating chrome over the editor canvas (toolbars, zoom, hints). */
+@utility floating-panel {
+    border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+    border-radius: var(--radius-lg);
+    background-color: color-mix(in oklab, var(--popover) 92%, transparent);
+    color: var(--popover-foreground);
+    box-shadow:
+        0 8px 24px -6px rgb(0 0 0 / 0.18),
+        0 1px 2px 0 rgb(0 0 0 / 0.06);
+    backdrop-filter: blur(10px);
+}
+
+/* Small uppercase label above a value or section. */
+@utility eyebrow {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+}
+
+/* Dotted backdrop behind images in the editor. */
+@utility canvas-grid {
+    background-color: var(--canvas);
+    background-image: radial-gradient(
+        color-mix(in oklab, var(--foreground) 9%, transparent) 1px,
+        transparent 1px
+    );
+    background-size: 18px 18px;
+}
+
+/* Keyboard key hint. */
+@utility kbd {
+    display: inline-flex;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.3rem;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: calc(var(--radius) - 5px);
+    background-color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.625rem;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--muted-foreground);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

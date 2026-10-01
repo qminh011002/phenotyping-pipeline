@@ -1,7 +1,7 @@
 // Processing session — stores selected files and results in sessionStorage.
 // Used to pass state between UploadPage and ProcessingPage / ResultPage.
 
-import type { BBox, DetectionResult } from '@/types/api';
+import type { AnalysisMode, BBox, DetectionResult } from '@/types/api';
 
 const KEY_FILES = 'phenotyping_processing_files';
 const KEY_RESULTS = 'phenotyping_processing_results';
@@ -11,8 +11,18 @@ const KEY_DB_BATCH_ID = 'phenotyping_processing_db_batch_id';
 const KEY_BATCH_SUMMARY = 'phenotyping_processing_batch_summary';
 const KEY_BATCH_DETAIL = 'phenotyping_processing_batch_detail';
 const KEY_CONFIG = 'phenotyping_processing_config';
-const KEY_LARVAE_CONFIG = 'phenotyping_processing_larvae_config';
 const KEY_CLASSES = 'phenotyping_processing_classes';
+const KEY_ANALYSIS_MODE = 'phenotyping_processing_analysis_mode';
+const KEY_APPEND_TARGET = 'phenotyping_processing_append_target';
+
+/** An existing batch that the current upload adds images to. */
+export interface AppendTarget {
+    batchId: string;
+    batchName: string;
+    /** Images already in the batch when the append started — the offset
+     *  between the batch's processed count and this run's file list. */
+    baseCount: number;
+}
 
 export interface StoredFile {
     id: string;
@@ -141,8 +151,21 @@ export function loadProcessingResults(): StoredResult[] {
 
 // ── Store results after processing ───────────────────────────────────────────
 
+// The cached results are an optimisation only — the result viewer fetches any
+// image's annotations it doesn't find here. Dense batches (thousands of boxes
+// per image) can exceed the sessionStorage quota, so a failed write just
+// drops the cache instead of throwing into the processing loop.
+function setItemOrDrop(key: string, value: unknown): void {
+    try {
+        sessionStorage.setItem(key, JSON.stringify(value));
+    } catch (err) {
+        sessionStorage.removeItem(key);
+        console.warn(`sessionStorage write for ${key} skipped`, err);
+    }
+}
+
 export function storeProcessingResults(results: StoredResult[]): void {
-    sessionStorage.setItem(KEY_RESULTS, JSON.stringify(results));
+    setItemOrDrop(KEY_RESULTS, results);
 }
 
 // ── Store DB batch ID ─────────────────────────────────────────────────────
@@ -187,7 +210,7 @@ export function loadBatchId(): string {
 // ── Store / Load batch detail ─────────────────────────────────────────────────
 
 export function storeBatchDetail(detail: StoredBatchDetail): void {
-    sessionStorage.setItem(KEY_BATCH_DETAIL, JSON.stringify(detail));
+    setItemOrDrop(KEY_BATCH_DETAIL, detail);
 }
 
 export function loadBatchDetail(): StoredBatchDetail | null {
@@ -212,23 +235,6 @@ export function loadProcessingConfig(): Record<string, unknown> | null {
     }
 }
 
-// Larvae config has no backend GET/PUT endpoint (yet) — the LarvaeConfigPanel
-// edits an in-browser snapshot that flows into config_snapshot at batch
-// creation time. Persisted across the upload page so the user's tweaks survive
-// a navigation back-and-forth.
-export function storeLarvaeProcessingConfig(config: Record<string, unknown>): void {
-    sessionStorage.setItem(KEY_LARVAE_CONFIG, JSON.stringify(config));
-}
-
-export function loadLarvaeProcessingConfig(): Record<string, unknown> | null {
-    try {
-        const raw = sessionStorage.getItem(KEY_LARVAE_CONFIG);
-        return raw ? JSON.parse(raw) : null;
-    } catch {
-        return null;
-    }
-}
-
 // ── Clear session ───────────────────────────────────────────────────────────
 
 export function clearProcessingSession(): void {
@@ -242,8 +248,44 @@ export function clearProcessingSession(): void {
     sessionStorage.removeItem(KEY_BATCH_SUMMARY);
     sessionStorage.removeItem(KEY_BATCH_DETAIL);
     sessionStorage.removeItem(KEY_CONFIG);
-    sessionStorage.removeItem(KEY_LARVAE_CONFIG);
     sessionStorage.removeItem(KEY_CLASSES);
+    sessionStorage.removeItem(KEY_ANALYSIS_MODE);
+    sessionStorage.removeItem(KEY_APPEND_TARGET);
+}
+
+// ── Analysis mode (larvae / pupae) ──────────────────────────────────────────
+// Count-only is the default: SAM refinement and measurement are deferred to
+// the result viewer, where the operator runs them on demand.
+
+export function storeAnalysisMode(mode: AnalysisMode): void {
+    sessionStorage.setItem(KEY_ANALYSIS_MODE, mode);
+}
+
+export function loadAnalysisMode(): AnalysisMode {
+    return sessionStorage.getItem(KEY_ANALYSIS_MODE) === 'measure' ? 'measure' : 'count';
+}
+
+// ── Append target ───────────────────────────────────────────────────────────
+
+export function storeAppendTarget(target: AppendTarget | null): void {
+    if (target === null) sessionStorage.removeItem(KEY_APPEND_TARGET);
+    else sessionStorage.setItem(KEY_APPEND_TARGET, JSON.stringify(target));
+}
+
+export function loadAppendTarget(): AppendTarget | null {
+    try {
+        const raw = sessionStorage.getItem(KEY_APPEND_TARGET);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<AppendTarget>;
+        if (typeof parsed.batchId !== 'string') return null;
+        return {
+            batchId: parsed.batchId,
+            batchName: typeof parsed.batchName === 'string' ? parsed.batchName : '',
+            baseCount: typeof parsed.baseCount === 'number' ? parsed.baseCount : 0,
+        };
+    } catch {
+        return null;
+    }
 }
 
 // ── Project class names (frozen for the batch) ──────────────────────────────

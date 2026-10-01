@@ -1,107 +1,84 @@
-// BatchList — paginated grid of BatchCards with empty / loading states.
+// BatchList — paginated grid of BatchCards with loading / error / empty states.
 
-import type { Variants } from 'framer-motion';
 import { motion } from 'framer-motion';
-import {
-    Pagination,
-    PaginationContent,
-    PaginationEllipsis,
-    PaginationItem,
-    PaginationLink,
-    PaginationNext,
-    PaginationPrevious,
-} from '@/components/ui/pagination';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Microscope, Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Microscope, SearchX } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { BatchCard } from './BatchCard';
+
+import { EmptyState, ErrorState, PaginationBar } from '@/components/common';
+import { Skeleton } from '@/components/ui/skeleton';
+import { formatCount } from '@/lib/format';
+import { listContainerVariants, listItemVariants } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 import type { RecordedBatchSummary } from '../hooks/useRecorded';
+import { BatchCard } from './BatchCard';
 
 interface BatchListProps {
     batches: RecordedBatchSummary[];
+    total: number;
     page: number;
+    pageSize: number;
     totalPages: number;
     loading: boolean;
+    /** The grid shows the previous result while the next one loads. */
+    refreshing?: boolean;
     error: string | null;
+    hasActiveFilters: boolean;
     onPageChange: (page: number) => void;
+    onRetry: () => void;
+    onClearFilters: () => void;
     onDelete?: (batchId: string) => Promise<void>;
-    itemVariants?: Variants;
 }
+
+// auto-fill (not auto-fit): a lone card keeps its size instead of stretching
+// across the page.
+const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4';
 
 function SkeletonCard() {
     return (
-        <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-card/80 px-3.5 py-3.5 shadow-sm">
-            <div className="flex shrink-0 items-start gap-3">
-                <Skeleton className="size-16 shrink-0 rounded-md" />
-                <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                        <Skeleton className="h-5 w-24 rounded-md" />
-                        <Skeleton className="size-7 rounded-md" />
-                    </div>
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-3 w-1/2" />
+        <div className="panel flex flex-col overflow-hidden">
+            <Skeleton className="aspect-[16/10] w-full rounded-none" />
+            <div className="flex flex-col gap-2 p-4">
+                <Skeleton className="h-6 w-2/3" />
+                <div className="flex items-center gap-1.5">
+                    <Skeleton className="h-5 w-14" />
+                    <Skeleton className="h-5 w-16" />
+                    <Skeleton className="ml-auto h-4 w-12" />
                 </div>
-            </div>
-            <div className="mt-4 flex min-w-0 shrink-0 items-start gap-2">
-                <Skeleton className="mt-2 size-2 shrink-0 rounded-full" />
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 overflow-hidden">
-                    <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
-                    <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
-                    <Skeleton className="h-6 w-16 shrink-0 rounded-md" />
-                    <Skeleton className="h-6 w-20 shrink-0 rounded-md" />
-                    <Skeleton className="h-6 w-12 shrink-0 rounded-md" />
+                <div className="flex items-center gap-3 border-t border-border pt-3">
+                    <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-4 w-10" />
                 </div>
             </div>
         </div>
     );
 }
 
-function buildPaginationItems(currentPage: number, totalPages: number) {
-    const items: (number | 'ellipsis')[] = [];
-
-    if (totalPages <= 7) {
-        for (let i = 1; i <= totalPages; i++) items.push(i);
-    } else {
-        items.push(1);
-        if (currentPage > 3) items.push('ellipsis');
-        const start = Math.max(2, currentPage - 1);
-        const end = Math.min(totalPages - 1, currentPage + 1);
-        for (let i = start; i <= end; i++) items.push(i);
-        if (currentPage < totalPages - 2) items.push('ellipsis');
-        items.push(totalPages);
-    }
-
-    return items;
-}
-
 export function BatchList({
     batches,
+    total,
     page,
+    pageSize,
     totalPages,
     loading,
+    refreshing = false,
     error,
+    hasActiveFilters,
     onPageChange,
+    onRetry,
+    onClearFilters,
     onDelete,
-    itemVariants,
 }: BatchListProps) {
     const navigate = useNavigate();
 
     if (error !== null) {
-        return (
-            <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
-                <p className="text-sm text-destructive">{error}</p>
-                <Button variant="outline" size="sm" onClick={() => onPageChange(page)}>
-                    Retry
-                </Button>
-            </div>
-        );
+        return <ErrorState title="Could not load batches" message={error} onRetry={onRetry} />;
     }
 
     if (loading) {
         return (
-            <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-4">
-                {Array.from({ length: 6 }).map((_, i) => (
+            <div className={GRID} aria-busy="true" aria-label="Loading batches">
+                {Array.from({ length: 8 }).map((_, i) => (
                     <SkeletonCard key={i} />
                 ))}
             </div>
@@ -109,97 +86,55 @@ export function BatchList({
     }
 
     if (batches.length === 0) {
-        return (
-            <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-                    <Microscope className="h-8 w-8 text-muted-foreground" />
-                </div>
-                <div>
-                    <p className="text-base font-medium">No analyses recorded yet</p>
-                    <p className="mt-1 text-sm text-muted-foreground max-w-xs">
-                        Run your first analysis to see the results here.
-                    </p>
-                </div>
-                <Button size="sm" onClick={() => navigate('/analyze')}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Start Analysis
-                </Button>
-            </div>
+        return hasActiveFilters ? (
+            <EmptyState
+                icon={SearchX}
+                title="No batches match these filters"
+                description="Try a different search term, or widen the status and organism filters."
+                actionLabel="Clear filters"
+                onAction={onClearFilters}
+            />
+        ) : (
+            <EmptyState
+                icon={Microscope}
+                title="No analyses recorded yet"
+                description="Run your first analysis to see the results here."
+                actionLabel="Start analysis"
+                onAction={() => navigate('/analyze')}
+            />
         );
     }
 
+    const first = (page - 1) * pageSize + 1;
+    const last = Math.min(first + batches.length - 1, total);
+
     return (
         <div className="flex flex-col gap-6">
-            <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-4">
-                {batches.map((batch) =>
-                    itemVariants ? (
-                        <motion.div key={batch.id} variants={itemVariants} className="h-full">
-                            <BatchCard batch={batch} onDelete={onDelete} />
-                        </motion.div>
-                    ) : (
-                        <BatchCard key={batch.id} batch={batch} onDelete={onDelete} />
-                    ),
-                )}
-            </div>
+            <motion.div
+                className={cn(GRID, 'transition-opacity duration-150', refreshing && 'opacity-60')}
+                aria-busy={refreshing}
+                variants={listContainerVariants}
+                initial="hidden"
+                animate="visible"
+            >
+                {batches.map((batch) => (
+                    <motion.div
+                        key={batch.id}
+                        variants={listItemVariants}
+                        className="h-full min-w-0"
+                    >
+                        <BatchCard batch={batch} onDelete={onDelete} />
+                    </motion.div>
+                ))}
+            </motion.div>
 
             {totalPages > 1 && (
-                <Pagination>
-                    <PaginationContent>
-                        <PaginationItem>
-                            <PaginationPrevious
-                                href="#"
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    onPageChange(page - 1);
-                                }}
-                                aria-disabled={page <= 1}
-                                className={
-                                    page <= 1
-                                        ? 'pointer-events-none opacity-50'
-                                        : 'transition-colors duration-150 hover:bg-accent'
-                                }
-                            />
-                        </PaginationItem>
-
-                        {buildPaginationItems(page, totalPages).map((item, idx) =>
-                            item === 'ellipsis' ? (
-                                <PaginationItem key={`ellipsis-${idx}`}>
-                                    <PaginationEllipsis />
-                                </PaginationItem>
-                            ) : (
-                                <PaginationItem key={item}>
-                                    <PaginationLink
-                                        href="#"
-                                        isActive={item === page}
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            onPageChange(item);
-                                        }}
-                                        className="transition-colors duration-150 hover:bg-accent"
-                                    >
-                                        {item}
-                                    </PaginationLink>
-                                </PaginationItem>
-                            ),
-                        )}
-
-                        <PaginationItem>
-                            <PaginationNext
-                                href="#"
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    onPageChange(page + 1);
-                                }}
-                                aria-disabled={page >= totalPages}
-                                className={
-                                    page >= totalPages
-                                        ? 'pointer-events-none opacity-50'
-                                        : 'transition-colors duration-150 hover:bg-accent'
-                                }
-                            />
-                        </PaginationItem>
-                    </PaginationContent>
-                </Pagination>
+                <div className="flex flex-col items-center gap-2">
+                    <PaginationBar page={page} pageCount={totalPages} onChange={onPageChange} />
+                    <p className="text-xs tabular-nums text-muted-foreground">
+                        Showing {formatCount(first)}–{formatCount(last)} of {formatCount(total)}
+                    </p>
+                </div>
             )}
         </div>
     );

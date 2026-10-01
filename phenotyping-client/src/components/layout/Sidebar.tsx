@@ -9,7 +9,7 @@ import {
     Home,
     LogOut,
     Moon,
-    PlusCircle,
+    Plus,
     Send,
     Settings,
     ShieldCheck,
@@ -82,7 +82,7 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild tooltip="Phenotyping">
                             <NavLink to="/">
-                                <div className="flex aspect-square size-8 shrink-0 items-center justify-center">
+                                <div className="flex aspect-square size-8 shrink-0 items-center justify-center overflow-hidden rounded-md">
                                     <img
                                         src="/assets/logo/app-icon.png"
                                         alt=""
@@ -109,12 +109,12 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     asChild
-                                    tooltip="Create Analyze"
-                                    className="h-10 justify-start gap-2 bg-sidebar-foreground font-semibold text-sidebar shadow-xs hover:bg-sidebar-foreground/90 hover:text-sidebar focus-visible:ring-sidebar-ring data-[active=true]:bg-sidebar-foreground data-[active=true]:text-sidebar dark:bg-emerald-950 dark:text-emerald-400 dark:hover:bg-emerald-900 dark:hover:text-emerald-300"
+                                    tooltip="Start analysis"
+                                    className="h-9 justify-start gap-2 bg-primary font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary/90 hover:text-primary-foreground focus-visible:ring-sidebar-ring active:bg-primary/90 active:text-primary-foreground data-[active=true]:bg-primary data-[active=true]:text-primary-foreground"
                                 >
                                     <NavLink to="/analyze" className="px-3">
-                                        <PlusCircle />
-                                        <span>Create Analyze</span>
+                                        <Plus />
+                                        <span>Start analysis</span>
                                     </NavLink>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>

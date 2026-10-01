@@ -214,21 +214,31 @@ class PolygonSegmentationService:
             neighbors[a].add(b)
             neighbors[b].add(a)
 
-        remaining: set[int] = set(range(n))
+        # Greedy pick by score / (1 + live conflicts). Conflict counts are
+        # maintained incrementally and the argmax runs over one fixed-size
+        # array, so a pick costs O(n) numpy work instead of rebuilding the
+        # remaining set, its intersections, and two arrays every iteration.
+        # Ties resolve to the lowest index — same as the previous
+        # set-iteration order.
+        scores = np.array([c["score"] for c in candidates], dtype=np.float64)
+        conflict_counts = np.array(
+            [len(neighbors[i]) for i in range(n)], dtype=np.float64
+        )
+        alive = np.ones(n, dtype=bool)
         selected: list[int] = []
-        while remaining:
-            remaining_list = list(remaining)
-            conflict_counts = np.array(
-                [len(neighbors[i] & remaining) for i in remaining_list],
-                dtype=np.float64,
-            )
-            scores = np.array(
-                [candidates[i]["score"] for i in remaining_list], dtype=np.float64
-            )
-            qualities = scores / (1.0 + conflict_counts)
-            chosen = remaining_list[int(np.argmax(qualities))]
+        n_alive = n
+        while n_alive > 0:
+            qualities = np.where(alive, scores / (1.0 + conflict_counts), -np.inf)
+            chosen = int(np.argmax(qualities))
             selected.append(chosen)
-            remaining -= {chosen} | (neighbors[chosen] & remaining)
+            removed = [chosen] + [j for j in neighbors[chosen] if alive[j]]
+            for r in removed:
+                alive[r] = False
+            for r in removed:
+                for j in neighbors[r]:
+                    if alive[j]:
+                        conflict_counts[j] -= 1.0
+            n_alive -= len(removed)
 
         return [candidates[i] for i in selected]
 
@@ -244,7 +254,15 @@ class PolygonSegmentationService:
         batch_id: str,
         raw_image_data: bytes | None = None,
         raw_suffix: str = ".png",
+        refine: bool | None = None,
     ) -> Any:
+        """Run tiled inference on one decoded image.
+
+        ``refine`` overrides the configured ``sam.enabled`` for this call:
+        ``False`` skips SAM (count-only runs — the detection count is final
+        after MWIS dedup, SAM only tightens outlines), ``True`` forces it,
+        ``None`` follows the config.
+        """
         cfg = self._get_config()
         model: "YOLO" = self._model_registry.model_for(self._organism)
         t_start = time.time()
@@ -335,9 +353,19 @@ class PolygonSegmentationService:
         self._stage("image.dedup", filename, batch_id)
         selected = self._mwis_dedup(candidates, cfg.mwis_overlap_threshold)
 
-        if self._sam_svc is not None and cfg.sam.enabled and selected:
+        use_sam = cfg.sam.enabled if refine is None else refine
+        sam_refined = False
+        if self._sam_svc is not None and use_sam and selected:
             self._stage("image.refine", filename, batch_id)
-            selected = self._sam_svc.refine_candidates(image, selected, cfg)
+            sam_cfg = (
+                cfg
+                if cfg.sam.enabled
+                else cfg.model_copy(
+                    update={"sam": cfg.sam.model_copy(update={"enabled": True})}
+                )
+            )
+            selected = self._sam_svc.refine_candidates(image, selected, sam_cfg)
+            sam_refined = True
 
         calibration, corners_float = self._calibration_svc.detect_with_ordered(
             image, cfg
@@ -437,6 +465,7 @@ class PolygonSegmentationService:
             annotations=annotations,
             overlay_url=f"/inference/results/{batch_id}/{filename}/overlay.png",
             calibration=calibration,
+            sam_refined=sam_refined,
         )
 
     async def process_single(
@@ -445,6 +474,7 @@ class PolygonSegmentationService:
         filename: str,
         batch_id: str,
         raw_suffix: str = ".png",
+        refine: bool | None = None,
     ) -> Any:
         self._stage("image.decode", filename, batch_id)
 
@@ -466,7 +496,7 @@ class PolygonSegmentationService:
             result = await loop.run_in_executor(
                 self._executor,
                 lambda: self._run_inference(
-                    image, filename, batch_id, image_data, raw_suffix
+                    image, filename, batch_id, image_data, raw_suffix, refine
                 ),
             )
 

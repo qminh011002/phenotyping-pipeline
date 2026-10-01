@@ -1,27 +1,35 @@
-import { memo, useCallback, useMemo } from 'react';
+// Body of the bbox (egg / neonate) result viewer: the canvas with its tool
+// rail, the filmstrip under it, and the stats inspector on the right.
 
-import { cn } from '@/lib/utils';
+import { memo, useCallback, useMemo } from 'react';
 
 import type { BBox, DetectionResult, Organism } from '@/types/api';
 
 import { AnnotationToolbar, type AnnotationToolId } from './AnnotationToolbar';
-import { OverlayImage } from './OverlayImage';
+import { Filmstrip, type FilmstripItem } from './Filmstrip';
+import { OverlayImage, type OverlayImageTool } from './OverlayImage';
 import { StatBoard } from './StatBoard';
 
 interface ResultViewerContentProps {
     organism: Organism;
+    /** Batch the images belong to — null only in the session-storage fallback. */
+    batchId: string | null;
     currentImageRecordId: string | null;
     currentIndex: number;
     currentResult: DetectionResult;
     confidenceThreshold: number;
-    ctrlHeld: boolean;
+    /** False while Ctrl/Cmd is held or the eye toggle is off. */
+    overlayVisible: boolean;
     defaultClass: string | undefined;
     editMode: boolean;
-    editorTool: 'drag' | 'draw';
+    editorTool: OverlayImageTool;
+    filmstripItems: FilmstripItem[];
+    filmstripCollapsed: boolean;
     modelBoxes: BBox[];
     processingConfig: Record<string, unknown> | null;
     redoAvailable: boolean;
     savingEdits: boolean;
+    savePending: boolean;
     selectedIdx: number | null;
     sessionBoxes: BBox[];
     rawSrc: string;
@@ -33,29 +41,33 @@ interface ResultViewerContentProps {
     onSelect: (index: number | null) => void;
     onCommit: (boxes: BBox[]) => void;
     onConfidenceChange: (value: number) => void;
+    onNavigate: (index: number) => void;
     onOpenResetDialog: () => void;
     onRedo: () => void;
-    onSelectDragTool: () => void;
-    onToggleDrawTool: () => void;
+    onSelectTool: (tool: OverlayImageTool) => void;
+    onToggleFilmstrip: () => void;
+    onToggleOverlay: () => void;
     onUndo: () => void;
-    onSave?: () => void;
-    saveDirty?: boolean;
 }
 
 export const ResultViewerContent = memo(function ResultViewerContent({
     organism,
+    batchId,
     currentImageRecordId,
     currentIndex,
     currentResult,
     confidenceThreshold,
-    ctrlHeld,
+    overlayVisible,
     defaultClass,
     editMode,
     editorTool,
+    filmstripItems,
+    filmstripCollapsed,
     modelBoxes,
     processingConfig,
     redoAvailable,
     savingEdits,
+    savePending,
     selectedIdx,
     sessionBoxes,
     rawSrc,
@@ -67,15 +79,19 @@ export const ResultViewerContent = memo(function ResultViewerContent({
     onSelect,
     onCommit,
     onConfidenceChange,
+    onNavigate,
     onOpenResetDialog,
     onRedo,
-    onSelectDragTool,
-    onToggleDrawTool,
+    onSelectTool,
+    onToggleFilmstrip,
+    onToggleOverlay,
     onUndo,
 }: ResultViewerContentProps) {
+    const editing = editMode && currentImageRecordId !== null;
+
     const overlayEditor = useMemo(
         () =>
-            editMode && currentImageRecordId
+            editing
                 ? {
                       mode: editorTool,
                       selectedIndex: selectedIdx,
@@ -85,64 +101,66 @@ export const ResultViewerContent = memo(function ResultViewerContent({
                       onCommit,
                   }
                 : undefined,
-        [
-            confidenceThreshold,
-            currentImageRecordId,
-            defaultClass,
-            editMode,
-            editorTool,
-            onCommit,
-            onSelect,
-            selectedIdx,
-        ],
+        [confidenceThreshold, defaultClass, editing, editorTool, onCommit, onSelect, selectedIdx],
     );
 
     return (
-        <div className="flex flex-1 overflow-hidden">
-            <div className="relative flex-1 overflow-hidden border-r">
-                <OverlayImage
-                    key={
-                        editMode && currentImageRecordId
-                            ? `edit-${currentImageRecordId}-${currentIndex}`
-                            : `view-${currentIndex}`
-                    }
-                    src={rawSrc}
-                    alt={currentResult.filename}
-                    annotations={editMode && currentImageRecordId ? sessionBoxes : viewBoxes}
-                    saveInProgress={savingEdits}
-                    dimEnabled={!ctrlHeld}
-                    // Keep boxes vector-rendered so their edges stay sharp at every
-                    // zoom level. The raster path scales a bitmap of the strokes, which
-                    // makes the boxes look soft when zooming.
-                    useOffscreen={false}
-                    onBackgroundClick={onBackgroundClick}
-                    onDimensions={onDimensions}
-                    editor={overlayEditor}
-                />
+        <div className="flex min-h-0 flex-1">
+            <div className="relative flex min-w-0 flex-1 flex-col">
+                <div className="relative min-h-0 flex-1">
+                    <OverlayImage
+                        key={
+                            editing
+                                ? `edit-${currentImageRecordId}-${currentIndex}`
+                                : `view-${currentIndex}`
+                        }
+                        src={rawSrc}
+                        alt={currentResult.filename}
+                        annotations={editing ? sessionBoxes : viewBoxes}
+                        saveInProgress={savingEdits}
+                        savePending={savePending}
+                        overlayVisible={overlayVisible}
+                        onToggleOverlay={onToggleOverlay}
+                        onBackgroundClick={onBackgroundClick}
+                        onDimensions={onDimensions}
+                        editor={overlayEditor}
+                    />
 
-                {editMode && currentImageRecordId && (
-                    <BboxToolbar
-                        organism={organism}
-                        editorTool={editorTool}
-                        redoAvailable={redoAvailable}
-                        undoAvailable={undoAvailable}
-                        onOpenResetDialog={onOpenResetDialog}
-                        onRedo={onRedo}
-                        onSelectDragTool={onSelectDragTool}
-                        onToggleDrawTool={onToggleDrawTool}
-                        onUndo={onUndo}
+                    {editing && (
+                        <BboxToolRail
+                            organism={organism}
+                            editorTool={editorTool}
+                            redoAvailable={redoAvailable}
+                            undoAvailable={undoAvailable}
+                            onOpenResetDialog={onOpenResetDialog}
+                            onRedo={onRedo}
+                            onSelectTool={onSelectTool}
+                            onUndo={onUndo}
+                        />
+                    )}
+                </div>
+
+                {batchId && (
+                    <Filmstrip
+                        batchId={batchId}
+                        items={filmstripItems}
+                        currentIndex={currentIndex}
+                        onNavigate={onNavigate}
+                        collapsed={filmstripCollapsed}
+                        onToggleCollapsed={onToggleFilmstrip}
                     />
                 )}
             </div>
 
-            <aside className="w-80 shrink-0 overflow-hidden bg-card" data-result-aside>
+            <aside className="w-80 shrink-0 border-l border-border bg-card" data-result-aside>
                 <StatBoard
                     result={currentResult}
+                    organism={organism}
                     config={processingConfig}
                     visibleAnnotations={visibleAnnotations}
                     confidenceThreshold={confidenceThreshold}
                     onConfidenceChange={onConfidenceChange}
-                    editMode={editMode}
+                    editMode={editing}
                     modelBoxes={modelBoxes}
                     sessionBoxes={sessionBoxes}
                 />
@@ -151,43 +169,43 @@ export const ResultViewerContent = memo(function ResultViewerContent({
     );
 });
 
-// Bbox toolbar — wraps the unified AnnotationToolbar, mapping all bbox-tool
-// clicks to the existing two-mode editor (drag = unified select/move/resize/
-// delete; draw = rubber-band new box).
-function BboxToolbar({
+const TOOL_BY_ID: Partial<Record<AnnotationToolId, OverlayImageTool>> = {
+    select: 'drag',
+    addBox: 'draw',
+    erase: 'erase',
+};
+
+const ID_BY_TOOL: Record<OverlayImageTool, AnnotationToolId> = {
+    drag: 'select',
+    draw: 'addBox',
+    erase: 'erase',
+};
+
+// Tool rail — the shared AnnotationToolbar, mapped onto the bbox editor's
+// three modes (drag = select / move / resize, draw = rubber-band a new box,
+// erase = click to delete) plus history.
+function BboxToolRail({
     organism,
     editorTool,
     redoAvailable,
     undoAvailable,
     onOpenResetDialog,
     onRedo,
-    onSelectDragTool,
-    onToggleDrawTool,
+    onSelectTool,
     onUndo,
 }: {
     organism: Organism;
-    editorTool: 'drag' | 'draw';
+    editorTool: OverlayImageTool;
     redoAvailable: boolean;
     undoAvailable: boolean;
     onOpenResetDialog: () => void;
     onRedo: () => void;
-    onSelectDragTool: () => void;
-    onToggleDrawTool: () => void;
+    onSelectTool: (tool: OverlayImageTool) => void;
     onUndo: () => void;
-    onSave?: () => void;
 }) {
-    const activeTool: AnnotationToolId | null =
-        editorTool === 'draw' ? 'addBox' : 'select';
-
     const handleSelect = useCallback(
         (id: AnnotationToolId) => {
             switch (id) {
-                case 'select':
-                    onSelectDragTool();
-                    return;
-                case 'addBox':
-                    if (editorTool !== 'draw') onToggleDrawTool();
-                    return;
                 case 'undo':
                     onUndo();
                     return;
@@ -197,39 +215,29 @@ function BboxToolbar({
                 case 'reset':
                     onOpenResetDialog();
                     return;
-                default:
-                    return;
+                default: {
+                    const tool = TOOL_BY_ID[id];
+                    if (tool) onSelectTool(tool);
+                }
             }
         },
-        [editorTool, onSelectDragTool, onToggleDrawTool, onUndo, onRedo, onOpenResetDialog],
+        [onSelectTool, onUndo, onRedo, onOpenResetDialog],
     );
 
-    const forceDisabled: Partial<Record<AnnotationToolId, boolean>> = {
-        undo: !undoAvailable,
-        redo: !redoAvailable,
-    };
-
-    // Hide the toolbar entirely while drawing a new box. Esc (or finishing
-    // the box) brings it back; the fade keeps the transition gentle.
-    const drawing = editorTool === 'draw';
+    const forceDisabled = useMemo<Partial<Record<AnnotationToolId, boolean>>>(
+        () => ({ undo: !undoAvailable, redo: !redoAvailable }),
+        [undoAvailable, redoAvailable],
+    );
 
     return (
-        <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2">
-            <div
-                className={cn(
-                    'transition-opacity duration-200 ease-out',
-                    drawing
-                        ? 'pointer-events-none opacity-0'
-                        : 'pointer-events-auto opacity-100',
-                )}
-            >
-                <AnnotationToolbar
-                    organism={organism}
-                    activeTool={activeTool}
-                    forceDisabled={forceDisabled}
-                    onSelectTool={handleSelect}
-                />
-            </div>
+        <div className="absolute left-3 top-3 z-20">
+            <AnnotationToolbar
+                organism={organism}
+                orientation="vertical"
+                activeTool={ID_BY_TOOL[editorTool]}
+                forceDisabled={forceDisabled}
+                onSelectTool={handleSelect}
+            />
         </div>
     );
 }

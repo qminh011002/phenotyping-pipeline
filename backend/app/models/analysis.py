@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import TIMESTAMP, ForeignKey, Index, String, Text
+from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Index, String, Text, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -98,6 +98,12 @@ class AnalysisImage(Base):
     # User-entered total weight (mg) for this image; distributed across
     # larvae/pupae measurements proportionally to area_mm2.
     total_weight_mg: Mapped[float | None] = mapped_column(nullable=True)
+    # Larvae/pupae: True once SAM has refined the model polygons — either
+    # during inference or later via POST .../refine. Count-only runs leave
+    # this False so the viewer can offer refinement before measuring.
+    sam_refined: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
     batch: Mapped["AnalysisBatch"] = relationship(
         "AnalysisBatch", back_populates="images"

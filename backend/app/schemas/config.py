@@ -334,22 +334,52 @@ class NeonateConfig(BaseModel):
         raise ValueError(msg)
 
 
-class LarvaeConfigUpdateRequest(BaseModel):
-    """Partial update for the ``larvae`` block of inference_config.yaml.
+class _PolygonConfigUpdate(BaseModel):
+    """Partial update shared by the ``larvae`` and ``pupae`` config blocks.
 
-    Only the runtime-relevant knobs are exposed; the rest stay in YAML for
-    power users.
+    Every field is optional; only the ones present are written to
+    inference_config.yaml. ``sam_enabled`` is flat here but lives under
+    ``<organism>.sam.enabled`` in YAML — the router routes it accordingly.
     """
 
     centerline_method: CenterlineMethod | None = None
     sam_enabled: bool | None = None
+    device: Device | None = None
+    tile_size: int | None = Field(default=None, gt=0)
+    # Capped below 1.0 — an overlap of 1.0 gives a zero tile stride.
+    overlap: float | None = Field(default=None, ge=0.0, le=0.9)
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_mask_size: int | None = Field(default=None, ge=0)
+    mwis_overlap_threshold: float | None = Field(default=None, gt=0.0, lt=1.0)
+    batch_size: int | None = Field(default=None, gt=0, le=64)
+    calibration_object_w_mm: float | None = Field(default=None, gt=0.0)
+    calibration_object_h_mm: float | None = Field(default=None, gt=0.0)
+
+    @field_validator("tile_size")
+    @classmethod
+    def tile_size_multiple_of_32(cls, v: int | None) -> int | None:
+        if v is not None and v % 32 != 0:
+            msg = f"tile_size must be a multiple of 32, got {v}"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("device")
+    @classmethod
+    def device_valid_format(cls, v: str | None) -> str | None:
+        if v is None or v == "cpu":
+            return v
+        if re.match(r"^cuda(:\d+)?$", v):
+            return v
+        msg = f"device must be 'cpu' or 'cuda' or 'cuda:N', got {v!r}"
+        raise ValueError(msg)
 
 
-class PupaeConfigUpdateRequest(BaseModel):
+class LarvaeConfigUpdateRequest(_PolygonConfigUpdate):
+    """Partial update for the ``larvae`` block of inference_config.yaml."""
+
+
+class PupaeConfigUpdateRequest(_PolygonConfigUpdate):
     """Partial update for the ``pupae`` block of inference_config.yaml."""
-
-    centerline_method: CenterlineMethod | None = None
-    sam_enabled: bool | None = None
 
 
 class ConfigUpdateRequest(BaseModel):

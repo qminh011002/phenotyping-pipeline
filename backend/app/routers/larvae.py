@@ -17,6 +17,7 @@ so the asyncio loop never blocks.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -37,7 +38,9 @@ from app.deps import (
     AnnotatedCalibrationService,
     AnnotatedLarvaeInferenceService,
     AnnotatedLarvaeMeasurementService,
+    AnnotatedSamRefinementService,
     CurrentUser,
+    get_analysis_service,
     get_cached_storage_dir,
     get_model_registry,
     get_pipeline_config,
@@ -49,6 +52,7 @@ from app.routers.inference_utils import (
     map_inference_error,
     parse_and_verify_optional_batch,
     read_image_upload,
+    unique_stem_in_batch,
     validate_image_extension,
     verify_batch_owned,
 )
@@ -58,32 +62,41 @@ from app.schemas.larvae import (
     ImageTotalWeightUpdate,
     LarvaeBatchDetail,
     LarvaeDetectionResult,
+    LarvaeImageDetail,
     LarvaeMeasurementResult,
     MeasureLarvaeRequest,
     PolygonsUpdate,
+    RefineResult,
 )
 from app.schemas.pupae import (
     MeasurePupaeRequest,
     PupaeBatchDetail,
+    PupaeImageDetail,
     PupaeMeasurement,
     PupaeMeasurementResult,
 )
+from app.services.analysis_service import AnalysisService
+from app.services.image_artifacts import mark_overlay_rendered, mark_overlay_stale
 from app.services.inference.egg import InvalidImageError
 from app.services.inference.measurement import build_warp_matrix
 from app.services.larvae_persistence import (
+    RestoredDetection,
     get_image_for_user,
     list_detections_for_image,
     load_batch_for_user,
     load_calibration,
+    load_image_for_user,
     resolve_overlay_path,
     resolve_raw_path,
     resolve_warped_path,
     save_calibration,
     save_measurements,
     set_image_total_weight,
+    sync_image_count,
     update_polygons,
 )
 from app.services.model_registry import ModelNotLoadedError
+from app.services.polygon_refine import RefineError, refine_stored_polygons
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +109,69 @@ _POLYGON_COLORS_BGR: dict[str, tuple[int, int, int]] = {
     "larvae": (255, 255, 0),
     "pupae": (0, 255, 255),
 }
+
+
+def _warp_and_draw(
+    raw_path: Path,
+    overlay_path: Path,
+    new_corners: list[tuple[int, int]],
+    old_corners: list[tuple[int, int]] | None,
+    source_polygons: list[list],
+    polygon_color_bgr: tuple[int, int, int],
+) -> list[np.ndarray] | None:
+    """CV half of the calibration re-render (runs in a worker thread).
+
+    Warps the raw image with ``new_corners``, maps every polygon into the new
+    warped frame via ``H_new ∘ H_old⁻¹`` and rewrites ``_overlay.png`` /
+    ``_warped.png``. Returns the re-warped polygons, or ``None`` when the raw
+    image or the corner set is unusable.
+    """
+    img = cv2.imread(str(raw_path))
+    if img is None:
+        return None
+
+    built_new = build_warp_matrix(img.shape, np.array(new_corners, dtype=np.float32))
+    if built_new is None:
+        return None
+    matrix_new, (warp_w, warp_h), _ = built_new
+
+    # ``old_corners is None`` ↔ polygons are still in raw-image space because
+    # auto-calibration had failed.
+    inv_old: np.ndarray | None = None
+    if old_corners is not None:
+        built_old = build_warp_matrix(
+            img.shape, np.array(old_corners, dtype=np.float32)
+        )
+        if built_old is not None:
+            try:
+                inv_old = np.linalg.inv(built_old[0])
+            except np.linalg.LinAlgError:
+                inv_old = None
+
+    new_polygons: list[np.ndarray] = []
+    for src_poly in source_polygons:
+        pts = np.array(src_poly, dtype=np.float32).reshape(-1, 1, 2)
+        if inv_old is not None:
+            pts = cv2.perspectiveTransform(pts, inv_old)
+        warped_pts = cv2.perspectiveTransform(pts, matrix_new).reshape(-1, 2)
+        warped_pts[:, 0] = np.clip(warped_pts[:, 0], 0, warp_w - 1)
+        warped_pts[:, 1] = np.clip(warped_pts[:, 1], 0, warp_h - 1)
+        new_polygons.append(warped_pts.astype(np.int32))
+
+    try:
+        warped_img = cv2.warpPerspective(img, matrix_new, (warp_w, warp_h))
+    except cv2.error:
+        return None
+
+    overlay = warped_img.copy()
+    for poly in new_polygons:
+        cv2.polylines(overlay, [poly], True, polygon_color_bgr, 2)
+
+    png_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+    cv2.imwrite(str(overlay_path), overlay, png_params)
+    cv2.imwrite(str(resolve_warped_path(overlay_path)), warped_img, png_params)
+    mark_overlay_rendered(overlay_path)
+    return new_polygons
 
 
 async def _rerender_after_calibration(
@@ -113,49 +189,27 @@ async def _rerender_after_calibration(
 
     ``old_corners`` is the calibration the polygons are *currently* expressed
     in (None ↔ polygons are still in raw image coords because auto-detect had
-    failed). Polygons are transformed via ``H_new ∘ H_old⁻¹`` so they keep
-    their visual position on the larva.
+    failed). Polygons keep their visual position on the larva.
     """
-    img = cv2.imread(str(raw_path))
-    if img is None:
+    detections = await list_detections_for_image(image_id, db)
+    new_polygons = await asyncio.to_thread(
+        _warp_and_draw,
+        raw_path,
+        overlay_path,
+        new_corners,
+        old_corners,
+        [det.edited_polygon or det.polygon for det in detections],
+        polygon_color_bgr,
+    )
+    if new_polygons is None:
         logger.warning(
-            "Re-render skipped — raw image unreadable",
+            "Re-render skipped — raw image unreadable or corners degenerate",
             extra={"context": {"image_id": str(image_id), "raw_path": str(raw_path)}},
         )
         return
 
-    new_arr = np.array(new_corners, dtype=np.float32)
-    built_new = build_warp_matrix(img.shape, new_arr)
-    if built_new is None:
-        return
-    matrix_new, (warp_w, warp_h), _ = built_new
-
-    if old_corners is not None:
-        old_arr = np.array(old_corners, dtype=np.float32)
-        built_old = build_warp_matrix(img.shape, old_arr)
-        matrix_old = built_old[0] if built_old is not None else None
-    else:
-        matrix_old = None  # polygons are in raw-image space (auto-calib had failed)
-
-    detections = await list_detections_for_image(image_id, db)
-    new_polygons: list[np.ndarray] = []
-    for det in detections:
-        src_poly = det.edited_polygon or det.polygon
-        pts = np.array(src_poly, dtype=np.float32).reshape(-1, 1, 2)
-        if matrix_old is not None:
-            try:
-                inv_old = np.linalg.inv(matrix_old)
-            except np.linalg.LinAlgError:
-                inv_old = None
-            if inv_old is not None:
-                pts = cv2.perspectiveTransform(pts, inv_old)
-        warped_pts = cv2.perspectiveTransform(pts, matrix_new).reshape(-1, 2)
-        warped_pts[:, 0] = np.clip(warped_pts[:, 0], 0, warp_w - 1)
-        warped_pts[:, 1] = np.clip(warped_pts[:, 1], 0, warp_h - 1)
-        warped_int = warped_pts.astype(np.int32)
-        new_polygons.append(warped_int)
-
-        # Persist the re-warped polygon so future reads see the right space.
+    # Persist the re-warped polygons so future reads see the right space.
+    for det, warped_int in zip(detections, new_polygons, strict=True):
         det.polygon = [[int(x), int(y)] for x, y in warped_int]
         det.bbox = {
             "x1": int(warped_int[:, 0].min()),
@@ -165,19 +219,6 @@ async def _rerender_after_calibration(
         }
         if det.edited_polygon is not None:
             det.edited_polygon = det.polygon
-
-    try:
-        warped_img = cv2.warpPerspective(img, matrix_new, (warp_w, warp_h))
-    except cv2.error:
-        return
-
-    overlay = warped_img.copy()
-    for poly in new_polygons:
-        cv2.polylines(overlay, [poly], True, polygon_color_bgr, 2)
-
-    png_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
-    cv2.imwrite(str(overlay_path), overlay, png_params)
-    cv2.imwrite(str(resolve_warped_path(overlay_path)), warped_img, png_params)
     await db.flush()
 
 
@@ -223,9 +264,20 @@ async def run_larvae_inference(
         str | None,
         Query(description="Persist results into this batch (must be owned by caller)"),
     ] = None,
+    count_only: Annotated[
+        bool,
+        Query(
+            description=(
+                "Skip SAM polygon refinement. The count is unaffected; outlines "
+                "stay at YOLO precision and can be refined later via "
+                "POST /analyses/{batch_id}/images/{image_id}/refine."
+            )
+        ),
+    ] = False,
 ) -> LarvaeDetectionResult:
     stem, suffix = validate_image_extension(file.filename or "unknown")
     bid = await parse_and_verify_optional_batch(batch_id, db, user.id)
+    stem = await unique_stem_in_batch(bid, stem, db)
 
     registry = get_model_registry()
     ensure_status_loaded(registry, "larvae", "Larvae")
@@ -233,24 +285,19 @@ async def run_larvae_inference(
 
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
+    # The router accepts ad-hoc inference (no batch_id) for parity with the
+    # egg flow. Either way no DB row is written here — the caller registers
+    # the image via POST /analyses/{batch_id}/images using this result.
     try:
-        result = await inference_svc.process_single(
-            data, stem, resolved_batch_id, raw_suffix=suffix
+        return await inference_svc.process_single(
+            data,
+            stem,
+            resolved_batch_id,
+            raw_suffix=suffix,
+            refine=False if count_only else None,
         )
     except (InvalidImageError, ModelNotLoadedError) as exc:
         raise map_inference_error(exc) from exc
-
-    # Persist detections only when bound to a stored image. The router accepts
-    # ad-hoc inference (no batch_id) for parity with the egg flow; in that case
-    # the result is returned but no DB row is touched.
-    if bid is not None:
-        # The frontend persists per-image via POST /analyses/{id}/images. The
-        # caller is expected to follow up with POST /analyses/{batch_id}/images
-        # using this result's `filename`/overlay_url. We deliberately don't
-        # create the AnalysisImage row here to keep the flow symmetric with egg.
-        pass
-
-    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -291,7 +338,7 @@ async def detect_calibration(
             detail=f"Raw image not found near {overlay_path}",
         )
 
-    img = cv2.imread(str(raw_path))
+    img = await asyncio.to_thread(cv2.imread, str(raw_path))
     if img is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -474,7 +521,7 @@ async def _measure_polygon_image(
     )
     warped_path = resolve_warped_path(overlay_path)
     if polygons_already_warped and warped_path.exists():
-        img = cv2.imread(str(warped_path))
+        img = await asyncio.to_thread(cv2.imread, str(warped_path))
         if img is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -487,7 +534,7 @@ async def _measure_polygon_image(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Raw image not found near {overlay_path}",
             )
-        img = cv2.imread(str(raw_path))
+        img = await asyncio.to_thread(cv2.imread, str(raw_path))
         if img is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -525,25 +572,31 @@ async def _measure_polygon_image(
         for m in measurements:
             if total_area > 0 and m.area_mm2:
                 m.weight_mg = (m.area_mm2 / total_area) * image.total_weight_mg
+                m.weight_area_ratio = m.weight_mg / m.area_mm2
             else:
                 m.weight_mg = 0.0
 
-    # Render and persist a measurement-viz PNG next to the overlay so the
-    # frontend can show the centerlines without re-running CV.
-    try:
-        viz = measurement_svc.render_overlay(img, measurements)
-        viz_path = overlay_path.parent / overlay_path.name.replace(
-            "_overlay.png", "_measure.png"
-        )
-        cv2.imwrite(str(viz_path), viz, [cv2.IMWRITE_PNG_COMPRESSION, 1])
-    except (cv2.error, OSError) as exc:
-        logger.warning(
-            "Could not write measurement viz: %s",
-            exc,
-            extra={"context": {"image_id": str(image_id)}},
-        )
-
     await db.commit()
+
+    # Measurement-viz PNG (centerlines + width ticks) next to the overlay.
+    # Encoding a full-resolution PNG takes about as long as the measurement
+    # itself, so it is written in the background instead of holding up the
+    # response (and the event loop).
+    def _write_viz() -> None:
+        try:
+            viz = measurement_svc.render_overlay(img, measurements)
+            viz_path = overlay_path.parent / overlay_path.name.replace(
+                "_overlay.png", "_measure.png"
+            )
+            cv2.imwrite(str(viz_path), viz, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        except (cv2.error, OSError) as exc:
+            logger.warning(
+                "Could not write measurement viz: %s",
+                exc,
+                extra={"context": {"image_id": str(image_id)}},
+            )
+
+    asyncio.get_running_loop().run_in_executor(None, _write_viz)
 
     # measurement_svc always returns LarvaeMeasurement (schema); when the image
     # belongs to a pupae batch the response model expects PupaeMeasurement.
@@ -612,14 +665,111 @@ async def get_larvae_batch(
     batch_id: UUID,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
+    summary: Annotated[
+        bool,
+        Query(
+            description=(
+                "Omit per-image detections and measurements; per-image "
+                "``*_count`` fields are still filled. Pair with "
+                "GET /analyses/{batch_id}/larvae/images/{image_id}."
+            )
+        ),
+    ] = False,
 ) -> LarvaeBatchDetail | PupaeBatchDetail:
-    detail = await load_batch_for_user(batch_id, user.id, db)
+    detail = await load_batch_for_user(batch_id, user.id, db, summary=summary)
     if detail is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Analysis batch {batch_id} not found.",
         )
     return detail
+
+
+@router.get(
+    "/analyses/{batch_id}/larvae/images/{image_id}",
+    response_model=LarvaeImageDetail | PupaeImageDetail,
+    status_code=status.HTTP_200_OK,
+    summary="One image's detections, calibration and measurements",
+)
+async def get_larvae_image(
+    batch_id: UUID,
+    image_id: UUID,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> LarvaeImageDetail | PupaeImageDetail:
+    detail = await load_image_for_user(batch_id, image_id, user.id, db)
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    return detail
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /analyses/{batch_id}/images/{image_id}/refine
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/analyses/{batch_id}/images/{image_id}/refine",
+    response_model=RefineResult,
+    status_code=status.HTTP_200_OK,
+    summary="Refine a stored image's model polygons with SAM",
+    responses={
+        404: {"description": "Batch, image, or image files not found"},
+        503: {"description": "SAM model could not be loaded"},
+    },
+)
+async def refine_image_polygons(
+    batch_id: UUID,
+    image_id: UUID,
+    sam_svc: AnnotatedSamRefinementService,
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> RefineResult:
+    """Run SAM over the detections of an image that was processed count-only.
+
+    Operator-edited and user-drawn polygons are left alone. Measurements of
+    refined detections flip to stale — re-run POST /measure/{organism}.
+    """
+    await verify_batch_owned(batch_id, db, user.id)
+    image = (
+        await db.execute(
+            select(AnalysisImage)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisImage.batch_id == batch_id)
+        )
+    ).scalar_one_or_none()
+    if image is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    overlay_path = resolve_overlay_path(image, Path(get_cached_storage_dir()))
+    if overlay_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} has no completed result.",
+        )
+
+    organism = await _image_organism(image, db)
+    try:
+        result = await refine_stored_polygons(
+            image, overlay_path, sam_svc, _polygon_config_for(organism), db
+        )
+    except RefineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
+        # SAM weights missing / ultralytics unavailable.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"SAM model unavailable: {exc}",
+        ) from exc
+    await db.commit()
+    return result
 
 
 @router.get(
@@ -789,6 +939,7 @@ async def save_polygon_edits(
     payload: PolygonsUpdate,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> dict[str, int | str]:
     await verify_batch_owned(batch_id, db, user.id)
 
@@ -817,9 +968,21 @@ async def save_polygon_edits(
 
     edits: list[tuple[UUID | None, list[tuple[int, int]]]] = []
     edited_existing_ids: list[UUID] = []
+    restored: dict[int, RestoredDetection] = {}
     for entry in payload.polygons:
         if entry.detection_id.startswith("new:"):
             det_id = None
+            if entry.origin == "model":
+                restored[len(edits)] = RestoredDetection(
+                    confidence=(
+                        entry.confidence if entry.confidence is not None else 1.0
+                    ),
+                    baseline=(
+                        [(int(x), int(y)) for x, y in entry.baseline]
+                        if entry.baseline
+                        else None
+                    ),
+                )
         else:
             try:
                 det_id = UUID(entry.detection_id)
@@ -838,7 +1001,18 @@ async def save_polygon_edits(
             detail="A detection cannot be edited and deleted in the same request.",
         )
 
-    touched, deleted = await update_polygons(image_id, edits, user.id, db, deleted_ids)
+    touched, deleted = await update_polygons(
+        image_id, edits, user.id, db, deleted_ids, restored
+    )
+    count = image.count or 0
+    if touched or deleted:
+        # Adding / deleting polygons is how the operator corrects the count;
+        # carry it through to the image row and the batch totals.
+        count = await sync_image_count(image_id, db)
+        await analysis_svc.refresh_batch_aggregates(batch_id, db)
+        overlay_path = resolve_overlay_path(image, Path(get_cached_storage_dir()))
+        if overlay_path is not None:
+            mark_overlay_stale(overlay_path)
     await db.commit()
 
     return {
@@ -846,6 +1020,7 @@ async def save_polygon_edits(
         "image_id": str(image_id),
         "updated": touched,
         "deleted": deleted,
+        "count": count,
     }
 
 

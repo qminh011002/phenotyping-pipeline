@@ -29,6 +29,7 @@ from app.routers.inference_utils import (
     map_inference_error,
     parse_and_verify_optional_batch,
     read_image_upload,
+    unique_stem_in_batch,
     validate_image_extension,
 )
 from app.schemas.pupae import PupaeDetectionResult
@@ -55,9 +56,20 @@ async def run_pupae_inference(
         str | None,
         Query(description="Persist results into this batch (must be owned by caller)"),
     ] = None,
+    count_only: Annotated[
+        bool,
+        Query(
+            description=(
+                "Skip SAM polygon refinement. The count is unaffected; outlines "
+                "can be refined later via "
+                "POST /analyses/{batch_id}/images/{image_id}/refine."
+            )
+        ),
+    ] = False,
 ) -> PupaeDetectionResult:
     stem, suffix = validate_image_extension(file.filename or "unknown")
     bid = await parse_and_verify_optional_batch(batch_id, db, user.id)
+    stem = await unique_stem_in_batch(bid, stem, db)
 
     registry = get_model_registry()
     ensure_status_loaded(registry, "pupae", "Pupae")
@@ -65,16 +77,15 @@ async def run_pupae_inference(
 
     resolved_batch_id = batch_id or str(uuid.uuid4())
 
+    # Same as larvae: the frontend follows with POST /analyses/{id}/images to
+    # persist; no AnalysisImage row is written here.
     try:
-        result = await inference_svc.process_single(
-            data, stem, resolved_batch_id, raw_suffix=suffix
+        return await inference_svc.process_single(
+            data,
+            stem,
+            resolved_batch_id,
+            raw_suffix=suffix,
+            refine=False if count_only else None,
         )
     except (InvalidImageError, ModelNotLoadedError) as exc:
         raise map_inference_error(exc) from exc
-
-    if bid is not None:
-        # Same as larvae: the frontend follows with POST /analyses/{id}/images
-        # to persist; we don't write the AnalysisImage row here.
-        pass
-
-    return result

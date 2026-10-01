@@ -166,9 +166,12 @@ export function CalibrationCornerEditorChrome({
 }) {
     const factors = computeFactors(corners, realWmm, realHmm);
     return (
-        <div className="pointer-events-auto flex flex-col items-center gap-2 rounded-lg border bg-card p-3 shadow-sm">
-            <div className="flex items-center gap-4 text-xs">
-                <span className="text-muted-foreground">Live preview:</span>
+        <div className="floating-panel pointer-events-auto flex flex-col items-center gap-2.5 p-3">
+            <p className="text-xs text-muted-foreground">
+                Drag the four corners onto the green calibration rectangle
+            </p>
+            <div className="flex items-center gap-3 text-xs">
+                <span className="eyebrow">Scale</span>
                 <span className="font-mono tabular-nums">
                     x {factors ? factors.mm_per_px_x.toFixed(4) : '—'} mm/px
                 </span>

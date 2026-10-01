@@ -13,11 +13,12 @@ import type {
     AssignmentsResponse,
     AssignResultResponse,
     BatchDetectionResult,
+    BboxConfig,
     CalibrationCorners,
     CalibrationUpdate,
-    CenterlineMethod,
     CustomModelListResponse,
     CustomModelResponse,
+    DashboardOverview,
     DashboardStats,
     DetectionResult,
     EggConfig,
@@ -28,12 +29,15 @@ import type {
     LarvaeBatchDetail,
     LarvaeConfig,
     LarvaeDetectionResult,
+    LarvaeImageDetail,
     LarvaeMeasurementResult,
     LogEntry,
     MeasureLarvaeRequest,
     Organism,
+    PolygonConfigUpdate,
     PolygonsUpdate,
     PolygonsUpdateResponse,
+    RefineResult,
     SamModelListResponse,
     SamModelResponse,
 } from '@/types/api';
@@ -92,16 +96,31 @@ export async function inferSingle(
     return inferSingleEgg(file, batchId);
 }
 
-/** POST /inference/larvae — run larvae segmentation on a single image. */
+function polygonInferenceQuery(
+    batchId: string | undefined,
+    countOnly: boolean,
+): Record<string, string> | undefined {
+    const query: Record<string, string> = {};
+    if (batchId) query.batch_id = batchId;
+    if (countOnly) query.count_only = 'true';
+    return Object.keys(query).length > 0 ? query : undefined;
+}
+
+/** POST /inference/larvae — run larvae segmentation on a single image.
+ *
+ * `countOnly` skips SAM refinement: the count is identical, outlines stay at
+ * YOLO precision and can be refined later with `refineImagePolygons`.
+ */
 export async function inferSingleLarvae(
     file: File,
     batchId?: string,
+    countOnly = false,
 ): Promise<LarvaeDetectionResult> {
     return http.postFormData<LarvaeDetectionResult>(
         'inference/larvae',
         'file',
         file,
-        batchId ? { batch_id: batchId } : undefined,
+        polygonInferenceQuery(batchId, countOnly),
     );
 }
 
@@ -115,12 +134,13 @@ export async function inferSingleLarvae(
 export async function inferSinglePupae(
     file: File,
     batchId?: string,
+    countOnly = false,
 ): Promise<LarvaeDetectionResult> {
     return http.postFormData<LarvaeDetectionResult>(
         'inference/pupae',
         'file',
         file,
-        batchId ? { batch_id: batchId } : undefined,
+        polygonInferenceQuery(batchId, countOnly),
     );
 }
 
@@ -154,6 +174,21 @@ export function getAnalysesRawUrl(batchId: string, imageId: string): string {
 }
 
 /**
+ * URL of a server-built JPEG thumbnail (`overlay` = with detections drawn,
+ * `raw` = the upload). Sizes snap up to 160 / 320 / 640 on the server. Like
+ * the other image routes this needs Bearer auth — load it with
+ * `useAuthedImage`, not a bare `<img src>`.
+ */
+export function getThumbnailUrl(
+    batchId: string,
+    imageId: string,
+    variant: 'overlay' | 'raw' = 'overlay',
+    size = 320,
+): string {
+    return `/analyses/${batchId}/images/${imageId}/thumbnail?variant=${variant}&size=${size}`;
+}
+
+/**
  * Return the absolute URL for a processing-session overlay image.
  * Uses the /inference/results/{batch_id}/{filename}/overlay endpoint.
  * Call this for overlays during the active processing session (before DB persistence).
@@ -177,6 +212,42 @@ export async function getConfig(signal?: AbortSignal): Promise<EggConfig> {
 /** PUT /config — update egg inference config */
 export async function updateConfig(updates: Partial<EggConfig>): Promise<EggConfig> {
     return http.put<EggConfig>('config', updates);
+}
+
+// Egg lives at /config for historical reasons; every other organism is at
+// /config/{organism}.
+const configPath = (organism: Organism) => (organism === 'egg' ? 'config' : `config/${organism}`);
+
+/** GET the bbox inference config for egg or neonate. */
+export async function getBboxConfig(
+    organism: 'egg' | 'neonate',
+    signal?: AbortSignal,
+): Promise<BboxConfig> {
+    return http.get<BboxConfig>(configPath(organism), signal);
+}
+
+/** PUT a partial bbox inference config for egg or neonate. */
+export async function updateBboxConfig(
+    organism: 'egg' | 'neonate',
+    updates: Partial<BboxConfig>,
+): Promise<BboxConfig> {
+    return http.put<BboxConfig>(configPath(organism), updates);
+}
+
+/** GET the polygon inference config for larvae or pupae. */
+export async function getPolygonConfig(
+    organism: 'larvae' | 'pupae',
+    signal?: AbortSignal,
+): Promise<LarvaeConfig> {
+    return http.get<LarvaeConfig>(configPath(organism), signal);
+}
+
+/** PUT a partial polygon inference config for larvae or pupae. */
+export async function updatePolygonConfig(
+    organism: 'larvae' | 'pupae',
+    update: PolygonConfigUpdate,
+): Promise<LarvaeConfig> {
+    return http.put<LarvaeConfig>(configPath(organism), update);
 }
 
 // ── Logs ───────────────────────────────────────────────────────────────────
@@ -206,7 +277,25 @@ export async function renameBatch(batchId: string, name: string): Promise<Analys
     return http.patch<AnalysisBatchDetail>(`analyses/${batchId}`, { name });
 }
 
-/** POST /analyses/{batch_id}/images — record a single image's inference result */
+/** POST /analyses/{batch_id}/append — re-open a batch to add more images.
+ *
+ * The batch goes back to `processing`; finish with `completeBatch` (it
+ * returns to the status it had), or abandon with `failBatch` (which restores
+ * it rather than failing it).
+ */
+export async function appendToBatch(
+    batchId: string,
+    data: { additional_image_count: number; config_snapshot?: Record<string, unknown> },
+): Promise<AnalysisBatchDetail> {
+    return http.post<AnalysisBatchDetail>(`analyses/${batchId}/append`, data);
+}
+
+/** POST /analyses/{batch_id}/images — record a single image's inference result.
+ *
+ * Returns the new image's id. For larvae / pupae, pass the inference result's
+ * `calibration` and `sam_refined` through so the backend stores them with the
+ * detections — no separate calibration round-trip needed.
+ */
 export async function addImageResult(
     batchId: string,
     data: {
@@ -220,9 +309,14 @@ export async function addImageResult(
             confidence: number;
         }>;
         overlay_url: string;
+        calibration?: CalibrationCorners | null;
+        sam_refined?: boolean;
     },
-): Promise<{ status: string; batch_id: string }> {
-    return http.post<{ status: string; batch_id: string }>(`analyses/${batchId}/images`, data);
+): Promise<{ status: string; batch_id: string; image_id: string }> {
+    return http.post<{ status: string; batch_id: string; image_id: string }>(
+        `analyses/${batchId}/images`,
+        data,
+    );
 }
 
 /** POST /analyses/{batch_id}/complete — finish processing; batch enters 'draft' state */
@@ -254,6 +348,9 @@ export async function listAnalyses(
         organism?: string;
         /** Restrict to the given statuses. Records page passes ["completed"]. */
         statuses?: string[];
+        /** Server-side ordering, applied across all pages. */
+        sort?: 'created_at' | 'total_count';
+        order?: 'asc' | 'desc';
     },
     signal?: AbortSignal,
 ): Promise<AnalysisListResponse> {
@@ -265,6 +362,8 @@ export async function listAnalyses(
     if (params.statuses && params.statuses.length > 0) {
         for (const s of params.statuses) qs.append('status', s);
     }
+    if (params.sort) qs.set('sort', params.sort);
+    if (params.order) qs.set('order', params.order);
     const query = qs.toString();
     return http.get<AnalysisListResponse>(`analyses${query ? `?${query}` : ''}`, signal);
 }
@@ -346,6 +445,16 @@ export async function downloadBatchArchive(
 /** GET /dashboard/stats — return aggregate statistics for the home page */
 export async function getDashboardStats(signal?: AbortSignal): Promise<DashboardStats> {
     return http.get<DashboardStats>('dashboard/stats', signal);
+}
+
+/** GET /dashboard/overview — analytics for a look-back window (`days = 0` → all time). */
+export async function getDashboardOverview(
+    params: { days: number; organism?: Organism | null },
+    signal?: AbortSignal,
+): Promise<DashboardOverview> {
+    const qs = new URLSearchParams({ days: String(params.days) });
+    if (params.organism) qs.set('organism', params.organism);
+    return http.get<DashboardOverview>(`dashboard/overview?${qs.toString()}`, signal);
 }
 
 // ── Edited annotations ─────────────────────────────────────────────────────
@@ -433,10 +542,8 @@ export async function uploadSamModel(file: File): Promise<SamModelResponse> {
 }
 
 /** PUT /config/larvae — patch larvae inference config (returns full merged config) */
-export async function updateLarvaeConfig(
-    update: { centerline_method?: CenterlineMethod; sam_enabled?: boolean },
-): Promise<LarvaeConfig> {
-    return http.put<LarvaeConfig>('config/larvae', update);
+export async function updateLarvaeConfig(update: PolygonConfigUpdate): Promise<LarvaeConfig> {
+    return updatePolygonConfig('larvae', update);
 }
 
 /** PUT /sam-models/activate — set the active SAM model */
@@ -457,6 +564,31 @@ export async function getLarvaeBatch(
     signal?: AbortSignal,
 ): Promise<LarvaeBatchDetail> {
     return http.get<LarvaeBatchDetail>(`analyses/${batchId}/larvae`, signal);
+}
+
+/** GET /analyses/{batch_id}/larvae?summary=true — batch + per-image counts,
+ *  without the polygons. Pair with `getLarvaeImage` for the image on screen. */
+export async function getLarvaeBatchSummary(
+    batchId: string,
+    signal?: AbortSignal,
+): Promise<LarvaeBatchDetail> {
+    return http.get<LarvaeBatchDetail>(`analyses/${batchId}/larvae?summary=true`, signal);
+}
+
+/** GET /analyses/{batch_id}/larvae/images/{image_id} — one image's polygons,
+ *  calibration and measurements. */
+export async function getLarvaeImage(
+    batchId: string,
+    imageId: string,
+    signal?: AbortSignal,
+): Promise<LarvaeImageDetail> {
+    return http.get<LarvaeImageDetail>(`analyses/${batchId}/larvae/images/${imageId}`, signal);
+}
+
+/** POST /analyses/{batch_id}/images/{image_id}/refine — tighten the stored
+ *  model polygons with SAM (count-only batches skip this at inference). */
+export async function refineImagePolygons(batchId: string, imageId: string): Promise<RefineResult> {
+    return http.post<RefineResult>(`analyses/${batchId}/images/${imageId}/refine`, {});
 }
 
 /** Build a CSV-export filename from a batch name + ISO date. */

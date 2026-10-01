@@ -6,18 +6,23 @@ Provides the Recorded page and overlay image serving.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import select
 
 from app.database import AsyncSession, get_session
 from app.deps import CurrentUser, get_analysis_service, get_cached_storage_dir
+from app.models.analysis import AnalysisBatch, AnalysisImage
+from app.routers.inference_utils import cached_file_response
 from app.schemas.analysis import (
     ActiveBatchResponse,
+    AnalysisBatchAppend,
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchUpdate,
@@ -30,6 +35,14 @@ from app.schemas.analysis import (
 )
 from app.services.analysis_service import AnalysisService
 from app.services.batch_export import stream_batch_archive
+from app.services.image_artifacts import (
+    ensure_polygon_overlay_fresh,
+    ensure_thumbnail,
+    raw_path_for,
+    resolve_overlay_file,
+    snap_thumbnail_edge,
+    thumbnail_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +64,39 @@ _IMAGE_MEDIA_TYPES = {
 
 def _guess_image_media_type(suffix: str) -> str:
     return _IMAGE_MEDIA_TYPES.get(suffix.lower(), "application/octet-stream")
+
+
+async def _owned_image(
+    batch_id: UUID, image_id: UUID, user_id: UUID, db: AsyncSession
+) -> tuple[AnalysisImage, str]:
+    """(image row, batch organism) for an image the caller owns, else 404."""
+    row = (
+        await db.execute(
+            select(AnalysisImage, AnalysisBatch.organism_type)
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisImage.batch_id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image_id} in batch {batch_id} not found.",
+        )
+    return row[0], row[1]
+
+
+def _completed_overlay_path(image: AnalysisImage) -> Path:
+    """Overlay path of a completed image, else 404."""
+    if image.status != "completed" or not image.overlay_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image {image.id} has no completed result.",
+        )
+    path = resolve_overlay_file(image, Path(get_cached_storage_dir()))
+    assert path is not None
+    return path
 
 
 @router.post(
@@ -131,11 +177,12 @@ async def fail_analysis(
     user: CurrentUser,
     analysis_svc: AnalysisService = Depends(get_analysis_service),
 ) -> dict:
-    """Mark a batch as failed with a reason string."""
-    from sqlalchemy import select
+    """Mark a batch as failed with a reason string.
 
-    from app.models.analysis import AnalysisBatch
-
+    A batch that is processing because images are being *added* to it is not
+    failed: the append is abandoned and the batch returns to the status it
+    had before, keeping every image that already landed.
+    """
     stmt = (
         select(AnalysisBatch)
         .where(AnalysisBatch.id == batch_id)
@@ -170,6 +217,55 @@ async def fail_analysis(
     }
 
 
+@router.post(
+    "/{batch_id}/append",
+    response_model=AnalysisBatchDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Re-open a batch to add more images",
+    responses={
+        200: {"description": "Batch is processing again and accepts new images"},
+        404: {"description": "Batch not found"},
+        409: {"description": "A batch is already processing"},
+    },
+)
+async def append_to_analysis(
+    batch_id: UUID,
+    data: AnalysisBatchAppend,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
+    analysis_svc: AnalysisService = Depends(get_analysis_service),
+) -> AnalysisBatchDetail:
+    """Put an existing batch back into ``processing`` so the caller can run
+    inference on more images and record them with POST /analyses/{id}/images.
+
+    Finish with POST /analyses/{id}/complete as usual — a batch that was
+    already saved to Records stays saved; a draft stays a draft. Abandon the
+    run with POST /analyses/{id}/fail, which restores the batch instead of
+    failing it.
+    """
+    active = await analysis_svc.has_active_batch(db=db, user_id=user.id)
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A batch is already processing",
+            headers={"X-Active-Batch-Id": str(active.id)},
+        )
+    batch = await analysis_svc.append_to_batch(
+        batch_id=batch_id, data=data, db=db, user_id=user.id
+    )
+    if batch is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Analysis batch {batch_id} not found.",
+        )
+    await db.commit()
+    detail = await analysis_svc.get_batch_detail(
+        batch_id=batch_id, db=db, user_id=user.id, include_annotations=False
+    )
+    assert detail is not None
+    return detail
+
+
 @router.get(
     "",
     response_model=AnalysisListResponse,
@@ -199,12 +295,17 @@ async def list_analyses(
             "Records page passes ``status=completed`` so drafts stay hidden."
         ),
     ),
+    sort: Literal["created_at", "total_count"] = Query(
+        default="created_at", description="Column to order by"
+    ),
+    order: Literal["asc", "desc"] = Query(default="desc", description="Direction"),
 ) -> AnalysisListResponse:
     """Return a paginated list of analysis batches.
 
-    Results are sorted by creation date descending (newest first).
-    Optionally filter by organism type; ``q`` performs a case-insensitive
-    substring match on the batch ``name`` OR any image's ``original_filename``.
+    Sorted by creation date, newest first, unless ``sort`` / ``order`` say
+    otherwise. Optionally filter by organism type; ``q`` performs a
+    case-insensitive substring match on the batch ``name`` OR any image's
+    ``original_filename``.
     """
     return await analysis_svc.list_batches(
         page=page,
@@ -212,6 +313,8 @@ async def list_analyses(
         search=q,
         organism=organism,
         statuses=status,
+        sort=sort,
+        descending=order == "desc",
         db=db,
         user_id=user.id,
     )
@@ -360,58 +463,27 @@ async def get_image_detail(
     summary="Serve the overlay PNG for a processed image",
     responses={
         200: {"content": {"image/png": {}}, "description": "Overlay PNG image"},
+        304: {"description": "Not modified"},
         404: {"description": "Batch, image, or overlay file not found"},
     },
 )
 async def get_overlay(
     batch_id: UUID,
     image_id: UUID,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_session)],
     user: CurrentUser,
-    analysis_svc: AnalysisService = Depends(get_analysis_service),
-) -> FileResponse:
+) -> Response:
     """Serve the overlay PNG image for a processed image."""
-    from sqlalchemy import select
-
-    from app.models.analysis import AnalysisBatch, AnalysisImage
-
-    stmt = (
-        select(AnalysisImage)
-        .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
-        .where(AnalysisImage.id == image_id)
-        .where(AnalysisImage.batch_id == batch_id)
-        .where(AnalysisBatch.user_id == user.id)
-    )
-    result = await db.execute(stmt)
-    image = result.scalar_one_or_none()
-
-    if image is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Image {image_id} in batch {batch_id} not found.",
-        )
-
-    if image.status != "completed" or not image.overlay_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Image {image_id} has no completed overlay.",
-        )
-
-    overlay_path = Path(image.overlay_path)
-    if not overlay_path.is_absolute():
-        overlay_path = Path(get_cached_storage_dir()) / overlay_path
-
+    image, organism = await _owned_image(batch_id, image_id, user.id, db)
+    overlay_path = _completed_overlay_path(image)
     if not overlay_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Overlay file not found on disk: {overlay_path}",
         )
-
-    return FileResponse(
-        overlay_path,
-        media_type="image/png",
-        headers={"Content-Disposition": f'inline; filename="{overlay_path.name}"'},
-    )
+    await ensure_polygon_overlay_fresh(image.id, overlay_path, organism, db)
+    return cached_file_response(request, overlay_path, "image/png")
 
 
 @router.get(
@@ -419,67 +491,87 @@ async def get_overlay(
     summary="Serve the raw (un-annotated) source image for a processed image",
     responses={
         200: {"content": {"image/png": {}}, "description": "Raw PNG image"},
+        304: {"description": "Not modified"},
         404: {"description": "Batch, image, or raw file not found"},
     },
 )
 async def get_raw(
     batch_id: UUID,
     image_id: UUID,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_session)],
     user: CurrentUser,
-) -> FileResponse:
+) -> Response:
     """Serve the raw source image the operator uploaded."""
-    from sqlalchemy import select
-
-    from app.models.analysis import AnalysisBatch, AnalysisImage
-
-    stmt = (
-        select(AnalysisImage)
-        .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
-        .where(AnalysisImage.id == image_id)
-        .where(AnalysisImage.batch_id == batch_id)
-        .where(AnalysisBatch.user_id == user.id)
-    )
-    result = await db.execute(stmt)
-    image = result.scalar_one_or_none()
-
-    if image is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Image {image_id} in batch {batch_id} not found.",
-        )
-
-    if image.status != "completed" or not image.overlay_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Image {image_id} has no completed result.",
-        )
-
-    overlay_path = Path(image.overlay_path)
-    if not overlay_path.is_absolute():
-        overlay_path = Path(get_cached_storage_dir()) / overlay_path
+    image, _organism = await _owned_image(batch_id, image_id, user.id, db)
+    overlay_path = _completed_overlay_path(image)
 
     # The raw file shares the overlay's stem with `_raw` substituted for
     # `_overlay`, but the suffix matches the original upload (.jpg, .tif, …)
-    # because we now write the raw upload bytes through unchanged. Find it
-    # by glob and pick the first match.
-    raw_stem = overlay_path.name.replace("_overlay.png", "_raw")
-    raw_candidates = sorted(overlay_path.parent.glob(f"{raw_stem}.*"))
-    raw_path = raw_candidates[0] if raw_candidates else None
-
+    # because the upload bytes are written through unchanged.
+    raw_path = raw_path_for(overlay_path)
     if raw_path is None or not raw_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Raw file not found on disk near: {overlay_path}",
         )
 
-    media_type = _guess_image_media_type(raw_path.suffix)
-
-    return FileResponse(
-        raw_path,
-        media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{raw_path.name}"'},
+    # The upload is written once and never modified.
+    return cached_file_response(
+        request, raw_path, _guess_image_media_type(raw_path.suffix), immutable=True
     )
+
+
+@router.get(
+    "/{batch_id}/images/{image_id}/thumbnail",
+    summary="Serve a small JPEG thumbnail of a processed image",
+    responses={
+        200: {"content": {"image/jpeg": {}}, "description": "JPEG thumbnail"},
+        304: {"description": "Not modified"},
+        404: {"description": "Batch, image, or source file not found"},
+    },
+)
+async def get_thumbnail(
+    batch_id: UUID,
+    image_id: UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: CurrentUser,
+    variant: Annotated[
+        Literal["overlay", "raw"],
+        Query(description="Thumbnail of the annotated overlay or the raw upload"),
+    ] = "overlay",
+    size: Annotated[
+        int, Query(ge=32, le=1024, description="Longest edge in pixels (snapped up)")
+    ] = 320,
+) -> Response:
+    """Thumbnail for grid and list views.
+
+    Built on first request and cached next to the overlay, so a 200-image
+    batch grid costs 200 small JPEGs instead of 200 full-resolution PNGs.
+    """
+    image, organism = await _owned_image(batch_id, image_id, user.id, db)
+    overlay_path = _completed_overlay_path(image)
+
+    if variant == "raw":
+        source = raw_path_for(overlay_path)
+    else:
+        await ensure_polygon_overlay_fresh(image.id, overlay_path, organism, db)
+        source = overlay_path
+    if source is None or not source.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source image not found on disk near: {overlay_path}",
+        )
+
+    edge = snap_thumbnail_edge(size)
+    thumb = thumbnail_path(overlay_path, variant, edge)
+    if not await asyncio.to_thread(ensure_thumbnail, source, thumb, edge):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Could not build a thumbnail for image {image_id}.",
+        )
+    return cached_file_response(request, thumb, "image/jpeg")
 
 
 @router.post(
@@ -566,7 +658,7 @@ async def add_image_result(
             detail=f"Analysis batch {batch_id} not found.",
         )
     await db.commit()
-    return {"status": "ok", "batch_id": str(batch_id)}
+    return {"status": "ok", "batch_id": str(batch_id), "image_id": str(image.id)}
 
 
 @router.post(

@@ -2,73 +2,99 @@
 // Route: /recorded
 // Also mounts BatchDetail for /recorded?batch=:batchId (detail view).
 
-import { motion } from 'framer-motion';
-import { useRecorded } from '@/features/recorded/hooks/useRecorded';
-import { SearchFilters } from '@/features/recorded/components/SearchFilters';
-import { BatchList } from '@/features/recorded/components/BatchList';
+import { useCallback, useRef } from 'react';
+import { Plus } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+
+import { PageHeader } from '@/components/common';
+import { Button } from '@/components/ui/button';
 import { BatchDetail } from '@/features/recorded/components/BatchDetail';
-import { useSearchParams } from 'react-router-dom';
-import { listContainerVariants, listItemVariants } from '@/lib/motion';
+import { BatchList } from '@/features/recorded/components/BatchList';
+import { SearchFilters } from '@/features/recorded/components/SearchFilters';
+import { parseStatusFilter, useRecorded } from '@/features/recorded/hooks/useRecorded';
 
 export default function RecordedPage() {
     const [searchParams] = useSearchParams();
+    const navigate = useNavigate();
     const batchId = searchParams.get('batch');
+    const scrollRef = useRef<HTMLDivElement>(null);
 
     const {
         batches,
         total,
         page,
+        pageSize,
         totalPages,
         filters,
+        hasActiveFilters,
         loading,
+        refreshing,
         error,
         setPage,
         setFilters,
+        clearFilters,
+        refetch,
         deleteBatch,
-    } = useRecorded({ enabled: !batchId });
+    } = useRecorded({
+        enabled: !batchId,
+        // Deep links from the dashboard ("3 drafts to review") land filtered.
+        initialFilters: { status: parseStatusFilter(searchParams.get('status')) },
+    });
+
+    const handlePageChange = useCallback(
+        (next: number) => {
+            setPage(next);
+            scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+        },
+        [setPage],
+    );
 
     if (batchId) {
         return <BatchDetail />;
     }
 
     return (
-        <div className="flex flex-col h-full">
-            <header className="border-b border-border bg-background px-6 pb-4 pt-5">
-                <div className="mx-auto w-full max-w-screen-2xl space-y-4">
-                    <div className="flex flex-wrap items-end justify-between gap-2">
-                        <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                                History
-                            </p>
-                            <h1 className="mt-1 text-xl font-semibold tracking-tight">
-                                Recorded batches
-                            </h1>
-                        </div>
-                    </div>
-                    <SearchFilters filters={filters} onFiltersChange={setFilters} total={total} />
-                </div>
-            </header>
+        <div className="flex h-full flex-col">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto">
+                <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 px-6 py-6">
+                    <PageHeader
+                        eyebrow="History"
+                        title="Recorded batches"
+                        description="Every analysis you have run. Open a batch to review it, add images or export the results."
+                        actions={
+                            <Button size="sm" onClick={() => navigate('/analyze')}>
+                                <Plus aria-hidden />
+                                New analysis
+                            </Button>
+                        }
+                    >
+                        <SearchFilters
+                            filters={filters}
+                            onFiltersChange={setFilters}
+                            onClear={clearFilters}
+                            hasActiveFilters={hasActiveFilters}
+                            total={total}
+                            loading={loading}
+                        />
+                    </PageHeader>
 
-            {/* Batch grid */}
-            <motion.div
-                className="flex-1 overflow-y-auto px-6 py-5"
-                variants={listContainerVariants}
-                initial="hidden"
-                animate="visible"
-            >
-                <div className="mx-auto w-full max-w-screen-2xl">
                     <BatchList
                         batches={batches}
+                        total={total}
                         page={page}
+                        pageSize={pageSize}
                         totalPages={totalPages}
                         loading={loading}
+                        refreshing={refreshing}
                         error={error}
-                        onPageChange={setPage}
+                        hasActiveFilters={hasActiveFilters}
+                        onPageChange={handlePageChange}
+                        onRetry={refetch}
+                        onClearFilters={clearFilters}
                         onDelete={deleteBatch}
-                        itemVariants={listItemVariants}
                     />
                 </div>
-            </motion.div>
+            </div>
         </div>
     );
 }

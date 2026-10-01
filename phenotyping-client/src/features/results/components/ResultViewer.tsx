@@ -4,20 +4,20 @@
 // result.annotations. The backend-generated overlay PNG is only used
 // for the Download button — never displayed.
 //
-// Annotation Editor (FS-009):
-// - "Edit" toggle in header activates the AnnotationEditor slot.
-// - Edit mode: boxes are rendered by AnnotationEditor (not OverlayImage's SVG).
+// Annotation editor:
+// - Boxes are rendered and edited by OverlayImage (Konva).
 // - User-drawn boxes are NOT filtered by confidence threshold.
-// - Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z redo.
-// - D toggles draw mode; Escape cancels/deselects.
-// - Save edits persists to DB; Reset-to-model clears with confirmation.
+// - Tools: V select, D draw, E erase; Escape cancels/deselects.
+// - Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z redo, ? shortcut reference.
+// - Edits autosave; Reset-to-model clears them with confirmation.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download } from 'lucide-react';
+import { Download, ImagePlus } from 'lucide-react';
 
 import { EmptyState } from '@/components/common/EmptyState';
+import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 
 import type {
@@ -36,6 +36,9 @@ import {
     storeBatchDetail,
 } from '@/features/upload/lib/processingSession';
 import { consumeStartIndex } from '@/features/recorded/lib/openBatchInResults';
+import { addImagesPath } from '@/features/recorded/lib/paths';
+import { invalidateAuthedImages } from '@/hooks/useAuthedImage';
+import { usePersistentFlag } from '@/hooks/usePersistentFlag';
 import {
     completeBatch,
     finishBatch,
@@ -50,14 +53,19 @@ import { cn } from '@/lib/utils';
 import { boxesEqual } from '../lib/bboxMath';
 import { canRedo, canUndo, editorHistoryReducer } from '../lib/editorHistory';
 
+import type { FilmstripItem } from './Filmstrip';
+import type { OverlayImageTool } from './OverlayImage';
 import { ResultViewerContent } from './ResultViewerContent';
 import { ResultViewerDialogs } from './ResultViewerDialogs';
 import { ResultViewerHeader } from './ResultViewerHeader';
+import { ShortcutsDialog } from './ShortcutsDialog';
 import { LarvaeResultPanel } from '../larvae/LarvaeResultPanel';
 
 interface ResultViewerProps {
     className?: string;
 }
+
+const FILMSTRIP_COLLAPSED_KEY = 'phenotyping.filmstrip.collapsed';
 
 type SaveEditsArgs = {
     imageId?: string;
@@ -104,9 +112,10 @@ export function ResultViewer({ className }: ResultViewerProps) {
      * - "drag": the unified Drag tool — click a box to select it, drag its body
      *   to move, drag a corner/side handle to resize, drag empty area to pan,
      *   click empty area to deselect.
-     * - "draw": rubber-band a new box; pan disabled.
+     * - "draw": rubber-band a new box (Space / middle-drag still pans).
+     * - "erase": click a box to delete it; drag to pan.
      */
-    const [editorTool, setEditorTool] = useState<'drag' | 'draw'>('drag');
+    const [editorTool, setEditorTool] = useState<OverlayImageTool>('drag');
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
     // Classes are defined on AnalyzePage and persisted both to the batch row
     // (authoritative) and sessionStorage (used during the live processing
@@ -130,8 +139,15 @@ export function ResultViewer({ className }: ResultViewerProps) {
     const [quitDialogOpen, setQuitDialogOpen] = useState(false);
     /** Index the user wants to navigate to while dirty */
     const [pendingNavIdx, setPendingNavIdx] = useState<number | null>(null);
-    /** Ctrl/Cmd held — in non-edit mode this temporarily hides the dim overlay. */
+    /** Ctrl/Cmd held — temporarily hides the detections to reveal the image. */
     const [ctrlHeld, setCtrlHeld] = useState(false);
+    /** Sticky version of the same, driven by the eye toggle in the zoom bar. */
+    const [overlayHidden, setOverlayHidden] = useState(false);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
+    const [filmstripCollapsed, setFilmstripCollapsed] = usePersistentFlag(
+        FILMSTRIP_COLLAPSED_KEY,
+        false,
+    );
     const previousImageIdRef = useRef<string | null>(null);
 
     // ── Mount: load batch detail (URL-driven, with sessionStorage fallback) ──
@@ -477,6 +493,17 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 if (seq !== saveSeqRef.current) return;
                 imageDetailCache.current.set(imageId, updatedImage);
                 if (currentImageRecord?.id === imageId) bumpCache();
+                // Counts and the rendered overlay changed: views that cached
+                // this batch (Records, dashboard) must not show the old ones.
+                invalidateAuthedImages(`${imageId}/thumbnail?variant=overlay`);
+                void queryClient.invalidateQueries({
+                    queryKey: ['analysis-detail', batchId],
+                    refetchType: 'none',
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ['dashboard-overview'],
+                    refetchType: 'none',
+                });
                 return true;
             } catch {
                 if (!controller.signal.aborted && seq === saveSeqRef.current) {
@@ -490,7 +517,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 }
             }
         },
-        [batchDetail, currentImageRecord?.id, sessionBoxes, bumpCache],
+        [batchDetail, currentImageRecord?.id, sessionBoxes, bumpCache, queryClient],
     );
 
     useEffect(() => {
@@ -556,15 +583,14 @@ export function ResultViewer({ className }: ResultViewerProps) {
     // its own transient drag state internally so we don't pollute history.
     const handleEditorCommit = useCallback((newBoxes: BBox[]) => {
         dispatchHistory({ type: 'apply', boxes: newBoxes });
-        // Finishing a drawn box (or any gesture) returns to drag-select so the
-        // annotation toolbar — hidden while drawing — reappears immediately,
-        // instead of waiting for the user to press Esc. The drawn box is
-        // auto-selected by OverlayImage, which only surfaces handles/panel in
-        // drag mode anyway.
-        setEditorTool('drag');
+        // Finishing a drawn box returns to drag-select: the new box is
+        // auto-selected by OverlayImage, which only surfaces its handles and
+        // panel in drag mode. Erase stays armed so several boxes can be
+        // removed in a row.
+        setEditorTool((tool) => (tool === 'draw' ? 'drag' : tool));
     }, []);
 
-    // ── Ctrl/Cmd-hold → reveal raw image (non-edit mode only) ─────────────
+    // ── Ctrl/Cmd-hold → reveal raw image ───────────────────────────────────
     useEffect(() => {
         const update = (e: KeyboardEvent) => setCtrlHeld(e.ctrlKey || e.metaKey);
         const clear = () => setCtrlHeld(false);
@@ -584,6 +610,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
     }, []);
 
     // ── Keyboard shortcuts ──────────────────────────────────────────────────
+    const dialogOpen = resetDialogOpen || dirtyNavDialogOpen || quitDialogOpen || shortcutsOpen;
     useEffect(() => {
         if (!editMode) return;
 
@@ -591,6 +618,8 @@ export function ResultViewer({ className }: ResultViewerProps) {
             const inputFocused =
                 e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
             if (inputFocused) return;
+            // A dialog owns the keyboard while it is open.
+            if (dialogOpen) return;
 
             const platform =
                 (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
@@ -610,25 +639,48 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 return;
             }
 
-            if (mod && e.shiftKey && e.key === 'z') {
+            // Shift turns `key` into "Z", so compare case-insensitively.
+            const key = e.key.toLowerCase();
+
+            if (mod && ((e.shiftKey && key === 'z') || key === 'y')) {
                 e.preventDefault();
                 dispatchHistory({ type: 'redo' });
                 setSelectedIdx(null);
                 return;
             }
 
-            if (mod && e.key === 'z') {
+            if (mod && key === 'z') {
                 e.preventDefault();
                 dispatchHistory({ type: 'undo' });
                 setSelectedIdx(null);
                 return;
             }
 
-            if (e.key === 'd' || e.key === 'D') {
+            if (e.key === '?') {
                 e.preventDefault();
-                setEditorTool((t) => (t === 'draw' ? 'drag' : 'draw'));
-                setSelectedIdx(null);
+                setShortcutsOpen(true);
                 return;
+            }
+
+            // Single-letter tool keys — never with a modifier (Ctrl+D, …).
+            if (!mod && !e.altKey) {
+                if (key === 'd') {
+                    e.preventDefault();
+                    setEditorTool((t) => (t === 'draw' ? 'drag' : 'draw'));
+                    setSelectedIdx(null);
+                    return;
+                }
+                if (key === 'e') {
+                    e.preventDefault();
+                    setEditorTool((t) => (t === 'erase' ? 'drag' : 'erase'));
+                    setSelectedIdx(null);
+                    return;
+                }
+                if (key === 'v') {
+                    e.preventDefault();
+                    setEditorTool('drag');
+                    return;
+                }
             }
 
             if (e.key === 'Escape') {
@@ -641,7 +693,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 return;
             }
 
-            if (mod && e.key === 's') {
+            if (mod && key === 's') {
                 e.preventDefault();
                 if (isDirty && !savingEdits) handleSaveEdits();
                 return;
@@ -650,7 +702,16 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [editMode, selectedIdx, sessionBoxes, editorTool, isDirty, savingEdits, handleSaveEdits]);
+    }, [
+        editMode,
+        selectedIdx,
+        sessionBoxes,
+        editorTool,
+        isDirty,
+        savingEdits,
+        handleSaveEdits,
+        dialogOpen,
+    ]);
 
     // ── Raw image URL ───────────────────────────────────────────────────────
     const rawSrc = useMemo(() => {
@@ -710,14 +771,56 @@ export function ResultViewer({ className }: ResultViewerProps) {
         }
     }, [batchDetail, handleSaveEdits, isDirty, navigate, savingEdits]);
 
-    const handleSelectDragTool = useCallback(() => {
-        setEditorTool('drag');
+    const handleSelectTool = useCallback((tool: OverlayImageTool) => {
+        setEditorTool(tool);
+        // Draw and erase work on the whole image, not on a selection.
+        if (tool !== 'drag') setSelectedIdx(null);
     }, []);
 
-    const handleToggleDrawTool = useCallback(() => {
-        setEditorTool((tool) => (tool === 'draw' ? 'drag' : 'draw'));
-        setSelectedIdx(null);
-    }, []);
+    const handleToggleOverlay = useCallback(() => setOverlayHidden((hidden) => !hidden), []);
+
+    const handleToggleFilmstrip = useCallback(
+        () => setFilmstripCollapsed((collapsed) => !collapsed),
+        [setFilmstripCollapsed],
+    );
+
+    const handleOpenResetDialog = useCallback(() => setResetDialogOpen(true), []);
+    const handleShowShortcuts = useCallback(() => setShortcutsOpen(true), []);
+
+    // ── Filmstrip ───────────────────────────────────────────────────────────
+    // One tile per image with its count. The current image shows the live
+    // count of the edit session; the others use what was last saved. Item
+    // objects are reused while unchanged so only the affected tile re-renders.
+    const filmstripCacheRef = useRef<Map<string, FilmstripItem>>(new Map());
+    const currentDetailId = currentImageDetail?.id ?? null;
+    const sessionCount = sessionBoxes.length;
+    const filmstripItems = useMemo<FilmstripItem[]>(() => {
+        if (!batchDetail) return [];
+        const cache = filmstripCacheRef.current;
+        return batchDetail.images.map((img) => {
+            const count =
+                img.id === currentDetailId
+                    ? sessionCount
+                    : (imageDetailCache.current.get(img.id)?.count ?? img.count ?? null);
+            const previous = cache.get(img.id);
+            if (
+                previous &&
+                previous.count === count &&
+                previous.filename === img.original_filename
+            ) {
+                return previous;
+            }
+            const next: FilmstripItem = {
+                imageId: img.id,
+                filename: img.original_filename,
+                count,
+            };
+            cache.set(img.id, next);
+            return next;
+        });
+        // cacheVersion drives recompute when the per-image cache mutates.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [batchDetail, cacheVersion, currentDetailId, sessionCount]);
 
     const handleUndo = useCallback(() => {
         dispatchHistory({ type: 'undo' });
@@ -728,6 +831,17 @@ export function ResultViewer({ className }: ResultViewerProps) {
         dispatchHistory({ type: 'redo' });
         setSelectedIdx(null);
     }, []);
+
+    // Add more images to this batch: save what is on screen, then hand over
+    // to the upload page in append mode.
+    const handleAddImages = useCallback(async () => {
+        if (!batchDetail) return;
+        if (isDirty) {
+            const saved = await handleSaveEdits();
+            if (!saved) return;
+        }
+        navigate(addImagesPath(batchDetail.id, batchDetail.organism_type));
+    }, [batchDetail, isDirty, handleSaveEdits, navigate]);
 
     const handleBackgroundClick = useCallback(() => {
         setSelectedIdx(null);
@@ -768,7 +882,9 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
     if (loading) {
         return (
-            <div className={cn('flex h-screen items-center justify-center', className)}>
+            <div
+                className={cn('flex h-screen items-center justify-center bg-background', className)}
+            >
                 <div className="flex items-center gap-3 text-muted-foreground">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                     <span>Loading results…</span>
@@ -792,7 +908,7 @@ export function ResultViewer({ className }: ResultViewerProps) {
 
     if (!currentResult) {
         return (
-            <div className={cn('flex h-screen flex-col', className)}>
+            <div className={cn('flex h-screen flex-col bg-background', className)}>
                 <EmptyState
                     icon={Download}
                     title="No results found"
@@ -805,10 +921,11 @@ export function ResultViewer({ className }: ResultViewerProps) {
     }
 
     return (
-        <div className={cn('flex h-screen flex-col', className)}>
+        <div className={cn('flex h-screen flex-col bg-background', className)}>
             <ResultViewerHeader
                 batchName={batchDetail?.name ?? null}
                 batchStatus={batchDetail?.status}
+                organism={batchDetail?.organism_type ?? undefined}
                 filename={currentResult.filename}
                 currentIndex={currentIndex}
                 total={results.length}
@@ -820,22 +937,41 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 onBack={handleBack}
                 onNavigate={handleNavigate}
                 onFinish={handleFinish}
+                onShowShortcuts={handleShowShortcuts}
+                actions={
+                    batchDetail ? (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8"
+                            onClick={() => void handleAddImages()}
+                            title="Add more images to this batch and analyse them"
+                        >
+                            <ImagePlus />
+                            <span className="hidden xl:inline">Add images</span>
+                        </Button>
+                    ) : undefined
+                }
             />
 
             <ResultViewerContent
                 organism={(batchDetail?.organism_type as Organism) ?? 'egg'}
+                batchId={batchDetail?.id ?? null}
                 currentImageRecordId={currentImageRecord?.id ?? null}
                 currentIndex={currentIndex}
                 currentResult={currentResult}
                 confidenceThreshold={confidenceThreshold}
-                ctrlHeld={ctrlHeld}
+                overlayVisible={!ctrlHeld && !overlayHidden}
                 defaultClass={defaultClass}
                 editMode={editMode}
                 editorTool={editorTool}
+                filmstripItems={filmstripItems}
+                filmstripCollapsed={filmstripCollapsed}
                 modelBoxes={modelBoxes}
                 processingConfig={processingConfig}
                 redoAvailable={redoAvailable}
                 savingEdits={savingEdits}
+                savePending={isDirty && !savingEdits}
                 selectedIdx={selectedIdx}
                 sessionBoxes={sessionBoxes}
                 rawSrc={rawSrc}
@@ -849,14 +985,16 @@ export function ResultViewer({ className }: ResultViewerProps) {
                 onSelect={setSelectedIdx}
                 onCommit={handleEditorCommit}
                 onConfidenceChange={setConfidenceThreshold}
-                onOpenResetDialog={() => setResetDialogOpen(true)}
+                onNavigate={handleNavigate}
+                onOpenResetDialog={handleOpenResetDialog}
                 onRedo={handleRedo}
-                onSelectDragTool={handleSelectDragTool}
-                onToggleDrawTool={handleToggleDrawTool}
+                onSelectTool={handleSelectTool}
+                onToggleFilmstrip={handleToggleFilmstrip}
+                onToggleOverlay={handleToggleOverlay}
                 onUndo={handleUndo}
-                onSave={isDirty ? () => void handleSaveEdits() : undefined}
-                saveDirty={isDirty}
             />
+
+            <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} polygon={false} />
 
             <ResultViewerDialogs
                 dirtyNavDialogOpen={dirtyNavDialogOpen}

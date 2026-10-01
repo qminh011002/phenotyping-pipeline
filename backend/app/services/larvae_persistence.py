@@ -12,14 +12,15 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.models.larvae import LarvaeCalibration, LarvaeDetection, LarvaeMeasurement
@@ -29,10 +30,7 @@ from app.schemas.larvae import (
     LarvaeImageDetail,
 )
 from app.schemas.larvae import LarvaeMeasurement as LarvaeMeasurementSchema
-from app.schemas.larvae import (
-    StoredLarvaeAnnotation,
-    WeightStats,
-)
+from app.schemas.larvae import StoredLarvaeAnnotation, WeightStats
 from app.schemas.pupae import (
     PupaeBatchDetail,
     PupaeImageDetail,
@@ -273,17 +271,29 @@ async def save_measurements(
 # ── Polygon edits ─────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class RestoredDetection:
+    """Identity of a deleted model detection that is being brought back."""
+
+    confidence: float
+    baseline: list[tuple[int, int]] | None = None
+
+
 async def update_polygons(
     image_id: UUID,
     edits: list[tuple[UUID | None, list[tuple[int, int]]]],
     user_id: UUID,
     db: AsyncSession,
     deleted_ids: list[UUID] | None = None,
+    restored: dict[int, RestoredDetection] | None = None,
 ) -> tuple[int, int]:
     """Apply user polygon edits.
 
     For each ``(detection_id, polygon)``:
-      - ``detection_id is None`` creates a new user-origin detection
+      - ``detection_id is None`` creates a new user-origin detection — unless
+        ``restored`` has an entry for that position in ``edits``, in which
+        case the row is re-created as the model detection it was (undo of a
+        delete that had already been saved)
       - Existing ids set ``edited_polygon`` on the detection
       - ``deleted_ids`` removes existing detections from the image
       - Stamps ``edited_at`` and ``edited_by``
@@ -315,21 +325,44 @@ async def update_polygons(
 
     now = _now_utc()
     touched = 0
-    for det_id, polygon in edits:
+    restored = restored or {}
+    for position, (det_id, polygon) in enumerate(edits):
         if det_id is None:
             bbox, area_px = _polygon_bbox_and_area(polygon)
-            row = LarvaeDetection(
-                id=uuid.uuid4(),
-                image_id=image_id,
-                polygon=_polygon_jsonb(polygon),
-                bbox=bbox,
-                confidence=1.0,
-                area_px=area_px,
-                model_version=None,
-                edited_at=now,
-                edited_by=user_id,
-                origin="user",
-            )
+            back = restored.get(position)
+            if back is not None:
+                # Same shape as an edited model detection: ``polygon`` is what
+                # the model produced, ``edited_polygon`` what the operator
+                # left it as (omitted when they are the same outline).
+                model_polygon = back.baseline or polygon
+                row = LarvaeDetection(
+                    id=uuid.uuid4(),
+                    image_id=image_id,
+                    polygon=_polygon_jsonb(model_polygon),
+                    edited_polygon=(
+                        _polygon_jsonb(polygon) if model_polygon != polygon else None
+                    ),
+                    bbox=bbox,
+                    confidence=back.confidence,
+                    area_px=area_px,
+                    model_version=None,
+                    edited_at=now,
+                    edited_by=user_id,
+                    origin="model",
+                )
+            else:
+                row = LarvaeDetection(
+                    id=uuid.uuid4(),
+                    image_id=image_id,
+                    polygon=_polygon_jsonb(polygon),
+                    bbox=bbox,
+                    confidence=1.0,
+                    area_px=area_px,
+                    model_version=None,
+                    edited_at=now,
+                    edited_by=user_id,
+                    origin="user",
+                )
             db.add(row)
             touched += 1
             continue
@@ -381,41 +414,89 @@ def _schemas_for_organism(
     )
 
 
-async def load_batch_for_user(
-    batch_id: UUID, user_id: UUID, db: AsyncSession
-) -> LarvaeBatchDetail | PupaeBatchDetail | None:
-    """Joined load: batch + images + detections + calibration + measurements.
+def _image_urls(
+    batch_id: UUID, img: AnalysisImage
+) -> tuple[str | None, str | None, str | None]:
+    """(overlay_url, warped_url, raw_url) for the editor + ruler flow.
 
-    Returns ``None`` if the batch does not exist for this user (404).
+    ``overlay_path`` in the DB is the relative ``{batch_id}/{stem}_overlay.png``
+    token; turn it into the API routes the frontend fetches with auth.
     """
-    batch = (
+    if not img.overlay_path:
+        return None, None, None
+    stem = Path(img.overlay_path).name.removesuffix("_overlay.png")
+    return (
+        f"/inference/results/{batch_id}/{stem}/overlay.png",
+        f"/inference/results/{batch_id}/{stem}/warped.png",
+        f"/analyses/{batch_id}/images/{img.id}/raw",
+    )
+
+
+async def _load_batch_row(
+    batch_id: UUID, user_id: UUID, db: AsyncSession
+) -> AnalysisBatch | None:
+    # Polygons are read from larvae_detection; the copy in the image row's
+    # ``annotations`` JSONB is dead weight here, so leave it in Postgres.
+    return (
         await db.execute(
             select(AnalysisBatch)
-            .options(selectinload(AnalysisBatch.images))
+            .options(
+                selectinload(AnalysisBatch.images).options(
+                    defer(AnalysisImage.annotations, raiseload=True),
+                    defer(AnalysisImage.edited_annotations, raiseload=True),
+                )
+            )
             .where(AnalysisBatch.id == batch_id)
             .where(AnalysisBatch.user_id == user_id)
         )
     ).scalar_one_or_none()
-    if batch is None:
-        return None
-    organism = (
+
+
+def _polygon_organism(batch: AnalysisBatch) -> str:
+    return (
         batch.organism_type if batch.organism_type in ("larvae", "pupae") else "larvae"
     )
+
+
+async def load_batch_for_user(
+    batch_id: UUID, user_id: UUID, db: AsyncSession, summary: bool = False
+) -> LarvaeBatchDetail | PupaeBatchDetail | None:
+    """Batch + images + detections + calibration + measurements.
+
+    ``summary=True`` leaves each image's ``detections`` / ``measurements``
+    empty and fills the ``*_count`` fields from aggregate queries instead —
+    the viewer opens on that and fetches one image's polygons at a time via
+    ``load_image_for_user``, so opening a batch costs the same whether it
+    holds 5 images or 500.
+
+    Returns ``None`` if the batch does not exist for this user (404).
+    """
+    batch = await _load_batch_row(batch_id, user_id, db)
+    if batch is None:
+        return None
+    organism = _polygon_organism(batch)
     batch_schema, image_schema, _stored_schema, measurement_schema = (
         _schemas_for_organism(organism)
     )
-
     image_ids = [img.id for img in batch.images]
+
     detections_by_image: dict[UUID, list[LarvaeDetection]] = {i: [] for i in image_ids}
-    if image_ids:
+    calibrations_by_image: dict[UUID, LarvaeCalibration] = {}
+    measurements_by_detection: dict[UUID, LarvaeMeasurement] = {}
+    detection_counts: dict[UUID, int] = {}
+    measurement_counts: dict[UUID, tuple[int, int]] = {}
+    weight_pairs: list[tuple[float, float]] = []
+
+    if image_ids and not summary:
         for det in (
             await db.execute(
-                select(LarvaeDetection).where(LarvaeDetection.image_id.in_(image_ids))
+                select(LarvaeDetection)
+                .where(LarvaeDetection.image_id.in_(image_ids))
+                .order_by(LarvaeDetection.created_at, LarvaeDetection.id)
             )
         ).scalars():
             detections_by_image.setdefault(det.image_id, []).append(det)
 
-    calibrations_by_image: dict[UUID, LarvaeCalibration] = {}
     if image_ids:
         for cal in (
             await db.execute(
@@ -426,42 +507,71 @@ async def load_batch_for_user(
         ).scalars():
             calibrations_by_image[cal.image_id] = cal
 
-    measurements_by_detection: dict[UUID, LarvaeMeasurement] = {}
-    all_det_ids = [d.id for dets in detections_by_image.values() for d in dets]
-    if all_det_ids:
-        for m in (
-            await db.execute(
-                select(LarvaeMeasurement).where(
-                    LarvaeMeasurement.detection_id.in_(all_det_ids)
-                )
+    if image_ids and summary:
+        for image_id, n in await db.execute(
+            select(LarvaeDetection.image_id, func.count(LarvaeDetection.id))
+            .where(LarvaeDetection.image_id.in_(image_ids))
+            .group_by(LarvaeDetection.image_id)
+        ):
+            detection_counts[image_id] = int(n)
+        stale_as_int = case((LarvaeMeasurement.is_stale.is_(True), 1), else_=0)
+        for image_id, n, n_stale in await db.execute(
+            select(
+                LarvaeDetection.image_id,
+                func.count(LarvaeMeasurement.id),
+                func.coalesce(func.sum(stale_as_int), 0),
             )
-        ).scalars():
-            measurements_by_detection[m.detection_id] = m
+            .join(LarvaeDetection, LarvaeDetection.id == LarvaeMeasurement.detection_id)
+            .where(LarvaeDetection.image_id.in_(image_ids))
+            .group_by(LarvaeDetection.image_id)
+        ):
+            measurement_counts[image_id] = (int(n) - int(n_stale), int(n_stale))
+        weight_pairs = [
+            (float(w), float(a or 0.0))
+            for w, a in await db.execute(
+                select(LarvaeMeasurement.weight_mg, LarvaeMeasurement.area_mm2)
+                .join(
+                    LarvaeDetection,
+                    LarvaeDetection.id == LarvaeMeasurement.detection_id,
+                )
+                .where(LarvaeDetection.image_id.in_(image_ids))
+                .where(LarvaeMeasurement.weight_mg.is_not(None))
+            )
+        ]
+    elif image_ids:
+        all_det_ids = [d.id for dets in detections_by_image.values() for d in dets]
+        if all_det_ids:
+            for m in (
+                await db.execute(
+                    select(LarvaeMeasurement).where(
+                        LarvaeMeasurement.detection_id.in_(all_det_ids)
+                    )
+                )
+            ).scalars():
+                measurements_by_detection[m.detection_id] = m
+        weight_pairs = [
+            (float(m.weight_mg), float(m.area_mm2 or 0.0))
+            for m in measurements_by_detection.values()
+            if m.weight_mg is not None
+        ]
 
     images: list[Any] = []
     for img in batch.images:
         dets = detections_by_image.get(img.id, [])
         cal_row = calibrations_by_image.get(img.id)
-
-        stored_anns = [_detection_to_stored_schema(d, organism) for d in dets]
         m_rows = [
             _measurement_to_schema(measurements_by_detection[d.id], measurement_schema)
             for d in dets
             if d.id in measurements_by_detection
         ]
-
-        # Build URLs for the editor + ruler flow. ``overlay_path`` in the DB
-        # is the relative ``{batch_id}/{stem}_overlay.png`` token; turn it into
-        # the API routes the frontend already knows how to fetch with auth.
-        overlay_url: str | None = None
-        warped_url: str | None = None
-        raw_url: str | None = None
-        if img.overlay_path:
-            stem = Path(img.overlay_path).name.removesuffix("_overlay.png")
-            overlay_url = f"/inference/results/{batch.id}/{stem}/overlay.png"
-            warped_url = f"/inference/results/{batch.id}/{stem}/warped.png"
-            raw_url = f"/analyses/{batch.id}/images/{img.id}/raw"
-
+        if summary:
+            det_count = detection_counts.get(img.id, 0)
+            measured, stale = measurement_counts.get(img.id, (0, 0))
+        else:
+            det_count = len(dets)
+            stale = sum(1 for m in m_rows if m.is_stale)
+            measured = len(m_rows) - stale
+        overlay_url, warped_url, raw_url = _image_urls(batch.id, img)
         images.append(
             image_schema(
                 image_id=str(img.id),
@@ -471,17 +581,16 @@ async def load_batch_for_user(
                 warped_url=warped_url,
                 raw_url=raw_url,
                 elapsed_secs=img.elapsed_secs,
-                detections=stored_anns,
+                detections=[_detection_to_stored_schema(d, organism) for d in dets],
                 calibration=_calibration_to_schema(cal_row) if cal_row else None,
                 measurements=m_rows,
+                sam_refined=bool(img.sam_refined),
+                detection_count=det_count,
+                measured_count=measured,
+                stale_count=stale,
             )
         )
 
-    weight_pairs: list[tuple[float, float]] = [
-        (float(m.weight_mg), float(m.area_mm2 or 0.0))
-        for m in measurements_by_detection.values()
-        if m.weight_mg is not None
-    ]
     weight_stats = _compute_weight_stats(weight_pairs) if weight_pairs else None
 
     snapshot = batch.config_snapshot or {}
@@ -493,9 +602,93 @@ async def load_batch_for_user(
         total_image_count=batch.total_image_count,
         detection_model=snapshot.get("detection_model"),
         sam_model=snapshot.get("sam_model"),
+        count_only=bool(snapshot.get("count_only", False)),
         images=images,
         weight_stats=weight_stats,
     )
+
+
+async def load_image_for_user(
+    batch_id: UUID, image_id: UUID, user_id: UUID, db: AsyncSession
+) -> LarvaeImageDetail | PupaeImageDetail | None:
+    """One image's detections, calibration and measurements (404 → ``None``)."""
+    row = (
+        await db.execute(
+            select(AnalysisImage, AnalysisBatch.organism_type)
+            .options(
+                defer(AnalysisImage.annotations, raiseload=True),
+                defer(AnalysisImage.edited_annotations, raiseload=True),
+            )
+            .join(AnalysisBatch, AnalysisImage.batch_id == AnalysisBatch.id)
+            .where(AnalysisImage.id == image_id)
+            .where(AnalysisImage.batch_id == batch_id)
+            .where(AnalysisBatch.user_id == user_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    img, organism_type = row
+    organism = organism_type if organism_type in ("larvae", "pupae") else "larvae"
+    _batch_schema, image_schema, _stored_schema, measurement_schema = (
+        _schemas_for_organism(organism)
+    )
+
+    dets = await list_detections_for_image(image_id, db)
+    measurements: dict[UUID, LarvaeMeasurement] = {}
+    if dets:
+        for m in (
+            await db.execute(
+                select(LarvaeMeasurement).where(
+                    LarvaeMeasurement.detection_id.in_([d.id for d in dets])
+                )
+            )
+        ).scalars():
+            measurements[m.detection_id] = m
+    m_rows = [
+        _measurement_to_schema(measurements[d.id], measurement_schema)
+        for d in dets
+        if d.id in measurements
+    ]
+    stale = sum(1 for m in m_rows if m.is_stale)
+    overlay_url, warped_url, raw_url = _image_urls(batch_id, img)
+    return image_schema(
+        image_id=str(img.id),
+        original_filename=img.original_filename,
+        total_weight_mg=img.total_weight_mg,
+        overlay_url=overlay_url,
+        warped_url=warped_url,
+        raw_url=raw_url,
+        elapsed_secs=img.elapsed_secs,
+        detections=[_detection_to_stored_schema(d, organism) for d in dets],
+        calibration=await load_calibration(image_id, db),
+        measurements=m_rows,
+        sam_refined=bool(img.sam_refined),
+        detection_count=len(dets),
+        measured_count=len(m_rows) - stale,
+        stale_count=stale,
+    )
+
+
+async def sync_image_count(image_id: UUID, db: AsyncSession) -> int:
+    """Set ``analysis_image.count`` to the current number of detections.
+
+    Polygon edits add and delete detections; without this the count shown in
+    Records, exports and the dashboard would stay at the model's first pass.
+    """
+    count = int(
+        (
+            await db.execute(
+                select(func.count(LarvaeDetection.id)).where(
+                    LarvaeDetection.image_id == image_id
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    await db.execute(
+        update(AnalysisImage).where(AnalysisImage.id == image_id).values(count=count)
+    )
+    return count
 
 
 def _detection_to_stored_schema(
@@ -736,9 +929,10 @@ async def list_detections_for_image(
     return list(
         (
             await db.execute(
-                select(LarvaeDetection)
-                .where(LarvaeDetection.image_id == image_id)
-                .order_by(LarvaeDetection.created_at)
+                select(LarvaeDetection).where(LarvaeDetection.image_id == image_id)
+                # ``id`` breaks created_at ties so "#12" is the same larva on
+                # every load.
+                .order_by(LarvaeDetection.created_at, LarvaeDetection.id)
             )
         ).scalars()
     )

@@ -1,5 +1,5 @@
 import './index.css';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
 
 import { AppShell } from '@/components/layout/AppShell';
@@ -12,24 +12,39 @@ import { BootProvider } from '@/providers/BootProvider';
 import { onForceLogout } from '@/services/http';
 import { startStageTracker, stopStageTracker } from '@/services/stageTracker';
 import { useProcessingStore } from '@/stores/processingStore';
+import { Spinner } from '@/components/common/Spinner';
 import HomePage from '@/pages/HomePage';
-import AnalyzePage from '@/pages/AnalyzePage';
-import UploadPage from '@/pages/UploadPage';
-import ProcessingPage from '@/pages/ProcessingPage';
-import ResultPage from '@/pages/ResultPage';
-import RecordedPage from '@/pages/RecordedPage';
-import ModelsPage from '@/pages/ModelsPage';
-import SettingsPage from '@/pages/SettingsPage';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import NotFoundPage from '@/pages/NotFoundPage';
+
+// Everything past the landing screens is split out, so the first paint does
+// not pay for the canvas editor (Konva), the upload flow or the settings
+// forms. Each chunk is fetched the first time its route is opened.
+const AnalyzePage = lazy(() => import('@/pages/AnalyzePage'));
+const UploadPage = lazy(() => import('@/pages/UploadPage'));
+const ProcessingPage = lazy(() => import('@/pages/ProcessingPage'));
+const ResultPage = lazy(() => import('@/pages/ResultPage'));
+const RecordedPage = lazy(() => import('@/pages/RecordedPage'));
+const ModelsPage = lazy(() => import('@/pages/ModelsPage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+
+function RouteFallback() {
+    return (
+        <div className="grid h-full min-h-[50vh] w-full place-items-center">
+            <Spinner />
+        </div>
+    );
+}
 
 // Root layout — wraps every page so ProcessingToast is always in router context
 function RootLayout() {
     return (
         <TooltipProvider delayDuration={300}>
             <Toaster />
-            <Outlet />
+            <Suspense fallback={<RouteFallback />}>
+                <Outlet />
+            </Suspense>
         </TooltipProvider>
     );
 }

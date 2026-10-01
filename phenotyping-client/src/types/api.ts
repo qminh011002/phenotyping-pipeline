@@ -82,6 +82,17 @@ export interface EggConfig {
 export type MwisScoreMetric = 'confidence_x_area' | 'confidence';
 export type CenterlineMethod = 'pipeline_compat' | 'hybrid' | 'legacy_dijkstra';
 
+/** Egg / neonate inference config — both organisms share the bbox pipeline. */
+export type BboxConfig = EggConfig;
+
+export interface PolygonSamConfig {
+    enabled: boolean;
+    model: string;
+    crop_padding: number;
+    confidence_threshold: number;
+    device?: Device | null;
+}
+
 export interface LarvaeConfig {
     model: string | null;
     device: Device;
@@ -106,7 +117,32 @@ export interface LarvaeConfig {
     centerline_n_output_points?: number;
     /** B-spline smoothing factor; null = scipy default (s = N) */
     centerline_smoothness?: number | null;
+    /** SAM polygon-refinement block (server config). */
+    sam?: PolygonSamConfig;
 }
+
+/** Body for PUT /config/larvae and PUT /config/pupae — every field optional. */
+export interface PolygonConfigUpdate {
+    centerline_method?: CenterlineMethod;
+    sam_enabled?: boolean;
+    device?: Device;
+    tile_size?: number;
+    overlap?: number;
+    confidence_threshold?: number;
+    min_mask_size?: number;
+    mwis_overlap_threshold?: number;
+    batch_size?: number;
+    calibration_object_w_mm?: number;
+    calibration_object_h_mm?: number;
+}
+
+/**
+ * How a larvae / pupae batch is processed.
+ * - `count`: detect + dedup only. Fast; the count is final. Sizes are
+ *   measured on demand from the result viewer.
+ * - `measure`: also refine outlines with SAM and measure every image.
+ */
+export type AnalysisMode = 'count' | 'measure';
 
 /** A 2D pixel-space point. */
 export type Point2D = [number, number];
@@ -151,6 +187,8 @@ export interface LarvaeDetectionResult {
     annotations: LarvaeAnnotation[];
     overlay_url: string;
     calibration?: CalibrationCorners | null;
+    /** True when SAM refined the polygons during this run. */
+    sam_refined?: boolean;
 }
 
 export interface LarvaeBatchDetectionResult {
@@ -225,6 +263,13 @@ export interface LarvaeImageDetail {
     detections: StoredLarvaeAnnotation[];
     calibration: CalibrationCorners | null;
     measurements: LarvaeMeasurement[];
+    /** Whether SAM has refined this image's model polygons. */
+    sam_refined: boolean;
+    /** Filled on every payload — including the summary one, where
+     *  `detections` / `measurements` are left empty. */
+    detection_count: number;
+    measured_count: number;
+    stale_count: number;
 }
 
 export interface LarvaeBatchDetail {
@@ -237,6 +282,8 @@ export interface LarvaeBatchDetail {
     detection_model: string | null;
     /** SAM model filename snapshotted at batch creation. Null on legacy batches. */
     sam_model: string | null;
+    /** True when the batch was processed count-only. */
+    count_only: boolean;
     images: LarvaeImageDetail[];
     weight_stats: WeightStats | null;
 }
@@ -267,6 +314,12 @@ export interface MeasureLarvaeRequest {
 export interface PolygonEdit {
     detection_id: string;
     polygon: LarvaePolygon;
+    /** With a `new:` id: re-create a deleted *model* detection (undo of a
+     *  saved delete) instead of adding a hand-drawn one. */
+    origin?: 'model' | 'user';
+    confidence?: number;
+    /** The model's original outline for a restored detection. */
+    baseline?: LarvaePolygon | null;
 }
 
 /** Body for PUT /analyses/{batch_id}/images/{image_id}/polygons */
@@ -280,6 +333,17 @@ export interface PolygonsUpdateResponse {
     image_id: string;
     updated: number;
     deleted: number;
+    /** Detections on the image after the edit. */
+    count: number;
+}
+
+/** Response for POST /analyses/{batch_id}/images/{image_id}/refine */
+export interface RefineResult {
+    image_id: string;
+    refined: number;
+    skipped: number;
+    failed: number;
+    total: number;
 }
 
 export interface LogEntry {
@@ -350,6 +414,8 @@ export interface AnalysisBatchSummary {
     failure_reason: string | null;
     /** Class names defined on the Analyze page; frozen for the batch. */
     classes: string[];
+    /** First completed image — for cover thumbnails. Set by list endpoints. */
+    cover_image_id?: string | null;
 }
 
 export interface AnalysisBatchDetail extends AnalysisBatchSummary {
@@ -373,6 +439,100 @@ export interface DashboardStats {
     total_eggs_counted: number;
     avg_confidence: number | null;
     avg_processing_time: number | null;
+    recent_analyses: AnalysisBatchSummary[];
+}
+
+export interface DashboardKpis {
+    batches: number;
+    images: number;
+    detections: number;
+    avg_count_per_image: number | null;
+    avg_confidence: number | null;
+    avg_secs_per_image: number | null;
+}
+
+export interface DashboardTimePoint {
+    bucket: string; // ISO 8601 — start of the day / week / month
+    organism: Organism;
+    batches: number;
+    images: number;
+    detections: number;
+    avg_secs_per_image: number | null;
+}
+
+export interface DashboardOrganismRow {
+    organism: Organism;
+    batches: number;
+    images: number;
+    detections: number;
+    avg_count_per_image: number | null;
+    avg_confidence: number | null;
+}
+
+export interface DashboardHistogramBin {
+    start: number;
+    end: number;
+    count: number;
+}
+
+export type SizeMetric = 'length_mm' | 'max_width_mm' | 'area_mm2' | 'weight_mg';
+
+export interface DashboardSizeStats {
+    organism: Organism;
+    metric: SizeMetric;
+    unit: string;
+    n: number;
+    mean: number | null;
+    median: number | null;
+    p5: number | null;
+    p95: number | null;
+    min: number | null;
+    max: number | null;
+    bins: DashboardHistogramBin[];
+}
+
+export interface DashboardBatchRow {
+    id: string;
+    name: string;
+    organism: Organism;
+    status: string;
+    created_at: string;
+    images: number;
+    total_count: number;
+    mean_count: number | null;
+    min_count: number | null;
+    max_count: number | null;
+    avg_confidence: number | null;
+    mean_length_mm: number | null;
+    measured_objects: number;
+}
+
+export interface DashboardAttention {
+    drafts: number;
+    failed: number;
+    needs_calibration: number;
+    unmeasured_images: number;
+    low_confidence_images: number;
+}
+
+export type DashboardBucket = 'day' | 'week' | 'month';
+
+export interface DashboardOverview {
+    days: number;
+    bucket: DashboardBucket;
+    range_start: string | null;
+    range_end: string;
+    kpis: DashboardKpis;
+    /** Same metrics for the preceding window; null for "all time". */
+    previous: DashboardKpis | null;
+    /** Start of every bucket in the window (ISO 8601), empty ones included. */
+    buckets: string[];
+    timeseries: DashboardTimePoint[];
+    organisms: DashboardOrganismRow[];
+    confidence_histogram: DashboardHistogramBin[];
+    sizes: DashboardSizeStats[];
+    batches: DashboardBatchRow[];
+    attention: DashboardAttention;
     recent_analyses: AnalysisBatchSummary[];
 }
 

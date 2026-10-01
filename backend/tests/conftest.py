@@ -82,7 +82,10 @@ def app():
     import app.database as _db_mod
 
     _mock_session = MagicMock()
-    _mock_session.execute = AsyncMock()
+    # A plain MagicMock result, so ``result.scalars()`` / ``.scalar_one_or_none()``
+    # are synchronous like the real SQLAlchemy Result (AsyncMock's default
+    # return value would make them coroutines).
+    _mock_session.execute = AsyncMock(return_value=MagicMock())
     _mock_session.commit = AsyncMock()
     _mock_session.rollback = AsyncMock()
     _mock_session.add = MagicMock()

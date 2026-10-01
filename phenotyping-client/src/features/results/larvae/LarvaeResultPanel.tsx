@@ -1,22 +1,31 @@
-// LarvaeResultPanel — larvae batch viewer + polygon/calibration editor.
+// LarvaeResultPanel — larvae / pupae batch viewer, polygon + calibration
+// editor, and the on-demand measuring step.
 //
-// Rendered by ResultViewer when the batch's organism_type is polygon-based
-// (larvae/pupae). Composes:
+// Rendered by ResultViewer when the batch's organism_type is polygon-based.
+// Composes:
 //   - LarvaePolygonEditor (image + polygons + calibration corner handles)
 //   - AnnotationToolbar (capability-driven; the same toolbar egg/neonate uses)
-//   - LarvaeSummaryPanel + LarvaeMeasurementTable + LarvaeCalibrationBanner
+//   - the inspector: count, Measure card, measurement table, weight, details
+//   - Filmstrip (every image of the batch with its count)
 //
-// Polygon editing (FE-033) and calibration editing (FE-034) share the same
-// save-then-remeasure flow.
+// Data: the batch opens on a summary payload (no polygons) and each image's
+// polygons are fetched when it is first shown, so opening a 300-image batch
+// costs the same as a 3-image one. Saves and measurements refresh only the
+// image they touched.
+//
+// Batches are processed count-only by default; length / width / area /
+// weight are computed here when the user asks (see measureFlow.ts).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Inbox, RefreshCw } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Download, ImagePlus, Inbox, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Button } from '@/components/ui/button';
-import { Spinner } from '@/components/common/Spinner';
+import { SegmentedControl } from '@/components/common';
 import { EmptyState } from '@/components/common/EmptyState';
+import { Spinner } from '@/components/common/Spinner';
+import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import {
     AlertDialog,
@@ -28,22 +37,29 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { addImagesPath, batchPath } from '@/features/recorded/lib/paths';
+import { invalidateAuthedImages } from '@/hooks/useAuthedImage';
+import { readPersistentFlag, usePersistentFlag } from '@/hooks/usePersistentFlag';
+import { queryClient } from '@/lib/queryClient';
 import { cn } from '@/lib/utils';
 
 import {
     detectCalibration,
+    downloadLarvaeCsv,
     finishBatch,
     getAnalysesRawUrl,
-    getLarvaeBatch,
+    getLarvaeBatchSummary,
+    getLarvaeImage,
+    getPolygonConfig,
     measureLarvae,
     saveCalibration,
     savePolygonEdits,
 } from '@/services/api';
 
 import type {
-    CalibrationCorners,
     LarvaeBatchDetail,
     LarvaeImageDetail,
+    LarvaeMeasurement,
     LarvaePolygon,
     Organism,
     Point2D,
@@ -52,20 +68,21 @@ import type {
 } from '@/types/api';
 
 import { AnnotationToolbar, type AnnotationToolId } from '../components/AnnotationToolbar';
+import { Filmstrip, type FilmstripItem } from '../components/Filmstrip';
 import { ResultViewerHeader } from '../components/ResultViewerHeader';
+import { ShortcutsDialog } from '../components/ShortcutsDialog';
 import { LarvaePolygonEditor, type LarvaePolygonTool } from './LarvaePolygonEditor';
-import { LarvaeInferenceInfoPanel } from './LarvaeInferenceInfoPanel';
+import { LarvaeCalibrationDetails, LarvaeInferenceInfoPanel } from './LarvaeInferenceInfoPanel';
 import { LarvaeMeasurementTable } from './LarvaeMeasurementTable';
+import { LarvaeMeasureCard, type MeasureRun } from './LarvaeMeasureCard';
 import { LarvaeSummaryPanel } from './LarvaeSummaryPanel';
+import { LarvaeWeightPanel } from './LarvaeWeightPanel';
 import { LarvaeCalibrationBanner } from './LarvaeCalibrationBanner';
 import { CalibrationCornerEditorChrome } from './CalibrationCornerEditor';
 import { CalibrationManualForm } from './CalibrationManualForm';
 import type { Corners } from './calibrationMath';
-import {
-    usePolygonEdits,
-    workingPolygonToStored,
-    type WorkingPolygon,
-} from './usePolygonEdits';
+import { calibrationUsable, measureImage, needsMeasuring } from './measureFlow';
+import { usePolygonEdits, type WorkingPolygon } from './usePolygonEdits';
 
 const SMOOTH_MIN = 0;
 const SMOOTH_MAX = 5;
@@ -75,33 +92,88 @@ const SMOOTH_DEFAULT = 1;
 const DEFAULT_CAL_W_MM = 405;
 const DEFAULT_CAL_H_MM = 317;
 
+/** Debounce between the end of an edit gesture and the autosave request. */
+const AUTOSAVE_DELAY_MS = 400;
+/** Grace period before a flush saves — lets a just-finished save's id remap
+ *  land first, so freshly persisted polygons are never sent twice. */
+const FLUSH_SETTLE_MS = 60;
+const FLUSH_TIMEOUT_MS = 15_000;
+
+const REFINE_PREF_KEY = 'phenotyping.measure.refine';
+const CENTERLINES_PREF_KEY = 'phenotyping.viewer.centerlines';
+const FILMSTRIP_PREF_KEY = 'phenotyping.filmstrip.collapsed';
+
+const NO_DETECTIONS: StoredLarvaeAnnotation[] = [];
+const NO_MEASUREMENTS: LarvaeMeasurement[] = [];
+const NO_POLYGONS: WorkingPolygon[] = [];
+
 interface LarvaeResultPanelProps {
     organism: Organism;
     className?: string;
 }
 
 type CalibrationMode = 'idle' | 'corners' | 'manual';
+type InspectorTab = 'table' | 'weight' | 'details';
+
+const INSPECTOR_TABS: Array<{ value: InspectorTab; label: string }> = [
+    { value: 'table', label: 'Measurements' },
+    { value: 'weight', label: 'Weight' },
+    { value: 'details', label: 'Details' },
+];
 
 export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProps) {
     const navigate = useNavigate();
     const { batchId, imageId } = useParams<{ batchId: string; imageId?: string }>();
 
-    const [batch, setBatch] = useState<LarvaeBatchDetail | null>(null);
+    // Batch + one light row per image (counts, calibration — no polygons).
+    const [summary, setSummary] = useState<LarvaeBatchDetail | null>(null);
+    // Full payload of every image opened so far, keyed by image id.
+    const [details, setDetails] = useState<Record<string, LarvaeImageDetail>>({});
     const [loading, setLoading] = useState(true);
+    const [imageLoadFailed, setImageLoadFailed] = useState<string | null>(null);
+
     const [selectedDetectionId, setSelectedDetectionId] = useState<string | null>(null);
-    const [activeTool, setActiveTool] = useState<AnnotationToolId | null>('select');
+    const [activeTool, setActiveTool] = useState<AnnotationToolId>('select');
     const [smoothTolerance, setSmoothTolerance] = useState(SMOOTH_DEFAULT);
-    const [smoothPreview, setSmoothPreview] = useState<WorkingPolygon['polygon'] | null>(
-        null,
-    );
+    const [smoothPreview, setSmoothPreview] = useState<WorkingPolygon['polygon'] | null>(null);
     const [resetDialogOpen, setResetDialogOpen] = useState(false);
     const [dirtyNavDialogOpen, setDirtyNavDialogOpen] = useState(false);
     const [pendingNavIdx, setPendingNavIdx] = useState<number | null>(null);
+    const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const [savingPolygons, setSavingPolygons] = useState(false);
-    const [polygonInteractionInProgress, setPolygonInteractionInProgress] =
-        useState(false);
-    const [recalculatingMeasurements, setRecalculatingMeasurements] = useState(false);
+    const [polygonInteractionInProgress, setPolygonInteractionInProgress] = useState(false);
     const [finishing, setFinishing] = useState(false);
+    const [downloadingCsv, setDownloadingCsv] = useState(false);
+    const [inspectorTab, setInspectorTab] = useState<InspectorTab>('table');
+
+    // ── Measuring (on demand) ───────────────────────────────────────────────
+    const [run, setRun] = useState<MeasureRun | null>(null);
+    const cancelRunRef = useRef(false);
+    // The SAM choice: what the user last picked, else the server's setting.
+    const [refineChoice, setRefineChoice] = useState<boolean | null>(() =>
+        readPersistentFlag(REFINE_PREF_KEY),
+    );
+    const configQuery = useQuery({
+        queryKey: ['inference-config', organism],
+        queryFn: ({ signal }) => getPolygonConfig(organism as 'larvae' | 'pupae', signal),
+        staleTime: 60_000,
+        enabled: refineChoice === null,
+    });
+    const refine = refineChoice ?? configQuery.data?.sam?.enabled ?? false;
+    const handleRefineChange = useCallback((next: boolean) => {
+        setRefineChoice(next);
+        try {
+            window.localStorage.setItem(REFINE_PREF_KEY, next ? '1' : '0');
+        } catch {
+            // Preference just won't persist.
+        }
+    }, []);
+
+    const [showCenterlines, setShowCenterlines] = usePersistentFlag(CENTERLINES_PREF_KEY, true);
+    const [filmstripCollapsed, setFilmstripCollapsed] = usePersistentFlag(
+        FILMSTRIP_PREF_KEY,
+        false,
+    );
 
     // ── Calibration editor state (FE-034) ───────────────────────────────────
     const [calMode, setCalMode] = useState<CalibrationMode>('idle');
@@ -109,12 +181,15 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     const [savingCal, setSavingCal] = useState(false);
     const [redetecting, setRedetecting] = useState(false);
     // Ctrl/Cmd held → hide polygon overlay so the raw image is visible.
-    // Mirrors ResultViewer's ctrlHeld behavior for egg/neonate.
+    // Mirrors ResultViewer's ctrlHeld behavior for egg/neonate. The eye
+    // toggle in the zoom bar is the sticky version of the same thing.
     const [ctrlHeld, setCtrlHeld] = useState(false);
-    // Bumped after the backend re-renders ``_warped.png`` / ``_overlay.png``
-    // so the editor's blob fetch bypasses cached responses.
+    const [overlayHidden, setOverlayHidden] = useState(false);
+    // Bumped after the backend re-renders ``_warped.png`` so the editor's
+    // blob fetch bypasses cached responses.
     const [imageCacheKey, setImageCacheKey] = useState(0);
 
+    // ── Load the batch summary ──────────────────────────────────────────────
     useEffect(() => {
         if (!batchId) {
             navigate('/', { replace: true });
@@ -123,10 +198,10 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         let cancelled = false;
         const controller = new AbortController();
         setLoading(true);
-        getLarvaeBatch(batchId, controller.signal)
+        setDetails({});
+        getLarvaeBatchSummary(batchId, controller.signal)
             .then((detail) => {
-                if (cancelled) return;
-                setBatch(detail);
+                if (!cancelled) setSummary(detail);
             })
             .catch((err) => {
                 if (cancelled) return;
@@ -142,47 +217,95 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         };
     }, [batchId, navigate]);
 
-    const buildUrl = useCallback(
-        (b: string, i: string) => `/analyze/results/${b}/images/${i}`,
-        [],
-    );
+    const buildUrl = useCallback((b: string, i: string) => `/analyze/results/${b}/images/${i}`, []);
 
-    const reloadBatch = useCallback(async () => {
+    const refreshSummary = useCallback(async () => {
         if (!batchId) return;
         try {
-            const detail = await getLarvaeBatch(batchId);
-            setBatch(detail);
+            setSummary(await getLarvaeBatchSummary(batchId));
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Could not refresh batch');
         }
     }, [batchId]);
 
+    /** Store one image's fresh server state and mirror it into its summary row. */
+    const applyImage = useCallback((detail: LarvaeImageDetail) => {
+        setDetails((prev) => ({ ...prev, [detail.image_id]: detail }));
+        setSummary((prev) => {
+            if (!prev) return prev;
+            const idx = prev.images.findIndex((row) => row.image_id === detail.image_id);
+            if (idx < 0) return prev;
+            const images = prev.images.slice();
+            images[idx] = { ...detail, detections: NO_DETECTIONS, measurements: NO_MEASUREMENTS };
+            return { ...prev, images };
+        });
+    }, []);
+
     const currentIndex = useMemo(() => {
-        if (!batch || !imageId) return 0;
-        const i = batch.images.findIndex((img) => img.image_id === imageId);
+        if (!summary || !imageId) return 0;
+        const i = summary.images.findIndex((img) => img.image_id === imageId);
         return i >= 0 ? i : 0;
-    }, [batch, imageId]);
+    }, [summary, imageId]);
 
     useEffect(() => {
-        if (!batch || batch.images.length === 0) return;
-        const valid = imageId && batch.images.some((img) => img.image_id === imageId);
+        if (!summary || summary.images.length === 0) return;
+        const valid = imageId && summary.images.some((img) => img.image_id === imageId);
         if (!valid) {
-            navigate(buildUrl(batch.batch_id, batch.images[0].image_id), {
-                replace: true,
-            });
+            navigate(buildUrl(summary.batch_id, summary.images[0].image_id), { replace: true });
         }
-    }, [batch, imageId, navigate, buildUrl]);
+    }, [summary, imageId, navigate, buildUrl]);
 
     useEffect(() => {
         setSelectedDetectionId(null);
         setSmoothPreview(null);
         setCalMode('idle');
         setCalCorners(null);
+        setActiveTool((cur) => (cur === 'erase' || cur === 'addPolygon' ? cur : 'select'));
     }, [imageId]);
 
-    const currentImage: LarvaeImageDetail | null = batch?.images[currentIndex] ?? null;
+    const currentRow = summary?.images[currentIndex] ?? null;
+    const currentImageId = currentRow?.image_id ?? null;
+    const currentImage: LarvaeImageDetail | null =
+        (currentImageId && details[currentImageId]) || null;
 
-    const detections = useMemo(() => currentImage?.detections ?? [], [currentImage]);
+    // ── Lazy-load the image on screen, then warm the next one ───────────────
+    const detailsRef = useRef(details);
+    useLayoutEffect(() => {
+        detailsRef.current = details;
+    }, [details]);
+
+    const loadImage = useCallback(
+        (targetId: string, signal?: AbortSignal) => {
+            if (!batchId) return Promise.resolve();
+            return getLarvaeImage(batchId, targetId, signal).then((detail) => {
+                // Don't clobber state that a save/measure put there meanwhile.
+                setDetails((prev) => (prev[targetId] ? prev : { ...prev, [targetId]: detail }));
+            });
+        },
+        [batchId],
+    );
+
+    useEffect(() => {
+        if (!summary || !currentImageId || detailsRef.current[currentImageId]) return;
+        const controller = new AbortController();
+        setImageLoadFailed(null);
+        loadImage(currentImageId, controller.signal).catch((err) => {
+            if (controller.signal.aborted) return;
+            setImageLoadFailed(currentImageId);
+            toast.error(err instanceof Error ? err.message : 'Could not load image');
+        });
+        return () => controller.abort();
+    }, [summary, currentImageId, loadImage]);
+
+    const nextImageId = summary?.images[currentIndex + 1]?.image_id ?? null;
+    useEffect(() => {
+        if (!currentImage || !nextImageId || detailsRef.current[nextImageId]) return;
+        // Best effort — a failure here surfaces when the user navigates.
+        const timer = setTimeout(() => void loadImage(nextImageId).catch(() => {}), 150);
+        return () => clearTimeout(timer);
+    }, [currentImage, nextImageId, loadImage]);
+
+    const detections = currentImage?.detections ?? NO_DETECTIONS;
     // Migrate the current selection when a freshly-drawn polygon's client-side
     // `new:N` id is replaced by the server UUID after autosave — otherwise the
     // selection (and thus Delete / panel actions) would point at an id that no
@@ -197,7 +320,6 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     });
     const {
         polygons: workingPolygons,
-        isDirty,
         canUndo,
         canRedo,
         undo,
@@ -210,19 +332,28 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         addPolygon,
         simplifySelected,
         previewSimplify,
-        resetToBaseline,
+        resetToModel,
+        differsFromModel,
+        syncFromDetections,
     } = edits;
 
-    const polygonTool: LarvaePolygonTool = activeTool === 'addPolygon' ? 'draw' : 'select';
-    const hasPersistablePolygonEdits = useMemo(
+    const polygonTool: LarvaePolygonTool =
+        activeTool === 'addPolygon' ? 'draw' : activeTool === 'erase' ? 'erase' : 'select';
+    // Edits the server does not have yet. Compared against the stored
+    // detections, so it is true from the first changed vertex until the save
+    // that carries it has been acknowledged.
+    const dirty = useMemo(
         () => hasChangedPersistablePolygons(workingPolygons, detections),
         [workingPolygons, detections],
     );
-    const currentMeasurementsStale = useMemo(
-        () => currentImage?.measurements.some((m) => m.is_stale) ?? false,
-        [currentImage],
+    const measurements = currentImage?.measurements ?? NO_MEASUREMENTS;
+    const measurementsStale = useMemo(
+        () =>
+            measurements.some((m) => m.is_stale) ||
+            (measurements.length > 0 && measurements.length < detections.length),
+        [measurements, detections],
     );
-    const measurementsNeedRefresh = isDirty || currentMeasurementsStale;
+    const outOfDate = measurements.length > 0 && (dirty || measurementsStale);
 
     useEffect(() => {
         if (activeTool !== 'smooth') {
@@ -230,8 +361,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             return;
         }
         if (!selectedDetectionId) return;
-        const next = previewSimplify(selectedDetectionId, smoothTolerance);
-        setSmoothPreview(next);
+        setSmoothPreview(previewSimplify(selectedDetectionId, smoothTolerance));
     }, [activeTool, smoothTolerance, selectedDetectionId, previewSimplify]);
 
     const applySmooth = useCallback(() => {
@@ -247,104 +377,224 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     }, []);
 
     // ── Save polygons; measurements are recalculated explicitly ─────────────
-    const handleSave = useCallback(async () => {
-        if (!batch || !currentImage || savingPolygons) return false;
-        if (!isDirty) return true;
+    const savePromiseRef = useRef<Promise<boolean> | null>(null);
+    const handleSave = useCallback((): Promise<boolean> => {
+        if (savePromiseRef.current) return savePromiseRef.current;
+        if (!batchId || !currentImage) return Promise.resolve(true);
 
-        let polygonEdits: PolygonEdit[];
-        let deletedDetectionIds: string[];
-        let userDrawnCount: number;
+        let built: ReturnType<typeof buildPolygonEdits>;
         try {
-            ({ polygonEdits, deletedDetectionIds, userDrawnCount } = buildPolygonEdits(
-                workingPolygons,
-                detections,
-            ));
+            built = buildPolygonEdits(workingPolygons, detections);
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Invalid polygon edit');
-            return false;
+            return Promise.resolve(false);
+        }
+        const { polygonEdits, deletedDetectionIds, userDrawnCount } = built;
+        if (polygonEdits.length === 0 && deletedDetectionIds.length === 0) {
+            return Promise.resolve(true);
         }
 
-        if (polygonEdits.length === 0 && deletedDetectionIds.length === 0) return true;
-
-        setSavingPolygons(true);
-        try {
-            await savePolygonEdits(batch.batch_id, currentImage.image_id, {
-                polygons: polygonEdits,
-                deleted_detection_ids: deletedDetectionIds,
-            });
-            if (userDrawnCount > 0 || deletedDetectionIds.length > 0) {
-                const refreshed = await getLarvaeBatch(batch.batch_id);
-                setBatch(refreshed);
-            } else {
-                setBatch((prev) =>
-                    mergePolygonSaveUpdate(prev, currentImage.image_id, polygonEdits),
-                );
+        const targetId = currentImage.image_id;
+        const promise = (async () => {
+            setSavingPolygons(true);
+            try {
+                await savePolygonEdits(batchId, targetId, {
+                    polygons: polygonEdits,
+                    deleted_detection_ids: deletedDetectionIds,
+                });
+                // The stored overlay is re-rendered lazily; drop cached copies,
+                // and mark cached batch views (Records, dashboard) stale.
+                invalidateAuthedImages(`${targetId}/thumbnail?variant=overlay`);
+                markBatchCachesStale(batchId);
+                if (userDrawnCount > 0 || deletedDetectionIds.length > 0) {
+                    // New rows got server ids / rows disappeared — take the
+                    // image's fresh state (one image, not the whole batch).
+                    applyImage(await getLarvaeImage(batchId, targetId));
+                } else {
+                    const prev = detailsRef.current[targetId];
+                    if (prev) applyImage(mergePolygonSave(prev, polygonEdits));
+                }
+                return true;
+            } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Failed to save polygons');
+                return false;
+            } finally {
+                savePromiseRef.current = null;
+                setSavingPolygons(false);
             }
-            return true;
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Failed to save polygons');
-            return false;
-        } finally {
-            setSavingPolygons(false);
-        }
-    }, [batch, currentImage, isDirty, workingPolygons, detections, savingPolygons]);
+        })();
+        savePromiseRef.current = promise;
+        return promise;
+    }, [batchId, currentImage, workingPolygons, detections, applyImage]);
+
+    const handleSaveRef = useRef(handleSave);
+    useLayoutEffect(() => {
+        handleSaveRef.current = handleSave;
+    }, [handleSave]);
 
     // Autosave persisted polygon edits only after an edit gesture ends. Measurement
     // is intentionally manual: dragging vertices should not block on
     // length/weight recalculation.
-    const handleSaveRef = useRef(handleSave);
     useEffect(() => {
-        handleSaveRef.current = handleSave;
-    }, [handleSave]);
+        if (!dirty || savingPolygons || polygonInteractionInProgress) return;
+        const timer = setTimeout(() => void handleSaveRef.current(), AUTOSAVE_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [dirty, savingPolygons, polygonInteractionInProgress]);
+
+    // ── Flush: "make sure the server has every edit, then tell me" ──────────
+    // Navigation, Finish and Measure all wait on this instead of asking the
+    // user to save. It is driven by committed state (not by awaiting the save
+    // promise) so a second save can never start from a stale snapshot.
+    const flushWaitersRef = useRef<Array<(ok: boolean) => void>>([]);
+    const [flushTick, setFlushTick] = useState(0);
+    const settleFlush = useCallback((ok: boolean) => {
+        const waiters = flushWaitersRef.current;
+        flushWaitersRef.current = [];
+        for (const resolve of waiters) resolve(ok);
+    }, []);
+    const flushPendingEdits = useCallback((): Promise<boolean> => {
+        return new Promise<boolean>((resolve) => {
+            const timeout = setTimeout(() => {
+                flushWaitersRef.current = flushWaitersRef.current.filter((w) => w !== done);
+                resolve(false);
+            }, FLUSH_TIMEOUT_MS);
+            const done = (ok: boolean) => {
+                clearTimeout(timeout);
+                resolve(ok);
+            };
+            flushWaitersRef.current.push(done);
+            setFlushTick((t) => t + 1);
+        });
+    }, []);
     useEffect(() => {
-        if (
-            !hasPersistablePolygonEdits ||
-            savingPolygons ||
-            polygonInteractionInProgress
-        ) {
+        if (flushWaitersRef.current.length === 0) return;
+        if (savingPolygons || polygonInteractionInProgress) return;
+        if (!dirty) {
+            settleFlush(true);
             return;
         }
         const timer = setTimeout(() => {
-            void handleSaveRef.current();
-        }, 400);
+            void handleSaveRef.current().then((ok) => {
+                if (!ok) settleFlush(false);
+            });
+        }, FLUSH_SETTLE_MS);
         return () => clearTimeout(timer);
-    }, [hasPersistablePolygonEdits, savingPolygons, polygonInteractionInProgress]);
+    }, [flushTick, dirty, savingPolygons, polygonInteractionInProgress, settleFlush]);
+    // Never leave a caller hanging if the panel unmounts mid-flush.
+    useEffect(() => () => settleFlush(false), [settleFlush]);
 
-    const runMeasurementRefresh = useCallback(async () => {
-        if (!currentImage || recalculatingMeasurements) return false;
-        if (!currentImage.calibration) {
-            toast.error('Calibration is required before measurements can run.');
-            return false;
-        }
-        setRecalculatingMeasurements(true);
-        try {
-            const result = await measureLarvae(currentImage.image_id);
-            setBatch((prev) => mergeMeasurementUpdate(prev, currentImage.image_id, result));
-            return true;
-        } catch (err) {
-            toast.error(
-                err instanceof Error ? err.message : 'Failed to recalculate measurements',
+    // ── Measuring ───────────────────────────────────────────────────────────
+    const summaryRef = useRef(summary);
+    const currentImageIdRef = useRef(currentImageId);
+    const syncFromDetectionsRef = useRef(syncFromDetections);
+    useLayoutEffect(() => {
+        summaryRef.current = summary;
+        currentImageIdRef.current = currentImageId;
+        syncFromDetectionsRef.current = syncFromDetections;
+    }, [summary, currentImageId, syncFromDetections]);
+
+    /** Take a server-side change to an image (polygons may have been rewritten). */
+    const adoptServerImage = useCallback(
+        (detail: LarvaeImageDetail, polygonsChanged: boolean) => {
+            applyImage(detail);
+            if (!polygonsChanged) return;
+            invalidateAuthedImages(`${detail.image_id}/thumbnail?variant=overlay`);
+            if (detail.image_id === currentImageIdRef.current) {
+                // The working set must follow, or autosave would write the old
+                // outlines straight back over the refined ones.
+                syncFromDetectionsRef.current(detail.detections);
+                setImageCacheKey((k) => k + 1);
+                setSelectedDetectionId(null);
+            }
+        },
+        [applyImage],
+    );
+
+    const runMeasure = useCallback(
+        async (scope: 'image' | 'batch', refineOverride?: boolean) => {
+            const useRefine = refineOverride ?? refine;
+            const batch = summaryRef.current;
+            if (!batch || run) return;
+            const startId = currentImageIdRef.current;
+            let targets = batch.images.filter((row) =>
+                scope === 'image' ? row.image_id === startId : needsMeasuring(row),
             );
-            return false;
-        } finally {
-            setRecalculatingMeasurements(false);
-        }
-    }, [currentImage, recalculatingMeasurements]);
+            if (scope === 'batch' && targets.length === 0) {
+                targets = batch.images.filter((row) => row.detection_count > 0);
+            }
+            if (targets.length === 0) return;
 
-    const handleRecalculateMeasurements = useCallback(async () => {
-        if (savingPolygons || recalculatingMeasurements) return;
-        if (isDirty) {
-            const saved = await handleSave();
-            if (!saved) return;
-        }
-        await runMeasurementRefresh();
-    }, [
-        handleSave,
-        isDirty,
-        recalculatingMeasurements,
-        runMeasurementRefresh,
-        savingPolygons,
-    ]);
+            cancelRunRef.current = false;
+            let measured = 0;
+            let needCalibration = 0;
+            let processed = 0;
+            try {
+                for (const target of targets) {
+                    if (cancelRunRef.current) break;
+                    const targetId = target.image_id;
+                    setRun({
+                        scope,
+                        step: 'measure',
+                        done: processed,
+                        total: targets.length,
+                        filename: target.original_filename,
+                        imageId: targetId,
+                        cancelling: false,
+                    });
+                    if (targetId === currentImageIdRef.current) {
+                        const saved = await flushPendingEdits();
+                        if (!saved)
+                            throw new Error('Could not save your edits — measuring stopped.');
+                    }
+                    // Freshest row: an earlier step or a save may have changed it.
+                    const row =
+                        summaryRef.current?.images.find((r) => r.image_id === targetId) ?? target;
+                    const result = await measureImage(batch.batch_id, row, {
+                        refine: useRefine,
+                        onStep: (step) => setRun((prev) => (prev ? { ...prev, step } : prev)),
+                    });
+                    adoptServerImage(result.image, result.polygonsChanged);
+                    processed += 1;
+                    if (result.outcome === 'measured') measured += 1;
+                    else if (result.outcome === 'needs_calibration') needCalibration += 1;
+                }
+            } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Measuring failed');
+                setRun(null);
+                void refreshSummary();
+                return;
+            }
+            setRun(null);
+            // Batch weight statistics depend on every measured image.
+            void refreshSummary();
+            markBatchCachesStale(batch.batch_id);
+
+            if (scope === 'image') {
+                if (measured === 1) toast.success('Measured');
+                else if (needCalibration === 1) {
+                    toast.warning('No calibration found — set the scale to measure this image.');
+                    setInspectorTab('details');
+                }
+                return;
+            }
+            const stopped = cancelRunRef.current && processed < targets.length;
+            const parts = [`Measured ${measured} of ${targets.length} images`];
+            if (needCalibration > 0) {
+                parts.push(
+                    `${needCalibration} need${needCalibration === 1 ? 's' : ''} calibration`,
+                );
+            }
+            if (stopped) parts.push('stopped');
+            if (needCalibration > 0 || stopped) toast.warning(parts.join(' · '));
+            else toast.success(parts.join(' · '));
+        },
+        [run, refine, flushPendingEdits, adoptServerImage, refreshSummary],
+    );
+
+    const cancelRun = useCallback(() => {
+        cancelRunRef.current = true;
+        setRun((prev) => (prev ? { ...prev, cancelling: true } : prev));
+    }, []);
 
     // ── Calibration: enter / cancel / save ──────────────────────────────────
     const enterCornerMode = useCallback(() => {
@@ -371,30 +621,20 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setActiveTool('select');
     }, []);
 
-    const remeasureCurrent = useCallback(
-        async (imageIdInner: string, calibrationFromSave: CalibrationCorners) => {
-            const result = await measureLarvae(imageIdInner);
-            setBatch((prev) => {
-                if (!prev) return prev;
-                const idx = prev.images.findIndex((i) => i.image_id === imageIdInner);
-                if (idx < 0) return prev;
-                const target = prev.images[idx];
-                const nextImage: LarvaeImageDetail = {
-                    ...target,
-                    calibration: calibrationFromSave,
-                    measurements: result.measurements,
-                };
-                const nextImages = prev.images.slice();
-                nextImages[idx] = nextImage;
-                return { ...prev, images: nextImages };
-            });
+    /** After a calibration change: sizes follow the new scale. */
+    const remeasureAfterCalibration = useCallback(
+        async (targetId: string) => {
+            if (!batchId) return;
+            await measureLarvae(targetId);
+            adoptServerImage(await getLarvaeImage(batchId, targetId), true);
+            void refreshSummary();
         },
-        [],
+        [batchId, adoptServerImage, refreshSummary],
     );
 
     const handleSaveCornerCalibration = useCallback(
         async (corners: Corners) => {
-            if (!currentImage || !batch) return;
+            if (!currentImage) return;
             let sanitizedCorners: Corners;
             try {
                 sanitizedCorners = sanitizeCorners(corners);
@@ -404,28 +644,20 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             }
             setSavingCal(true);
             try {
+                if (!(await flushPendingEdits())) return;
+                // Backend re-renders the warped image and moves the polygons
+                // into the new frame.
                 await saveCalibration(currentImage.image_id, { corners: sanitizedCorners });
-                // Backend re-rendered the warped overlay + polygons in the
-                // new frame; refetch so detections / urls reflect that.
-                const refreshed = await getLarvaeBatch(batch.batch_id);
-                setBatch(refreshed);
-                setImageCacheKey((k) => k + 1);
-                // Recompute measurements for the current image now that
-                // polygons live in a new warped space.
-                await measureLarvae(currentImage.image_id);
-                const refreshedAgain = await getLarvaeBatch(batch.batch_id);
-                setBatch(refreshedAgain);
+                await remeasureAfterCalibration(currentImage.image_id);
                 toast.success('Calibration saved · measurements refreshed');
                 exitCalibration();
             } catch (err) {
-                toast.error(
-                    err instanceof Error ? err.message : 'Failed to save calibration',
-                );
+                toast.error(err instanceof Error ? err.message : 'Failed to save calibration');
             } finally {
                 setSavingCal(false);
             }
         },
-        [currentImage, batch, exitCalibration],
+        [currentImage, flushPendingEdits, remeasureAfterCalibration, exitCalibration],
     );
 
     const handleSaveManualCalibration = useCallback(
@@ -433,73 +665,78 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             if (!currentImage) return;
             setSavingCal(true);
             try {
-                const updated = await saveCalibration(currentImage.image_id, {
+                if (!(await flushPendingEdits())) return;
+                await saveCalibration(currentImage.image_id, {
                     mm_per_px_x: mmX,
                     mm_per_px_y: mmY,
                 });
-                await remeasureCurrent(currentImage.image_id, updated);
+                await remeasureAfterCalibration(currentImage.image_id);
                 toast.success('Calibration saved · measurements refreshed');
                 exitCalibration();
             } catch (err) {
-                toast.error(
-                    err instanceof Error ? err.message : 'Failed to save calibration',
-                );
+                toast.error(err instanceof Error ? err.message : 'Failed to save calibration');
             } finally {
                 setSavingCal(false);
             }
         },
-        [currentImage, remeasureCurrent, exitCalibration],
+        [currentImage, flushPendingEdits, remeasureAfterCalibration, exitCalibration],
     );
 
     const handleRedetect = useCallback(async () => {
-        if (!currentImage) return;
+        if (!currentImage || !batchId) return;
         setRedetecting(true);
         try {
+            if (!(await flushPendingEdits())) return;
             const updated = await detectCalibration(currentImage.image_id);
-            await remeasureCurrent(currentImage.image_id, updated);
-            if (updated.detection_status === 'detected') {
-                toast.success('Calibration re-detected');
+            if (calibrationUsable(updated)) {
+                await remeasureAfterCalibration(currentImage.image_id);
+                toast.success('Calibration detected · measurements refreshed');
             } else {
+                adoptServerImage(await getLarvaeImage(batchId, currentImage.image_id), true);
                 toast.warning('Auto-detection still failed — try editing corners or manual.');
             }
         } catch (err) {
-            toast.error(
-                err instanceof Error ? err.message : 'Failed to re-detect calibration',
-            );
+            toast.error(err instanceof Error ? err.message : 'Failed to re-detect calibration');
         } finally {
             setRedetecting(false);
         }
-    }, [currentImage, remeasureCurrent]);
+    }, [currentImage, batchId, flushPendingEdits, remeasureAfterCalibration, adoptServerImage]);
 
     // ── Reset confirmation ─────────────────────────────────────────────────
     const handleResetConfirmed = useCallback(() => {
-        resetToBaseline();
+        resetToModel();
         setSelectedDetectionId(null);
         setResetDialogOpen(false);
         toast.success('Reset to model output');
-    }, [resetToBaseline]);
+    }, [resetToModel]);
 
-    // ── Dirty nav guard ────────────────────────────────────────────────────
+    // ── Navigation (edits are flushed first; the dialog is the fallback) ────
     const navigateToIndex = useCallback(
         (idx: number) => {
-            if (!batch) return;
-            const target = batch.images[idx];
-            if (!target) return;
+            const batch = summaryRef.current;
+            const target = batch?.images[idx];
+            if (!batch || !target) return;
             navigate(buildUrl(batch.batch_id, target.image_id));
         },
-        [batch, navigate, buildUrl],
+        [navigate, buildUrl],
     );
 
     const requestNavigate = useCallback(
         (idx: number) => {
-            if (!isDirty) {
+            if (!dirty && !savingPolygons) {
                 navigateToIndex(idx);
                 return;
             }
-            setPendingNavIdx(idx);
-            setDirtyNavDialogOpen(true);
+            void flushPendingEdits().then((ok) => {
+                if (ok) {
+                    navigateToIndex(idx);
+                } else {
+                    setPendingNavIdx(idx);
+                    setDirtyNavDialogOpen(true);
+                }
+            });
         },
-        [isDirty, navigateToIndex],
+        [dirty, savingPolygons, flushPendingEdits, navigateToIndex],
     );
 
     const confirmDiscardNav = useCallback(() => {
@@ -513,15 +750,29 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setPendingNavIdx(null);
     }, []);
 
+    /** Leave the viewer for `path` once edits are safe. */
+    const leaveTo = useCallback(
+        (path: string) => {
+            if (!dirty && !savingPolygons) {
+                navigate(path);
+                return;
+            }
+            void flushPendingEdits().then((ok) => {
+                if (ok) navigate(path);
+            });
+        },
+        [dirty, savingPolygons, flushPendingEdits, navigate],
+    );
+
     useEffect(() => {
-        if (!isDirty) return;
+        if (!dirty) return;
         function onBeforeUnload(e: BeforeUnloadEvent) {
             e.preventDefault();
             e.returnValue = '';
         }
         window.addEventListener('beforeunload', onBeforeUnload);
         return () => window.removeEventListener('beforeunload', onBeforeUnload);
-    }, [isDirty]);
+    }, [dirty]);
 
     // ── Tool selection ─────────────────────────────────────────────────────
     const handleSelectTool = useCallback(
@@ -534,11 +785,12 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     redo();
                     return;
                 case 'reset':
-                    if (isDirty) setResetDialogOpen(true);
+                    if (differsFromModel) setResetDialogOpen(true);
                     else toast.info('No edits to reset');
                     return;
                 case 'editCalibration':
-                    enterCornerMode();
+                    if (calMode === 'idle') enterCornerMode();
+                    else exitCalibration();
                     return;
                 case 'select':
                     if (calMode !== 'idle') exitCalibration();
@@ -546,19 +798,24 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     setSelectedDetectionId(null);
                     return;
                 case 'addPolygon':
+                case 'erase':
+                    if (calMode !== 'idle') exitCalibration();
+                    setSelectedDetectionId(null);
+                    setActiveTool((cur) => (cur === id ? 'select' : id));
+                    return;
                 case 'smooth':
                     if (calMode !== 'idle') exitCalibration();
-                    setActiveTool(id);
+                    setActiveTool((cur) => (cur === id ? 'select' : id));
                     return;
                 default:
                     return;
             }
         },
-        [undo, redo, isDirty, handleSave, enterCornerMode, calMode, exitCalibration],
+        [undo, redo, differsFromModel, enterCornerMode, calMode, exitCalibration],
     );
 
     const handleEditorToolChange = useCallback((next: LarvaePolygonTool) => {
-        setActiveTool(next === 'draw' ? 'addPolygon' : 'select');
+        setActiveTool(next === 'draw' ? 'addPolygon' : next === 'erase' ? 'erase' : 'select');
     }, []);
 
     // Ctrl/Cmd-hold → reveal raw image (hide polygon overlay). Mirrors the
@@ -584,36 +841,58 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     // Keyboard shortcuts
     useEffect(() => {
         function onKeyDown(e: KeyboardEvent) {
-            const inputFocused =
-                e.target instanceof HTMLInputElement ||
-                e.target instanceof HTMLTextAreaElement;
-            if (inputFocused) return;
+            const target = e.target;
+            if (
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLTextAreaElement ||
+                (target instanceof HTMLElement && target.isContentEditable)
+            ) {
+                return;
+            }
             const isMac =
-                (navigator as Navigator & { userAgentData?: { platform?: string } })
-                    .userAgentData?.platform?.toUpperCase().includes('MAC') ??
-                navigator.platform.toUpperCase().includes('MAC');
+                (
+                    navigator as Navigator & { userAgentData?: { platform?: string } }
+                ).userAgentData?.platform
+                    ?.toUpperCase()
+                    .includes('MAC') ?? navigator.platform.toUpperCase().includes('MAC');
             const mod = isMac ? e.metaKey : e.ctrlKey;
+            const key = e.key.toLowerCase();
 
-            if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+            if (mod && e.shiftKey && key === 'z') {
                 e.preventDefault();
                 redo();
                 return;
             }
-            if (mod && (e.key === 'z' || e.key === 'Z')) {
+            if (mod && key === 'z') {
                 e.preventDefault();
                 undo();
                 return;
             }
-            if (mod && (e.key === 's' || e.key === 'S')) {
+            if (mod && key === 's') {
                 e.preventDefault();
-                if (isDirty && !savingPolygons) void handleSave();
+                void handleSaveRef.current();
                 return;
             }
-            if (e.key === 'd' || e.key === 'D') {
+            if (mod || e.altKey) return;
+
+            if (e.key === '?') {
                 e.preventDefault();
-                setActiveTool((cur) =>
-                    cur === 'addPolygon' ? 'select' : 'addPolygon',
-                );
+                setShortcutsOpen(true);
+                return;
+            }
+            if (key === 'v') {
+                e.preventDefault();
+                handleSelectTool('select');
+                return;
+            }
+            if (key === 'd') {
+                e.preventDefault();
+                handleSelectTool('addPolygon');
+                return;
+            }
+            if (key === 'e') {
+                e.preventDefault();
+                handleSelectTool('erase');
                 return;
             }
             if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -629,12 +908,8 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     exitCalibration();
                     return;
                 }
-                if (activeTool === 'addPolygon' || activeTool === 'smooth') {
-                    setActiveTool('select');
-                } else {
-                    setSelectedDetectionId(null);
-                }
-                return;
+                if (activeTool !== 'select') setActiveTool('select');
+                else setSelectedDetectionId(null);
             }
         }
         window.addEventListener('keydown', onKeyDown);
@@ -642,21 +917,97 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     }, [
         undo,
         redo,
-        isDirty,
         deletePolygon,
         selectedDetectionId,
         activeTool,
-        savingPolygons,
-        handleSave,
         calMode,
         exitCalibration,
+        handleSelectTool,
     ]);
 
-    const tableDetections = useMemo(() => currentImage?.detections ?? [], [currentImage]);
-    const workingDetectionsForSummary = useMemo(
-        () => workingPolygons.map(workingPolygonToStored),
+    // ── Derived view data ───────────────────────────────────────────────────
+    const userDrawnCount = useMemo(
+        () => workingPolygons.reduce((n, p) => n + (p.origin === 'user' ? 1 : 0), 0),
         [workingPolygons],
     );
+    const liveCount = currentImage ? workingPolygons.length : (currentRow?.detection_count ?? 0);
+
+    const anyMeasured = useMemo(
+        () => summary?.images.some((row) => row.measured_count + row.stale_count > 0) ?? false,
+        [summary],
+    );
+    const filmstripItems = useMemo<FilmstripItem[]>(() => {
+        if (!summary) return [];
+        // A missing scale only matters once the batch is being measured.
+        const scaleMatters = anyMeasured || !summary.count_only;
+        return summary.images.map((row) => {
+            const stale = row.stale_count > 0;
+            const noScale = scaleMatters && !calibrationUsable(row.calibration);
+            return {
+                imageId: row.image_id,
+                filename: row.original_filename,
+                count:
+                    row.image_id === currentImageId && currentImage
+                        ? liveCount
+                        : row.detection_count,
+                flagged: stale || noScale,
+                flagReason: stale
+                    ? 'sizes are out of date'
+                    : noScale
+                      ? 'no calibration — cannot be measured yet'
+                      : undefined,
+            };
+        });
+    }, [summary, anyMeasured, currentImageId, currentImage, liveCount]);
+
+    const pendingInBatch = useMemo(() => {
+        if (!summary) return 0;
+        return summary.images.reduce((n, row) => {
+            if (row.image_id === currentImageId && currentImage) {
+                // Live state of the image on screen (unsaved edits included).
+                const needs =
+                    workingPolygons.length > 0 && (measurements.length === 0 || outOfDate);
+                return n + (needs ? 1 : 0);
+            }
+            return n + (needsMeasuring(row) ? 1 : 0);
+        }, 0);
+    }, [
+        summary,
+        currentImageId,
+        currentImage,
+        workingPolygons.length,
+        measurements.length,
+        outOfDate,
+    ]);
+
+    const handleDownloadCsv = useCallback(async () => {
+        if (!summary) return;
+        setDownloadingCsv(true);
+        try {
+            await flushPendingEdits();
+            const { blob, filename } = await downloadLarvaeCsv(summary.batch_id, summary.name);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'CSV download failed');
+        } finally {
+            setDownloadingCsv(false);
+        }
+    }, [summary, flushPendingEdits]);
+
+    const handleWeightSaved = useCallback(() => {
+        if (!batchId || !currentImageId) return;
+        void getLarvaeImage(batchId, currentImageId)
+            .then((detail) => applyImage(detail))
+            .catch(() => {});
+        void refreshSummary();
+    }, [batchId, currentImageId, applyImage, refreshSummary]);
 
     if (loading) {
         return (
@@ -666,7 +1017,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         );
     }
 
-    if (!batch || !currentImage) {
+    if (!summary || !currentRow) {
         return (
             <div className="grid h-screen place-items-center">
                 <EmptyState
@@ -681,47 +1032,40 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     // Editor backing image: warped (no marks) by default so SVG cyan polygons
     // sit on a clean rectified canvas. In calibration-corner mode swap to the
     // raw original so the user marks the green rectangle on the un-warped frame.
-    const rawFallback = getAnalysesRawUrl(batch.batch_id, currentImage.image_id);
+    const rawFallback = getAnalysesRawUrl(summary.batch_id, currentRow.image_id);
     const baseEditorSrc =
         calMode === 'corners'
             ? rawFallback
-            : (currentImage.warped_url ?? currentImage.raw_url ?? rawFallback);
+            : (currentRow.warped_url ?? currentRow.raw_url ?? rawFallback);
     const editorSrc =
         imageCacheKey > 0
             ? `${baseEditorSrc}${baseEditorSrc.includes('?') ? '&' : '?'}v=${imageCacheKey}`
             : baseEditorSrc;
-    const total = batch.images.length;
-    const realWmm =
-        currentImage.calibration?.calibration_object_w_mm ?? DEFAULT_CAL_W_MM;
-    const realHmm =
-        currentImage.calibration?.calibration_object_h_mm ?? DEFAULT_CAL_H_MM;
+    const total = summary.images.length;
+    const calibration = currentImage?.calibration ?? currentRow.calibration;
+    const realWmm = calibration?.calibration_object_w_mm ?? DEFAULT_CAL_W_MM;
+    const realHmm = calibration?.calibration_object_h_mm ?? DEFAULT_CAL_H_MM;
+    const scaleOk = calibrationUsable(calibration);
 
-    const isSaved = batch.status === 'completed';
+    const isSaved = summary.status === 'completed';
     const handleFinish = async () => {
-        if (!batch || finishing) return;
+        if (finishing) return;
         setFinishing(true);
         try {
-            const shouldRefreshMeasurements = isDirty || currentMeasurementsStale;
-            if (isDirty) {
-                const ok = await handleSave();
-                if (!ok) {
-                    setFinishing(false);
-                    return;
-                }
-            }
-            if (shouldRefreshMeasurements) {
-                const ok = await runMeasurementRefresh();
-                if (!ok) {
-                    setFinishing(false);
-                    return;
-                }
+            if (!(await flushPendingEdits())) return;
+            // An image that was measured keeps its sizes in step with its
+            // outlines. Count-only images are saved as they are.
+            const row = summaryRef.current?.images.find((r) => r.image_id === currentRow.image_id);
+            if (row && row.stale_count > 0 && calibrationUsable(row.calibration)) {
+                await measureLarvae(row.image_id);
+                applyImage(await getLarvaeImage(summary.batch_id, row.image_id));
             }
             if (!isSaved) {
-                const updated = await finishBatch(batch.batch_id);
-                setBatch((prev) => (prev ? { ...prev, status: updated.status } : prev));
+                const updated = await finishBatch(summary.batch_id);
+                setSummary((prev) => (prev ? { ...prev, status: updated.status } : prev));
             }
             toast.success('Saved to Records');
-            navigate(`/recorded?batch=${batch.batch_id}`);
+            navigate(batchPath(summary.batch_id));
         } catch (err) {
             toast.error(err instanceof Error ? err.message : 'Failed to save to Records');
         } finally {
@@ -732,236 +1076,325 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     const forceDisabled: Partial<Record<AnnotationToolId, boolean>> = {
         undo: !canUndo,
         redo: !canRedo,
-        reset: !isDirty,
+        reset: !differsFromModel,
         smooth: !selectedDetectionId,
     };
-    const canRecalculateMeasurements =
-        Boolean(currentImage.calibration) &&
-        currentImage.detections.length > 0 &&
-        !savingPolygons &&
-        !recalculatingMeasurements;
-    const polygonSavePending =
-        hasPersistablePolygonEdits &&
-        !savingPolygons &&
-        !polygonInteractionInProgress;
-    const measurementStatusText = recalculatingMeasurements
-        ? 'Recalculating measurements'
-        : savingPolygons || polygonSavePending
-          ? 'Saving polygon edits'
-          : measurementsNeedRefresh
-            ? 'Measurements need recalculation'
-            : 'Measurements current';
+    const savePending = dirty && !savingPolygons && !polygonInteractionInProgress;
+    // While a step is rewriting this image on the server, hold edits.
+    const busyOnThisImage = (run !== null && run.imageId === currentRow.image_id) || savingCal;
+    const controlsDisabled = run !== null || savingCal || redetecting || !currentImage;
 
     return (
-        <div className={cn('flex h-screen flex-col', className)}>
+        <div className={cn('flex h-screen flex-col bg-background', className)}>
             <ResultViewerHeader
-                batchName={batch.name}
-                batchStatus={batch.status}
-                filename={currentImage.original_filename}
+                batchName={summary.name}
+                batchStatus={summary.status}
+                organism={organism}
+                filename={currentRow.original_filename}
                 currentIndex={currentIndex}
                 total={total}
-                isDirty={isDirty}
+                isDirty={dirty || savingPolygons}
                 isSaved={isSaved}
                 finishing={finishing}
-                onBack={() => navigate('/recorded')}
+                onBack={() => leaveTo('/recorded')}
                 onNavigate={requestNavigate}
                 onFinish={handleFinish}
+                onShowShortcuts={() => setShortcutsOpen(true)}
+                actions={
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        onClick={() => leaveTo(addImagesPath(summary.batch_id, organism))}
+                        title="Add more images to this batch and analyse them"
+                    >
+                        <ImagePlus />
+                        <span className="hidden xl:inline">Add images</span>
+                    </Button>
+                }
             />
 
-            <div className="flex flex-1 overflow-hidden">
-                <div className="relative flex-1 overflow-hidden border-r">
-                    <LarvaePolygonEditor
-                        rawSrc={editorSrc}
-                        polygons={calMode === 'corners' ? [] : workingPolygons}
-                        selectedDetectionId={selectedDetectionId}
-                        onSelect={calMode === 'idle' ? setSelectedDetectionId : () => {}}
-                        tool={polygonTool}
-                        onToolChange={handleEditorToolChange}
-                        onInteractionChange={setPolygonInteractionInProgress}
-                        onMoveVertex={moveVertex}
-                        onTranslatePolygon={translatePolygon}
-                        onInsertVertex={insertVertex}
-                        onDeleteVertex={deleteVertex}
-                        onAddPolygon={addPolygon}
-                        onDeletePolygon={deletePolygon}
-                        measurements={currentImage.measurements}
-                        saveInProgress={savingPolygons}
-                        savePending={polygonSavePending}
-                        previewPolygon={smoothPreview}
-                        calibrationCorners={calMode === 'corners' ? calCorners : null}
-                        onCalibrationCornersChange={setCalCorners}
-                        // Hide the polygon overlay while Ctrl/Cmd is held, but
-                        // keep it visible during calibration corner editing —
-                        // the user needs the corner handles to remain on
-                        // screen while they line them up.
-                        overlayVisible={calMode === 'corners' ? true : !ctrlHeld}
-                    />
-                    <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 flex flex-col items-center gap-2">
-                        <div
-                            className={cn(
-                                'transition-opacity duration-200 ease-out',
-                                // Hide the toolbar entirely while drawing —
-                                // press Esc (or the active button) to exit.
-                                activeTool === 'addPolygon'
-                                    ? 'pointer-events-none opacity-0'
-                                    : 'pointer-events-auto opacity-100',
-                            )}
-                        >
+            <div className="flex min-h-0 flex-1">
+                <div className="relative flex min-w-0 flex-1 flex-col">
+                    <div className="relative min-h-0 flex-1">
+                        <LarvaePolygonEditor
+                            rawSrc={editorSrc}
+                            polygons={
+                                calMode === 'corners' || !currentImage
+                                    ? NO_POLYGONS
+                                    : workingPolygons
+                            }
+                            selectedDetectionId={selectedDetectionId}
+                            onSelect={calMode === 'idle' ? setSelectedDetectionId : noop}
+                            tool={polygonTool}
+                            onToolChange={handleEditorToolChange}
+                            onInteractionChange={setPolygonInteractionInProgress}
+                            onMoveVertex={moveVertex}
+                            onTranslatePolygon={translatePolygon}
+                            onInsertVertex={insertVertex}
+                            onDeleteVertex={deleteVertex}
+                            onAddPolygon={addPolygon}
+                            onDeletePolygon={deletePolygon}
+                            measurements={measurements}
+                            showCenterlines={showCenterlines && !outOfDate}
+                            saveInProgress={savingPolygons}
+                            savePending={savePending}
+                            previewPolygon={smoothPreview}
+                            calibrationCorners={calMode === 'corners' ? calCorners : null}
+                            onCalibrationCornersChange={setCalCorners}
+                            // Hide the polygon overlay while Ctrl/Cmd is held, but
+                            // keep it visible during calibration corner editing —
+                            // the user needs the corner handles to remain on
+                            // screen while they line them up.
+                            overlayVisible={
+                                calMode === 'corners' ? true : !ctrlHeld && !overlayHidden
+                            }
+                            onToggleOverlay={() => setOverlayHidden((v) => !v)}
+                        />
+
+                        {/* Tool rail */}
+                        <div className="pointer-events-none absolute top-3 left-3 z-20">
                             <AnnotationToolbar
                                 organism={organism}
+                                orientation="vertical"
                                 activeTool={activeTool}
                                 forceDisabled={forceDisabled}
                                 onSelectTool={handleSelectTool}
+                                className="pointer-events-auto"
                             />
                         </div>
-                        {activeTool === 'smooth' && selectedDetectionId && (
-                            <div className="pointer-events-auto flex items-center gap-3 rounded-lg border bg-card p-3 shadow-sm">
-                                <span className="text-xs font-medium text-muted-foreground">
-                                    Smooth tolerance
-                                </span>
-                                <Slider
-                                    value={[smoothTolerance]}
-                                    min={SMOOTH_MIN}
-                                    max={SMOOTH_MAX}
-                                    step={0.1}
-                                    onValueChange={(v) => setSmoothTolerance(v[0] ?? 0)}
-                                    className="w-40"
-                                    aria-label="Smooth tolerance"
+
+                        {/* Contextual panels for the smooth / calibration tools */}
+                        <div className="pointer-events-none absolute top-3 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-2">
+                            {activeTool === 'smooth' && selectedDetectionId && (
+                                <div className="floating-panel pointer-events-auto flex items-center gap-3 p-2.5">
+                                    <span className="text-xs font-medium text-muted-foreground">
+                                        Smooth
+                                    </span>
+                                    <Slider
+                                        value={[smoothTolerance]}
+                                        min={SMOOTH_MIN}
+                                        max={SMOOTH_MAX}
+                                        step={0.1}
+                                        onValueChange={(v) => setSmoothTolerance(v[0] ?? 0)}
+                                        className="w-40"
+                                        aria-label="Smooth tolerance"
+                                    />
+                                    <span className="w-10 font-mono text-xs tabular-nums">
+                                        {smoothTolerance.toFixed(1)}px
+                                    </span>
+                                    <Button size="sm" variant="ghost" onClick={cancelSmooth}>
+                                        Cancel
+                                    </Button>
+                                    <Button size="sm" onClick={applySmooth}>
+                                        Apply
+                                    </Button>
+                                </div>
+                            )}
+                            {calMode === 'corners' && calCorners && (
+                                <CalibrationCornerEditorChrome
+                                    corners={calCorners}
+                                    realWmm={realWmm}
+                                    realHmm={realHmm}
+                                    saving={savingCal}
+                                    onSave={handleSaveCornerCalibration}
+                                    onCancel={exitCalibration}
+                                    onRedetect={handleRedetect}
+                                    redetecting={redetecting}
                                 />
-                                <span className="tabular-nums text-xs">
-                                    {smoothTolerance.toFixed(1)}px
-                                </span>
-                                <Button size="sm" variant="ghost" onClick={cancelSmooth}>
-                                    Cancel
-                                </Button>
-                                <Button size="sm" onClick={applySmooth}>
-                                    Apply
-                                </Button>
+                            )}
+                            {calMode === 'manual' && (
+                                <div className="pointer-events-auto w-80">
+                                    <CalibrationManualForm
+                                        initialX={calibration?.mm_per_px_x ?? null}
+                                        initialY={calibration?.mm_per_px_y ?? null}
+                                        saving={savingCal}
+                                        onSave={handleSaveManualCalibration}
+                                        onCancel={exitCalibration}
+                                    />
+                                </div>
+                            )}
+                        </div>
+
+                        {!currentImage && (
+                            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+                                {imageLoadFailed === currentRow.image_id ? (
+                                    <div className="floating-panel pointer-events-auto flex items-center gap-3 px-3 py-2 text-sm">
+                                        Could not load the detections for this image.
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                                setImageLoadFailed(null);
+                                                loadImage(currentRow.image_id).catch(() =>
+                                                    setImageLoadFailed(currentRow.image_id),
+                                                );
+                                            }}
+                                        >
+                                            Retry
+                                        </Button>
+                                    </div>
+                                ) : (
+                                    <div className="floating-panel flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                                        Loading detections…
+                                    </div>
+                                )}
                             </div>
                         )}
-                        {calMode === 'corners' && calCorners && (
-                            <CalibrationCornerEditorChrome
-                                corners={calCorners}
-                                realWmm={realWmm}
-                                realHmm={realHmm}
-                                saving={savingCal}
-                                onSave={handleSaveCornerCalibration}
-                                onCancel={exitCalibration}
+
+                        {busyOnThisImage && (
+                            // Outlines are being rewritten server-side; edits
+                            // made now would be overwritten.
+                            <div className="absolute inset-0 z-30 cursor-progress bg-background/20" />
+                        )}
+                    </div>
+
+                    <Filmstrip
+                        batchId={summary.batch_id}
+                        items={filmstripItems}
+                        currentIndex={currentIndex}
+                        onNavigate={requestNavigate}
+                        collapsed={filmstripCollapsed}
+                        onToggleCollapsed={() => setFilmstripCollapsed((v) => !v)}
+                    />
+                </div>
+
+                <aside
+                    className="flex w-[23rem] shrink-0 flex-col overflow-hidden border-l border-border bg-card"
+                    data-result-aside
+                >
+                    <LarvaeSummaryPanel
+                        organism={organism}
+                        count={liveCount}
+                        userDrawnCount={userDrawnCount}
+                        calibration={calibration}
+                        samRefined={currentRow.sam_refined}
+                        loading={!currentImage && currentRow.detection_count === 0}
+                    />
+                    <LarvaeMeasureCard
+                        organism={organism}
+                        count={liveCount}
+                        measurements={measurements}
+                        outOfDate={outOfDate}
+                        scaleOk={scaleOk}
+                        scaleUntried={calibration === null}
+                        samRefined={currentRow.sam_refined}
+                        refine={refine}
+                        onRefineChange={handleRefineChange}
+                        pendingInBatch={pendingInBatch}
+                        totalInBatch={total}
+                        run={run}
+                        onMeasureImage={(options) => void runMeasure('image', options?.refine)}
+                        onMeasureBatch={() => void runMeasure('batch')}
+                        onCancelRun={cancelRun}
+                        showCenterlines={showCenterlines}
+                        onShowCenterlinesChange={setShowCenterlines}
+                        disabled={controlsDisabled}
+                    />
+                    {!scaleOk && currentImage && (
+                        <div className="px-4 pb-3">
+                            <LarvaeCalibrationBanner
+                                calibration={calibration}
+                                onEditCorners={enterCornerMode}
+                                onEditManual={enterManualMode}
                                 onRedetect={handleRedetect}
                                 redetecting={redetecting}
                             />
+                        </div>
+                    )}
+
+                    <div className="border-t border-border px-4 py-2">
+                        <SegmentedControl
+                            aria-label="Inspector section"
+                            size="sm"
+                            value={inspectorTab}
+                            onChange={setInspectorTab}
+                            options={INSPECTOR_TABS}
+                            className="w-full [&>*]:flex-1"
+                        />
+                    </div>
+
+                    <div className="min-h-0 flex-1 overflow-hidden border-t border-border">
+                        {inspectorTab === 'table' && (
+                            <LarvaeMeasurementTable
+                                detections={detections}
+                                measurements={measurements}
+                                selectedDetectionId={selectedDetectionId}
+                                onSelect={setSelectedDetectionId}
+                            />
                         )}
-                        {calMode === 'manual' && (
-                            <div className="pointer-events-auto w-80">
-                                <CalibrationManualForm
-                                    initialX={currentImage.calibration?.mm_per_px_x ?? null}
-                                    initialY={currentImage.calibration?.mm_per_px_y ?? null}
-                                    saving={savingCal}
-                                    onSave={handleSaveManualCalibration}
-                                    onCancel={exitCalibration}
+                        {inspectorTab === 'weight' && (
+                            <div className="h-full overflow-y-auto">
+                                <LarvaeWeightPanel
+                                    organism={organism}
+                                    imageId={currentRow.image_id}
+                                    totalWeightMg={
+                                        currentImage?.total_weight_mg ?? currentRow.total_weight_mg
+                                    }
+                                    measured={measurements.length > 0}
+                                    weightStats={summary.weight_stats ?? null}
+                                    onWeightSaved={handleWeightSaved}
                                 />
                             </div>
                         )}
-                        {isDirty && (
-                            <div className="pointer-events-none rounded bg-amber-100 px-2 py-1 text-xs text-amber-900 shadow-sm dark:bg-amber-950/60 dark:text-amber-200">
-                                Unsaved polygon edits — click Save or press
-                                {' '}
-                                {navigator.platform.toUpperCase().includes('MAC')
-                                    ? '⌘S'
-                                    : 'Ctrl+S'}
-                            </div>
-                        )}
-                    </div>
-                </div>
-                <aside className="flex w-96 shrink-0 flex-col overflow-hidden bg-card">
-                    {currentImage.calibration?.detection_status !== 'detected' &&
-                        currentImage.calibration?.detection_status !== 'manual' && (
-                            <div className="space-y-3 border-b p-4">
-                                <LarvaeCalibrationBanner
-                                    calibration={currentImage.calibration}
+                        {inspectorTab === 'details' && (
+                            <div className="h-full space-y-5 overflow-y-auto p-4">
+                                <LarvaeCalibrationDetails
+                                    calibration={calibration}
                                     onEditCorners={enterCornerMode}
                                     onEditManual={enterManualMode}
                                     onRedetect={handleRedetect}
                                     redetecting={redetecting}
+                                    disabled={controlsDisabled}
+                                />
+                                <LarvaeInferenceInfoPanel
+                                    organism={organism}
+                                    detectionModel={summary.detection_model}
+                                    samModel={summary.sam_model}
+                                    elapsedSecs={currentRow.elapsed_secs}
+                                    countOnly={summary.count_only}
+                                    samRefined={currentRow.sam_refined}
                                 />
                             </div>
                         )}
-                    <LarvaeSummaryPanel
-                        batchId={batch.batch_id}
-                        batchName={batch.name}
-                        imageId={currentImage.image_id}
-                        totalWeightMg={currentImage.total_weight_mg}
-                        detections={workingDetectionsForSummary}
-                        measurements={currentImage.measurements}
-                        calibration={currentImage.calibration}
-                        weightStats={batch.weight_stats ?? null}
-                        onWeightSaved={reloadBatch}
-                    />
-                    <div className="flex flex-1 flex-col gap-3 overflow-hidden p-4 pt-0">
-                        <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
-                            <div className="min-w-0">
-                                <p
-                                    className={cn(
-                                        'truncate text-sm font-medium',
-                                        measurementsNeedRefresh
-                                            ? 'text-amber-700 dark:text-amber-300'
-                                            : 'text-foreground',
-                                    )}
-                                >
-                                    {measurementStatusText}
-                                </p>
-                            </div>
-                            <Button
-                                size="sm"
-                                variant={measurementsNeedRefresh ? 'default' : 'outline'}
-                                onClick={handleRecalculateMeasurements}
-                                disabled={!canRecalculateMeasurements}
-                                title={
-                                    currentImage.calibration
-                                        ? 'Recalculate length, width, area, and weight'
-                                        : 'Calibration is required before measurement'
-                                }
-                            >
-                                <RefreshCw
-                                    className={cn(
-                                        'size-4',
-                                        recalculatingMeasurements && 'animate-spin',
-                                    )}
-                                />
-                                Recalculate
-                            </Button>
-                        </div>
-                        <div className="flex-1 overflow-hidden">
-                            <LarvaeMeasurementTable
-                                detections={tableDetections}
-                                measurements={currentImage.measurements}
-                                selectedDetectionId={selectedDetectionId}
-                                onSelect={setSelectedDetectionId}
-                            />
-                        </div>
-                        <LarvaeInferenceInfoPanel
-                            detectionModel={batch.detection_model}
-                            samModel={batch.sam_model}
-                            elapsedSecs={currentImage.elapsed_secs}
-                        />
+                    </div>
+
+                    <div className="flex items-center gap-2 border-t border-border px-4 py-2.5">
+                        <p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                            {anyMeasured
+                                ? `Counts and sizes for all ${total} image${total === 1 ? '' : 's'}`
+                                : `Counts for all ${total} image${total === 1 ? '' : 's'} · sizes after measuring`}
+                        </p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 shrink-0"
+                            onClick={handleDownloadCsv}
+                            disabled={downloadingCsv}
+                        >
+                            {downloadingCsv ? <Loader2 className="animate-spin" /> : <Download />}
+                            CSV
+                        </Button>
                     </div>
                 </aside>
             </div>
+
+            <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} polygon />
 
             <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Reset to model output?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            This will discard your polygon edits and restore the original
-                            model output. The change is undoable until you save.
+                            Every outline goes back to what the model produced, and outlines you
+                            drew by hand are removed. Detections you deleted are not restored. You
+                            can undo this with Ctrl+Z.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Keep edits</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleResetConfirmed}>
-                            Reset
-                        </AlertDialogAction>
+                        <AlertDialogAction onClick={handleResetConfirmed}>Reset</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
@@ -974,14 +1407,12 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     <AlertDialogHeader>
                         <AlertDialogTitle>Unsaved polygon edits</AlertDialogTitle>
                         <AlertDialogDescription>
-                            You have polygon edits that haven't been saved. If you navigate
-                            away, those changes will be lost.
+                            Your latest polygon edits could not be saved. If you navigate away,
+                            those changes will be lost.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                        <AlertDialogCancel onClick={cancelDirtyNav}>
-                            Keep editing
-                        </AlertDialogCancel>
+                        <AlertDialogCancel onClick={cancelDirtyNav}>Keep editing</AlertDialogCancel>
                         <AlertDialogAction onClick={confirmDiscardNav}>
                             Discard edits
                         </AlertDialogAction>
@@ -992,55 +1423,44 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
     );
 }
 
+function noop() {}
+
+/** Other screens cache this batch (Records detail, dashboard); after an edit
+ *  or a measure run they refetch the next time they are shown. */
+function markBatchCachesStale(batchId: string): void {
+    void queryClient.invalidateQueries({
+        queryKey: ['analysis-detail', batchId],
+        refetchType: 'none',
+    });
+    void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'], refetchType: 'none' });
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function mergePolygonSaveUpdate(
-    prev: LarvaeBatchDetail | null,
-    imageId: string,
+/** Local equivalent of what the server did for an edits-only save: the edited
+ *  outlines are stored and their measurements are now stale. */
+function mergePolygonSave(
+    image: LarvaeImageDetail,
     polygonEdits: PolygonEdit[],
-): LarvaeBatchDetail | null {
-    if (!prev) return prev;
-    const idx = prev.images.findIndex((i) => i.image_id === imageId);
-    if (idx < 0) return prev;
-    const target = prev.images[idx];
+): LarvaeImageDetail {
     const editedById = new Map(polygonEdits.map((e) => [e.detection_id, e.polygon]));
     const nowIso = new Date().toISOString();
-    const nextDetections = target.detections.map((d) => {
+    const detections = image.detections.map((d) => {
         const editedPoly = editedById.get(d.detection_id);
         if (!editedPoly) return d;
         return { ...d, edited_polygon: editedPoly, edited_at: nowIso };
     });
-    const editedIds = new Set(polygonEdits.map((e) => e.detection_id));
-    const nextImage: LarvaeImageDetail = {
-        ...target,
-        detections: nextDetections,
-        measurements: target.measurements.map((m) =>
-            editedIds.has(m.detection_id) ? { ...m, is_stale: true } : m,
-        ),
+    const measurements = image.measurements.map((m) =>
+        editedById.has(m.detection_id) ? { ...m, is_stale: true } : m,
+    );
+    const stale = measurements.reduce((n, m) => n + (m.is_stale ? 1 : 0), 0);
+    return {
+        ...image,
+        detections,
+        measurements,
+        stale_count: stale,
+        measured_count: measurements.length - stale,
     };
-    const nextImages = prev.images.slice();
-    nextImages[idx] = nextImage;
-    return { ...prev, images: nextImages };
-}
-
-function mergeMeasurementUpdate(
-    prev: LarvaeBatchDetail | null,
-    imageId: string,
-    result: {
-        calibration: CalibrationCorners | null;
-        measurements: LarvaeImageDetail['measurements'];
-    },
-): LarvaeBatchDetail | null {
-    if (!prev) return prev;
-    const idx = prev.images.findIndex((i) => i.image_id === imageId);
-    if (idx < 0) return prev;
-    const nextImages = prev.images.slice();
-    nextImages[idx] = {
-        ...nextImages[idx],
-        calibration: result.calibration,
-        measurements: result.measurements,
-    };
-    return { ...prev, images: nextImages };
 }
 
 function buildPolygonEdits(
@@ -1051,9 +1471,7 @@ function buildPolygonEdits(
     deletedDetectionIds: string[];
     userDrawnCount: number;
 } {
-    const storedById = new Map(
-        detections.map((d) => [d.detection_id, effectivePolygon(d)]),
-    );
+    const storedById = new Map(detections.map((d) => [d.detection_id, effectivePolygon(d)]));
     const workingExistingIds = new Set(
         workingPolygons
             .filter((wp) => !wp.detection_id.startsWith('new:'))
@@ -1076,6 +1494,18 @@ function buildPolygonEdits(
         if (!stored && !isUserDrawn) continue;
         const polygon = sanitizePolygon(wp.polygon);
         if (stored && polygonsEqual(polygon, sanitizePolygon(stored))) continue;
+        if (isUserDrawn && wp.origin === 'model') {
+            // A model detection whose delete was saved and then undone: it
+            // goes back as the model detection it was.
+            polygonEdits.push({
+                detection_id: wp.detection_id,
+                polygon,
+                origin: 'model',
+                confidence: wp.confidence,
+                baseline: wp.baseline ? sanitizePolygon(wp.baseline) : null,
+            });
+            continue;
+        }
         polygonEdits.push({ detection_id: wp.detection_id, polygon });
     }
 
@@ -1145,5 +1575,4 @@ function polygonArea(poly: LarvaePolygon): number {
     return Math.abs(total) / 2;
 }
 
-const UUID_RE =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

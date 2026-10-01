@@ -21,11 +21,12 @@ interface LarvaeMeasurementTableProps {
     className?: string;
 }
 
-type SortKey = 'index' | 'length_mm' | 'max_width_mm' | 'area_mm2';
+type SortKey = 'index' | 'length_mm' | 'max_width_mm' | 'area_mm2' | 'weight_mg';
 type SortDir = 'asc' | 'desc';
 
 const VIRTUALIZE_THRESHOLD = 100;
-const ROW_HEIGHT = 36;
+const ROW_HEIGHT = 32;
+const GRID = 'grid-cols-[2.25rem_repeat(5,minmax(0,1fr))]';
 
 export function LarvaeMeasurementTable({
     detections,
@@ -81,9 +82,7 @@ export function LarvaeMeasurementTable({
     // a row (e.g. by clicking a polygon).
     useEffect(() => {
         if (!selectedDetectionId) return;
-        const idx = rows.findIndex(
-            (r) => r.detection.detection_id === selectedDetectionId,
-        );
+        const idx = rows.findIndex((r) => r.detection.detection_id === selectedDetectionId);
         if (idx < 0) return;
         if (virtualize) {
             virtualizer.scrollToIndex(idx, { align: 'center' });
@@ -110,11 +109,13 @@ export function LarvaeMeasurementTable({
         return v.toFixed(digits);
     }
 
-    function renderRow(
-        row: (typeof rows)[number],
-        style?: React.CSSProperties,
-    ) {
+    function renderRow(row: (typeof rows)[number], style?: React.CSSProperties) {
         const isSelected = row.detection.detection_id === selectedDetectionId;
+        const stale = row.measurement?.is_stale ?? false;
+        const num = cn(
+            'text-right tabular-nums',
+            stale && 'text-muted-foreground line-through decoration-muted-foreground/40',
+        );
         return (
             <div
                 key={row.detection.detection_id}
@@ -123,9 +124,11 @@ export function LarvaeMeasurementTable({
                 role="row"
                 tabIndex={0}
                 aria-selected={isSelected}
+                title={stale ? 'Outline changed since this was measured — recalculate' : undefined}
                 className={cn(
-                    'grid cursor-pointer grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] items-center gap-2 border-b border-border/60 px-3 text-sm hover:bg-muted/40',
-                    isSelected && 'bg-primary/10',
+                    'grid h-8 cursor-pointer items-center gap-2 border-b border-border/60 px-3 text-xs outline-none hover:bg-muted/50 focus-visible:bg-muted/50',
+                    GRID,
+                    isSelected && 'bg-primary/10 hover:bg-primary/10',
                 )}
                 onClick={() => onSelect(row.detection.detection_id)}
                 onKeyDown={(e) => {
@@ -135,58 +138,73 @@ export function LarvaeMeasurementTable({
                     }
                 }}
             >
-                <span className="text-muted-foreground tabular-nums">
+                <span
+                    className={cn(
+                        'font-mono tabular-nums',
+                        isSelected ? 'font-semibold text-primary' : 'text-muted-foreground',
+                    )}
+                >
                     #{row.index}
                 </span>
-                <span className="tabular-nums">{fmt(row.measurement?.length_mm)}</span>
-                <span className="tabular-nums">{fmt(row.measurement?.max_width_mm)}</span>
-                <span className="tabular-nums">{fmt(row.measurement?.area_mm2)}</span>
-                <span className="tabular-nums">{fmt(row.measurement?.weight_mg)}</span>
-                <span className="tabular-nums">
-                    {fmt(row.measurement?.weight_area_ratio, 3)}
-                </span>
+                <span className={num}>{fmt(row.measurement?.length_mm)}</span>
+                <span className={num}>{fmt(row.measurement?.max_width_mm)}</span>
+                <span className={num}>{fmt(row.measurement?.area_mm2)}</span>
+                <span className={num}>{fmt(row.measurement?.weight_mg)}</span>
+                <span className={num}>{fmt(row.measurement?.weight_area_ratio, 3)}</span>
             </div>
         );
     }
 
     return (
         <div
-            className={cn(
-                'flex h-full flex-col overflow-hidden rounded-md border border-border bg-card text-card-foreground',
-                className,
-            )}
+            className={cn('flex h-full flex-col overflow-hidden text-card-foreground', className)}
             data-testid="larvae-measurement-table"
         >
             <div
                 role="row"
-                className="grid grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                className={cn(
+                    'grid items-end gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase',
+                    GRID,
+                )}
             >
                 <SortableHeader
                     label="#"
                     active={sortKey === 'index'}
                     dir={sortDir}
                     onClick={() => toggleSort('index')}
+                    align="left"
                 />
                 <SortableHeader
-                    label="Length (mm)"
+                    label="Length"
+                    unit="mm"
                     active={sortKey === 'length_mm'}
                     dir={sortDir}
                     onClick={() => toggleSort('length_mm')}
                 />
                 <SortableHeader
-                    label="Max W (mm)"
+                    label="Width"
+                    unit="max mm"
                     active={sortKey === 'max_width_mm'}
                     dir={sortDir}
                     onClick={() => toggleSort('max_width_mm')}
                 />
                 <SortableHeader
-                    label="Area (mm²)"
+                    label="Area"
+                    unit="mm²"
                     active={sortKey === 'area_mm2'}
                     dir={sortDir}
                     onClick={() => toggleSort('area_mm2')}
                 />
-                <span>Weight (mg)</span>
-                <span>W/A</span>
+                <SortableHeader
+                    label="Weight"
+                    unit="mg"
+                    active={sortKey === 'weight_mg'}
+                    dir={sortDir}
+                    onClick={() => toggleSort('weight_mg')}
+                />
+                <span className="text-right leading-tight" title="Weight / area (mg per mm²)">
+                    W/A
+                </span>
             </div>
             <div
                 ref={parentRef}
@@ -218,7 +236,7 @@ export function LarvaeMeasurementTable({
                     rows.map((row) => renderRow(row))
                 )}
                 {rows.length === 0 && (
-                    <div className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
+                    <div className="grid h-full place-items-center p-6 text-xs text-muted-foreground">
                         No detections.
                     </div>
                 )}
@@ -229,31 +247,44 @@ export function LarvaeMeasurementTable({
 
 function SortableHeader({
     label,
+    unit,
     active,
     dir,
     onClick,
+    align = 'right',
 }: {
     label: string;
+    unit?: string;
     active: boolean;
     dir: SortDir;
     onClick: () => void;
+    align?: 'left' | 'right';
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
+            aria-label={`Sort by ${label}`}
             className={cn(
-                'inline-flex items-center gap-1 text-left transition-colors hover:text-foreground',
+                'flex flex-col leading-tight uppercase transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
+                align === 'right' ? 'items-end text-right' : 'items-start text-left',
                 active && 'text-foreground',
             )}
         >
-            {label}
-            {active &&
-                (dir === 'asc' ? (
-                    <ChevronUp className="h-3 w-3" aria-hidden />
-                ) : (
-                    <ChevronDown className="h-3 w-3" aria-hidden />
-                ))}
+            <span className="inline-flex items-center gap-0.5">
+                {label}
+                {active &&
+                    (dir === 'asc' ? (
+                        <ChevronUp className="size-3" aria-hidden />
+                    ) : (
+                        <ChevronDown className="size-3" aria-hidden />
+                    ))}
+            </span>
+            {unit && (
+                <span className="font-normal tracking-normal text-muted-foreground normal-case">
+                    {unit}
+                </span>
+            )}
         </button>
     );
 }

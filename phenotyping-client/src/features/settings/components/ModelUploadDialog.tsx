@@ -1,4 +1,11 @@
-import { useState, useCallback, useRef } from 'react';
+// ModelUploadDialog — pick a YOLO `.pt` file and upload it to one organism's
+// model library, with progress, success and error feedback.
+
+import { useState, useCallback, useId, useRef } from 'react';
+import { CheckCircle2, Upload, XCircle } from 'lucide-react';
+
+import { OrganismBadge } from '@/components/common';
+import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
@@ -6,21 +13,14 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
-import { Upload, CheckCircle2, XCircle } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
 import { toast } from '@/components/ui/sonner';
+import { formatBytes } from '@/lib/format';
+import { organismMeta } from '@/lib/organism';
 import { uploadCustomModel } from '@/services/api';
 import { ApiError } from '@/services/errors';
 import type { Organism } from '@/types/api';
-
-const ORGANISM_LABELS: Record<Organism, string> = {
-    egg: 'Egg',
-    larvae: 'Larvae',
-    pupae: 'Pupae',
-    neonate: 'Neonate',
-};
 
 interface ModelUploadDialogProps {
     open: boolean;
@@ -42,6 +42,9 @@ export function ModelUploadDialog({
     const [progress, setProgress] = useState(0);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const inputId = useId();
+
+    const slotLabel = organism ? organismMeta(organism).label : 'Selected';
 
     const reset = useCallback(() => {
         setFile(null);
@@ -76,7 +79,7 @@ export function ModelUploadDialog({
 
             setState('success');
             toast.success('Model uploaded', {
-                description: `${file.name} is ready for ${ORGANISM_LABELS[organism]}.`,
+                description: `${file.name} is ready for ${slotLabel}.`,
             });
             onSuccess();
         } catch (err) {
@@ -85,7 +88,7 @@ export function ModelUploadDialog({
             setErrorMsg(msg);
             toast.error('Model upload failed', { description: msg });
         }
-    }, [file, onSuccess, organism]);
+    }, [file, onSuccess, organism, slotLabel]);
 
     const handleClose = useCallback(
         (open: boolean) => {
@@ -95,75 +98,83 @@ export function ModelUploadDialog({
         [onOpenChange, reset],
     );
 
-    const formatSize = (bytes: number) => {
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    };
-
-    const slotLabel = organism ? ORGANISM_LABELS[organism] : 'Selected';
-
     return (
         <Dialog open={open} onOpenChange={handleClose}>
             <DialogContent className="sm:max-w-md">
                 <DialogHeader>
-                    <DialogTitle>Upload {slotLabel} Model</DialogTitle>
+                    <DialogTitle className="flex flex-wrap items-center gap-2">
+                        Upload {slotLabel.toLowerCase()} model
+                        {organism && <OrganismBadge organism={organism} />}
+                    </DialogTitle>
                     <DialogDescription>
-                        Upload a YOLO detection model (`.pt`) for the {slotLabel.toLowerCase()}{' '}
-                        mode. After uploading, you can activate it from that mode's model list.
+                        Upload a YOLO detection model (<code className="font-mono">.pt</code>) for
+                        the {slotLabel.toLowerCase()} mode. After uploading, you can activate it
+                        from that mode's model list.
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-4 pt-2">
+                <div className="space-y-4">
                     {/* File picker */}
                     <div className="space-y-2">
-                        <Label>Model file (.pt)</Label>
-                        <div className="flex gap-2">
-                            <Button
-                                variant="outline"
-                                className="gap-2 w-full justify-start font-mono text-sm"
-                                onClick={() => inputRef.current?.click()}
-                                disabled={state === 'uploading'}
-                            >
-                                <Upload className="h-4 w-4 shrink-0" />
-                                {file ? file.name : 'Choose .pt file...'}
-                            </Button>
-                            <input
-                                ref={inputRef}
-                                type="file"
-                                accept=".pt"
-                                onChange={handleFileChange}
-                                className="hidden"
-                            />
-                        </div>
+                        <Label htmlFor={inputId}>Model file (.pt)</Label>
+                        <Button
+                            variant="outline"
+                            className="w-full justify-start font-mono"
+                            onClick={() => inputRef.current?.click()}
+                            disabled={state === 'uploading'}
+                        >
+                            <Upload className="size-4 shrink-0" aria-hidden />
+                            <span className="min-w-0 truncate">
+                                {file ? file.name : 'Choose .pt file…'}
+                            </span>
+                        </Button>
+                        <input
+                            id={inputId}
+                            ref={inputRef}
+                            type="file"
+                            accept=".pt"
+                            onChange={handleFileChange}
+                            className="hidden"
+                        />
                         {file && (
-                            <p className="text-xs text-muted-foreground">{formatSize(file.size)}</p>
+                            <p className="text-xs text-muted-foreground tabular-nums">
+                                {formatBytes(file.size)}
+                            </p>
                         )}
                     </div>
 
                     {/* Progress */}
                     {state === 'uploading' && (
-                        <div className="space-y-2">
-                            <Progress value={progress} className="h-2" />
+                        <div className="space-y-2" role="status">
+                            <Progress value={progress} className="h-1.5" />
                             <p className="text-xs text-muted-foreground">
-                                Uploading and validating model...
+                                Uploading and validating model…
                             </p>
                         </div>
                     )}
 
                     {/* Success */}
                     {state === 'success' && (
-                        <div className="flex items-center gap-2 rounded-md bg-emerald-50 dark:bg-emerald-950/30 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
-                            <CheckCircle2 className="h-4 w-4 shrink-0" />
-                            Model uploaded successfully. Activate it for {slotLabel.toLowerCase()}{' '}
-                            when ready.
+                        <div
+                            role="status"
+                            className="flex items-start gap-2 rounded-md border border-success/25 bg-success/10 px-3 py-2 text-sm text-success"
+                        >
+                            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+                            <span>
+                                Model uploaded successfully. Activate it for{' '}
+                                {slotLabel.toLowerCase()} when ready.
+                            </span>
                         </div>
                     )}
 
                     {/* Error */}
                     {state === 'error' && errorMsg && (
-                        <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                            <XCircle className="h-4 w-4 shrink-0" />
-                            {errorMsg}
+                        <div
+                            role="alert"
+                            className="flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                        >
+                            <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                            <span className="min-w-0 break-words">{errorMsg}</span>
                         </div>
                     )}
 
@@ -180,10 +191,9 @@ export function ModelUploadDialog({
                             <Button
                                 onClick={handleUpload}
                                 disabled={!file || !organism || state === 'uploading'}
-                                className="gap-2"
                             >
-                                <Upload className="h-4 w-4" />
-                                {state === 'uploading' ? 'Uploading...' : 'Upload'}
+                                <Upload className="size-4" aria-hidden />
+                                {state === 'uploading' ? 'Uploading…' : 'Upload'}
                             </Button>
                         )}
                     </div>

@@ -62,12 +62,13 @@ export function useLogs(): UseLogsReturn {
         [flushPendingLogs],
     );
 
-    // Load recent history on mount
+    // Load recent history on mount. The API returns it oldest-first; the list
+    // is kept newest-first (live entries are prepended), so reverse it.
     useEffect(() => {
         let cancelled = false;
         getRecentLogs(200)
             .then(({ logs }) => {
-                if (!cancelled) setAllLogs(logs);
+                if (!cancelled) setAllLogs([...logs].reverse());
             })
             .catch(() => {
                 /* non-fatal */

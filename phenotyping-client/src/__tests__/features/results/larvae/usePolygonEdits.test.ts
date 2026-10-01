@@ -184,6 +184,102 @@ describe('usePolygonEdits', () => {
         expect(remaps[0].get(newId)).toBe(uuid);
     });
 
+    it('keeps undo working after a delete has been saved', () => {
+        const square: [number, number][] = [
+            [20, 20],
+            [30, 20],
+            [30, 30],
+            [20, 30],
+        ];
+        const both = [...detections, det('b', square)];
+        const { result, rerender } = renderHook(
+            ({ dets }: { dets: StoredLarvaeAnnotation[] }) =>
+                usePolygonEdits({ detections: dets, imageKey: 'img-1' }),
+            { initialProps: { dets: both } },
+        );
+
+        act(() => {
+            result.current.deletePolygon('b');
+        });
+        expect(result.current.polygons.map((p) => p.detection_id)).toEqual(['a']);
+
+        // Autosave persisted the delete: the server no longer returns "b".
+        act(() => {
+            rerender({ dets: detections });
+        });
+        expect(result.current.isDirty).toBe(false);
+        expect(result.current.canUndo).toBe(true);
+
+        // Undo brings the polygon back under a client id, as the model
+        // detection it was, so the next save re-creates it.
+        act(() => {
+            result.current.undo();
+        });
+        expect(result.current.polygons).toHaveLength(2);
+        const restored = result.current.polygons[1];
+        expect(restored.detection_id).toMatch(/^new:/);
+        expect(restored.origin).toBe('model');
+        expect(restored.confidence).toBe(0.9);
+        expect(restored.polygon).toEqual(square);
+        expect(result.current.isDirty).toBe(true);
+
+        // …and once the server has re-created it, it takes the new UUID.
+        const uuid = '22222222-2222-4222-8222-222222222222';
+        act(() => {
+            rerender({ dets: [...detections, det(uuid, square)] });
+        });
+        expect(result.current.polygons.map((p) => p.detection_id)).toEqual(['a', uuid]);
+        expect(result.current.isDirty).toBe(false);
+    });
+
+    it('resets when the server drops a detection the working set still has', () => {
+        const square: [number, number][] = [
+            [20, 20],
+            [30, 20],
+            [30, 30],
+            [20, 30],
+        ];
+        const { result, rerender } = renderHook(
+            ({ dets }: { dets: StoredLarvaeAnnotation[] }) =>
+                usePolygonEdits({ detections: dets, imageKey: 'img-1' }),
+            { initialProps: { dets: [...detections, det('b', square)] } },
+        );
+        act(() => {
+            result.current.moveVertex('a', 1, [15, 0]);
+        });
+        act(() => {
+            rerender({ dets: detections });
+        });
+        expect(result.current.polygons.map((p) => p.detection_id)).toEqual(['a']);
+        expect(result.current.canUndo).toBe(false);
+    });
+
+    it('resetToModel restores model outlines and drops hand-drawn ones (undoable)', () => {
+        const { result } = renderHook(() => usePolygonEdits({ detections }));
+        expect(result.current.differsFromModel).toBe(false);
+        act(() => {
+            result.current.moveVertex('a', 1, [15, 0]);
+        });
+        act(() => {
+            result.current.addPolygon([
+                [50, 50],
+                [60, 50],
+                [55, 60],
+            ]);
+        });
+        expect(result.current.differsFromModel).toBe(true);
+        act(() => {
+            result.current.resetToModel();
+        });
+        expect(result.current.polygons).toHaveLength(1);
+        expect(result.current.polygons[0].polygon[1]).toEqual([10, 0]);
+        expect(result.current.differsFromModel).toBe(false);
+        act(() => {
+            result.current.undo();
+        });
+        expect(result.current.polygons).toHaveLength(2);
+    });
+
     it('previewSimplify does not push history', () => {
         const noisy = [
             det('n', [

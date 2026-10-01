@@ -1,199 +1,292 @@
 // BatchDetail — full detail view for a single analysis batch.
 //
-// Layout goals (after the recorded-view redesign):
-//   - Fills the full viewport width (no narrow max-w-3xl column).
-//   - Header carries the batch name + a single primary "Continue" button
-//     that opens the whole batch in the result viewer.
-//   - CPU / mode / timing / confidence live in the body as stat cards, not
-//     as tiny header badges, so they have room to breathe on a wide screen.
-//   - Images render as a responsive grid of compact cards (thumbnail on
-//     top, stats below). Clicking a card opens the result viewer focused
-//     on that single image — the full batch is still loaded underneath so
-//     the user can flip through neighbours after landing.
+// Layout:
+//   - Header: back link, inline-editable name, organism / status chips, date,
+//     and the actions (Add images, Download, Continue edit).
+//   - A 4-up row of stat tiles (images, total count, time, confidence).
+//   - "Run details": device / mode / classes, the config snapshot and notes.
+//   - Processed images as a grid of compact cards (server-built thumbnail on
+//     top, stats below). Clicking a card opens the result viewer on that image.
 
-import { memo, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-    ArrowLeft,
-    Calendar,
-    Clock,
-    Egg,
-    ImageIcon,
     AlertCircle,
-    CheckCircle2,
-    Loader2,
+    ArrowLeft,
     ArrowRight,
+    Calendar,
+    CheckCircle2,
+    ChevronDown,
+    Clock,
     Cpu,
-    TrendingUp,
     Download,
+    Gauge,
+    ImagePlus,
+    Images,
+    Loader2,
+    Sigma,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
+import { toast } from 'sonner';
+
 import {
-    Pagination,
-    PaginationContent,
-    PaginationEllipsis,
-    PaginationItem,
-    PaginationLink,
-    PaginationNext,
-    PaginationPrevious,
-} from '@/components/ui/pagination';
-import { ErrorState } from '@/components/common/ErrorState';
+    ErrorState,
+    OrganismBadge,
+    PaginationBar,
+    StatTile,
+    StatusBadge,
+    Thumbnail,
+} from '@/components/common';
 import { InlineEditableText } from '@/components/common/InlineEditableText';
 import { LoadingScreen } from '@/components/LoadingScreen';
-import { toast } from 'sonner';
-import { getAnalysisDetail, getAnalysesOverlayUrl, renameBatch } from '@/services/api';
-import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+    formatCount,
+    formatDateTime,
+    formatDuration,
+    formatNumber,
+    formatPercent,
+    pluralize,
+} from '@/lib/format';
 import { listContainerVariants, listItemVariants } from '@/lib/motion';
+import { countLabel, isPolygonOrganism, organismMeta } from '@/lib/organism';
+import { cn } from '@/lib/utils';
+import { getAnalysisDetail, getThumbnailUrl, renameBatch } from '@/services/api';
 import type { AnalysisBatchDetail, AnalysisImageSummary } from '@/types/api';
-import { useOverlayThumbnail } from '../lib/overlayThumbnail';
 import { openBatchInResults } from '../lib/openBatchInResults';
+import { addImagesPath } from '../lib/paths';
 import { DownloadBatchDialog } from './DownloadBatchDialog';
 
-type ImageStatus = 'completed' | 'failed' | 'processing' | 'unknown';
+// The processed-images grid. These two constants must stay in sync with
+// IMAGE_GRID below — the page size (exactly two rows) is derived from them.
+const CARD_MIN_WIDTH = 160;
+const GRID_GAP = 16;
+const IMAGE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4';
 
-function statusInfo(status: ImageStatus) {
-    switch (status) {
-        case 'completed':
-            return { icon: CheckCircle2, className: 'text-green-500' };
-        case 'failed':
-            return { icon: AlertCircle, className: 'text-destructive' };
-        case 'processing':
-            return { icon: Loader2, className: 'text-amber-500 animate-spin' };
-        default:
-            return { icon: Clock, className: 'text-muted-foreground' };
-    }
+/** While a batch is processing, poll so counts and the action bar catch up. */
+const PROCESSING_POLL_MS = 4000;
+
+function detailKey(batchId: string | null) {
+    return ['analysis-detail', batchId, { includeAnnotations: false }] as const;
 }
 
-function parseImageStatus(status: string): ImageStatus {
-    if (status === 'completed') return 'completed';
-    if (status === 'failed') return 'failed';
-    if (status === 'processing') return 'processing';
-    return 'unknown';
-}
+// ── Small pieces ────────────────────────────────────────────────────────────
 
-function formatElapsed(seconds: number | null): string {
-    if (seconds === null) return '—';
-    if (seconds < 60) return `${seconds.toFixed(1)}s`;
-    const m = Math.floor(seconds / 60);
-    const s = Math.round(seconds % 60);
-    return `${m}m ${s}s`;
-}
-
-const batchDateFormatter = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-});
-const batchTimeFormatter = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-});
-
-function formatDate(isoString: string): string {
-    return batchDateFormatter.format(new Date(isoString));
-}
-
-function formatTime(isoString: string): string {
-    return batchTimeFormatter.format(new Date(isoString));
-}
-
-const imageVisibilityCallbacks = new Map<Element, () => void>();
-let sharedImageObserver: IntersectionObserver | null = null;
-
-function observeImageVisibility(element: Element, onVisible: () => void): () => void {
-    if (!sharedImageObserver) {
-        sharedImageObserver = new IntersectionObserver(
-            (entries) => {
-                for (const entry of entries) {
-                    if (!entry.isIntersecting) continue;
-                    const callback = imageVisibilityCallbacks.get(entry.target);
-                    if (!callback) continue;
-                    imageVisibilityCallbacks.delete(entry.target);
-                    sharedImageObserver?.unobserve(entry.target);
-                    callback();
-                }
-            },
-            { rootMargin: '400px 0px' },
-        );
-    }
-
-    imageVisibilityCallbacks.set(element, onVisible);
-    sharedImageObserver.observe(element);
-
-    return () => {
-        imageVisibilityCallbacks.delete(element);
-        sharedImageObserver?.unobserve(element);
+const IMAGE_STATUS: Record<string, { label: string; icon: React.ElementType; className: string }> =
+    {
+        completed: { label: 'Completed', icon: CheckCircle2, className: 'text-success' },
+        failed: { label: 'Failed', icon: AlertCircle, className: 'text-destructive' },
+        processing: { label: 'Processing', icon: Loader2, className: 'text-info' },
     };
-}
+const PENDING_STATUS = { label: 'Pending', icon: Clock, className: 'text-muted-foreground' };
 
-interface StatCardProps {
-    icon: React.ElementType;
-    label: string;
-    value: React.ReactNode;
-    sub?: React.ReactNode;
-    accent?: boolean;
-}
-
-function StatCard({ icon: Icon, label, value, sub, accent }: StatCardProps) {
+/** Thin confidence meter. Spans only, so it can sit inside a `<p>`. */
+function ConfidenceBar({ value, className }: { value: number; className?: string }) {
+    const pct = Math.max(0, Math.min(100, value * 100));
     return (
-        <div
+        <span
+            aria-hidden
+            className={cn('block h-1 overflow-hidden rounded-full bg-muted', className)}
+        >
+            <span
+                className="block h-full rounded-full bg-primary transition-[width] duration-200 ease-out"
+                style={{ width: `${pct}%` }}
+            />
+        </span>
+    );
+}
+
+function Chip({
+    children,
+    className,
+    title,
+}: {
+    children: React.ReactNode;
+    className?: string;
+    title?: string;
+}) {
+    return (
+        <span
+            title={title}
             className={cn(
-                'flex flex-col gap-2 rounded-md bg-card/55 p-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]',
-                accent && 'bg-primary/10 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]',
+                'inline-flex h-6 items-center gap-1.5 rounded-md border border-border bg-muted/60 px-2 text-xs font-medium text-foreground',
+                className,
             )}
         >
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Icon className="h-3.5 w-3.5" />
-                {label}
+            {children}
+        </span>
+    );
+}
+
+/** Carries the tooltip for a button that may be disabled (disabled buttons
+ *  ignore the pointer, so their own `title` never shows). */
+function WithHint({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <span title={title} className="inline-flex">
+            {children}
+        </span>
+    );
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+    return (
+        <Button
+            variant="ghost"
+            size="xs"
+            onClick={onClick}
+            title="Back to recorded batches"
+            className="-ml-2 text-muted-foreground hover:text-foreground"
+        >
+            <ArrowLeft aria-hidden />
+            Recorded batches
+        </Button>
+    );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="flex h-full flex-col">
+            <div className="flex-1 overflow-y-auto">
+                <div className="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 px-6 py-6">
+                    {children}
+                </div>
             </div>
-            <div className="text-2xl font-bold tabular-nums leading-none">{value}</div>
-            {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
         </div>
     );
 }
 
-// ── Image card ─────────────────────────────────────────────────────────────
+function formatConfigValue(value: unknown): string {
+    if (value === null || value === undefined) return '—';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+
+// ── Run details ─────────────────────────────────────────────────────────────
+
+function RunDetails({ detail }: { detail: AnalysisBatchDetail }) {
+    const [configOpen, setConfigOpen] = useState(false);
+    const config = Object.entries(detail.config_snapshot ?? {});
+    const classes = detail.classes ?? [];
+
+    return (
+        <section className="panel" aria-labelledby="run-details-title">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3 p-4">
+                <h2 id="run-details-title" className="text-sm font-semibold">
+                    Run details
+                </h2>
+
+                <dl className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                    <div className="flex items-center gap-2">
+                        <dt className="eyebrow">Device</dt>
+                        <dd>
+                            <Chip className="font-mono uppercase">
+                                <Cpu className="size-3.5 text-muted-foreground" aria-hidden />
+                                {detail.device}
+                            </Chip>
+                        </dd>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <dt className="eyebrow">Mode</dt>
+                        <dd>
+                            <Chip className="capitalize">{detail.mode}</Chip>
+                        </dd>
+                    </div>
+                    {classes.length > 0 && (
+                        <div className="flex items-center gap-2">
+                            <dt className="eyebrow">Classes</dt>
+                            <dd className="flex flex-wrap items-center gap-1.5">
+                                {classes.map((c) => (
+                                    <Chip key={c}>{c}</Chip>
+                                ))}
+                            </dd>
+                        </div>
+                    )}
+                </dl>
+
+                {config.length > 0 && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto text-muted-foreground hover:text-foreground"
+                        onClick={() => setConfigOpen((open) => !open)}
+                        aria-expanded={configOpen}
+                        aria-controls="run-details-config"
+                    >
+                        Config snapshot
+                        <span className="tabular-nums">({config.length})</span>
+                        <ChevronDown
+                            className={cn(
+                                'transition-transform duration-150 ease-out',
+                                configOpen && 'rotate-180',
+                            )}
+                            aria-hidden
+                        />
+                    </Button>
+                )}
+            </div>
+
+            {config.length > 0 && configOpen && (
+                <div id="run-details-config" className="border-t border-border p-4">
+                    <dl className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-8 gap-y-2 font-mono text-xs">
+                        {config.map(([key, raw]) => {
+                            const value = formatConfigValue(raw);
+                            return (
+                                <div
+                                    key={key}
+                                    className="flex min-w-0 items-baseline justify-between gap-3"
+                                >
+                                    <dt className="truncate text-muted-foreground" title={key}>
+                                        {key}
+                                    </dt>
+                                    <dd
+                                        className="max-w-[60%] truncate font-medium tabular-nums text-foreground"
+                                        title={value}
+                                    >
+                                        {value}
+                                    </dd>
+                                </div>
+                            );
+                        })}
+                    </dl>
+                </div>
+            )}
+
+            {detail.notes && (
+                <div className="border-t border-border p-4">
+                    <h3 className="eyebrow mb-1.5">Notes</h3>
+                    <p className="max-w-3xl whitespace-pre-wrap text-sm">{detail.notes}</p>
+                </div>
+            )}
+        </section>
+    );
+}
+
+// ── Image card ──────────────────────────────────────────────────────────────
 
 interface ImageCardProps {
     image: AnalysisImageSummary;
     batchId: string;
+    organism: string;
     onOpen: (image: AnalysisImageSummary) => void;
 }
 
-const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardProps) {
-    const cardRef = useRef<HTMLDivElement>(null);
-    // IntersectionObserver-gated thumbnail fetch. Opening a batch with hundreds
-    // of images would otherwise fire every fetch + canvas resize on mount.
-    const [seen, setSeen] = useState(false);
-
-    useEffect(() => {
-        if (seen) return;
-        const el = cardRef.current;
-        if (!el) return;
-        return observeImageVisibility(el, () => setSeen(true));
-    }, [seen]);
-
-    const overlaySrc = image.overlay_path ? getAnalysesOverlayUrl(batchId, image.id) : null;
-    const { thumbUrl, error: thumbError } = useOverlayThumbnail(overlaySrc, seen);
-    const status = parseImageStatus(image.status);
-    const info = statusInfo(status);
+const ImageCard = memo(function ImageCard({ image, batchId, organism, onOpen }: ImageCardProps) {
+    const info = IMAGE_STATUS[image.status] ?? PENDING_STATUS;
     const StatusIcon = info.icon;
-    const confidencePct =
-        image.avg_confidence != null ? Math.round(image.avg_confidence * 100) : null;
-    const canOpen = status === 'completed';
+    const canOpen = image.status === 'completed';
+    // Small server-built JPEG, fetched only once the card nears the viewport.
+    const thumbSrc = image.overlay_path ? getThumbnailUrl(batchId, image.id, 'overlay', 320) : null;
 
     return (
         <div
-            ref={cardRef}
             className={cn(
-                'group flex flex-col overflow-hidden rounded-md bg-card/55 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] transition-all duration-150',
-                canOpen ? 'cursor-pointer hover:bg-card/80 hover:shadow-sm' : 'opacity-80',
+                'group/card panel flex h-full flex-col overflow-hidden outline-none',
+                'transition-[border-color,box-shadow] duration-150 ease-out',
+                canOpen
+                    ? 'cursor-pointer hover:border-foreground/20 hover:shadow-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+                    : 'opacity-80',
             )}
             onClick={() => canOpen && onOpen(image)}
             onKeyDown={(e) => {
@@ -205,78 +298,67 @@ const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardP
             }}
             role={canOpen ? 'button' : undefined}
             tabIndex={canOpen ? 0 : undefined}
-            aria-label={canOpen ? `Open ${image.original_filename}` : image.original_filename}
+            aria-label={canOpen ? `Open ${image.original_filename}` : undefined}
         >
-            {/* Thumbnail — aspect-square so every card has a predictable footprint */}
-            <div className="relative aspect-square w-full overflow-hidden bg-muted">
-                {thumbUrl && !thumbError ? (
-                    <img
-                        src={thumbUrl}
-                        alt={image.original_filename}
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+            {/* Square thumbnail, so every card has the same footprint */}
+            <div className="relative border-b border-border">
+                <Thumbnail src={thumbSrc} alt="" className="aspect-square w-full" />
+                {canOpen && (
+                    <span
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 bg-foreground/0 transition-colors duration-150 ease-out group-hover/card:bg-foreground/5"
                     />
-                ) : overlaySrc && !thumbError ? (
-                    <Skeleton className="h-full w-full" />
-                ) : (
-                    <div className="flex h-full w-full items-center justify-center">
-                        <ImageIcon className="h-8 w-8 text-muted-foreground/50" />
-                    </div>
                 )}
-                {/* Status pill — always visible, so users can spot failures at a glance */}
-                <div
+                {/* Always visible, so failures stand out at a glance */}
+                <span
+                    title={info.label}
                     className={cn(
-                        'absolute top-2 right-2 rounded-full bg-card/85 backdrop-blur-sm p-1 shadow-sm',
+                        'absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full border border-border bg-card/90',
                         info.className,
                     )}
                 >
-                    <StatusIcon className="h-3.5 w-3.5" />
-                </div>
+                    <StatusIcon
+                        className={cn('size-3.5', image.status === 'processing' && 'animate-spin')}
+                        aria-hidden
+                    />
+                    <span className="sr-only">{info.label}</span>
+                </span>
             </div>
 
-            {/* Stats strip */}
-            <div className="flex flex-col gap-1 p-2">
+            <div className="flex flex-1 flex-col gap-1.5 p-3">
                 <p className="truncate text-xs font-medium" title={image.original_filename}>
                     {image.original_filename}
                 </p>
 
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
                     {image.count !== null && (
-                        <span className="flex items-center gap-1">
-                            <Egg className="h-3 w-3" />
-                            {image.count.toLocaleString()}
+                        <span className="font-medium text-foreground">
+                            {countLabel(organism, image.count)}
                         </span>
                     )}
                     {image.elapsed_secs !== null && (
-                        <span
-                            className="flex items-center gap-1 font-medium text-foreground/80 tabular-nums"
-                            title="Processing time"
-                        >
-                            <Clock className="h-3 w-3" />
-                            {formatElapsed(image.elapsed_secs)}
-                        </span>
-                    )}
-                    {image.error_message && (
-                        <span
-                            className="flex items-center gap-1 truncate text-destructive"
-                            title={image.error_message}
-                        >
-                            <AlertCircle className="h-3 w-3 shrink-0" />
-                            {image.error_message}
+                        <span className="inline-flex items-center gap-1" title="Processing time">
+                            <Clock className="size-3" aria-hidden />
+                            {formatDuration(image.elapsed_secs)}
                         </span>
                     )}
                 </div>
 
-                {confidencePct !== null && (
-                    <div className="flex items-center gap-2">
-                        <Progress
-                            value={confidencePct}
-                            variant={confidencePct >= 75 ? 'success' : 'default'}
-                            className="h-1 flex-1"
-                        />
-                        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                            {confidencePct}%
+                {image.error_message && (
+                    <p
+                        className="flex min-w-0 items-center gap-1 text-xs text-destructive"
+                        title={image.error_message}
+                    >
+                        <AlertCircle className="size-3 shrink-0" aria-hidden />
+                        <span className="truncate">{image.error_message}</span>
+                    </p>
+                )}
+
+                {image.avg_confidence !== null && (
+                    <div className="mt-auto flex items-center gap-2" title="Average confidence">
+                        <ConfidenceBar value={image.avg_confidence} className="flex-1" />
+                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                            {formatPercent(image.avg_confidence, 0)}
                         </span>
                     </div>
                 )}
@@ -284,86 +366,6 @@ const ImageCard = memo(function ImageCard({ image, batchId, onOpen }: ImageCardP
         </div>
     );
 });
-
-// ── Pagination bar ──────────────────────────────────────────────────────────
-// Same shape as UploadPage's compact window — first, last, current ±1, with
-// ellipses. Kept local to avoid a premature shared component; if a third
-// consumer appears, lift it into `src/components/common`.
-
-function PaginationBar({
-    page,
-    pageCount,
-    onChange,
-}: {
-    page: number;
-    pageCount: number;
-    onChange: (page: number) => void;
-}) {
-    const pages: (number | 'ellipsis')[] = [];
-    const push = (v: number | 'ellipsis') => {
-        if (v === 'ellipsis' || pages[pages.length - 1] !== v) pages.push(v);
-    };
-    for (let i = 1; i <= pageCount; i++) {
-        if (i === 1 || i === pageCount || Math.abs(i - page) <= 1) push(i);
-        else if (i < page) push('ellipsis');
-        else if (i > page) {
-            push('ellipsis');
-            // jump to tail
-            while (i < pageCount) i++;
-            push(pageCount);
-            break;
-        }
-    }
-
-    return (
-        <Pagination>
-            <PaginationContent>
-                <PaginationItem>
-                    <PaginationPrevious
-                        href="#"
-                        onClick={(e) => {
-                            e.preventDefault();
-                            if (page > 1) onChange(page - 1);
-                        }}
-                        aria-disabled={page === 1}
-                        className={page === 1 ? 'pointer-events-none opacity-50' : ''}
-                    />
-                </PaginationItem>
-                {pages.map((p, idx) =>
-                    p === 'ellipsis' ? (
-                        <PaginationItem key={`e${idx}`}>
-                            <PaginationEllipsis />
-                        </PaginationItem>
-                    ) : (
-                        <PaginationItem key={p}>
-                            <PaginationLink
-                                href="#"
-                                isActive={p === page}
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    onChange(p);
-                                }}
-                            >
-                                {p}
-                            </PaginationLink>
-                        </PaginationItem>
-                    ),
-                )}
-                <PaginationItem>
-                    <PaginationNext
-                        href="#"
-                        onClick={(e) => {
-                            e.preventDefault();
-                            if (page < pageCount) onChange(page + 1);
-                        }}
-                        aria-disabled={page === pageCount}
-                        className={page === pageCount ? 'pointer-events-none opacity-50' : ''}
-                    />
-                </PaginationItem>
-            </PaginationContent>
-        </Pagination>
-    );
-}
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
@@ -373,6 +375,32 @@ function BatchIdRedirect() {
         navigate('/recorded', { replace: true });
     }, [navigate]);
     return null;
+}
+
+function DetailSkeleton({ onBack }: { onBack: () => void }) {
+    return (
+        <Shell>
+            <div className="flex flex-col gap-2" role="status" aria-label="Loading batch">
+                <div>
+                    <BackButton onClick={onBack} />
+                </div>
+                <Skeleton className="h-8 w-72 max-w-full" />
+                <Skeleton className="h-5 w-56 max-w-full" />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <StatTile label="Images processed" value="" icon={Images} loading />
+                <StatTile label="Total count" value="" icon={Sigma} loading />
+                <StatTile label="Processing time" value="" icon={Clock} loading />
+                <StatTile label="Average confidence" value="" icon={Gauge} loading />
+            </div>
+            <Skeleton className="h-14 rounded-xl" />
+            <div className={IMAGE_GRID}>
+                {Array.from({ length: 12 }).map((_, i) => (
+                    <Skeleton key={i} className="aspect-[4/5] rounded-xl" />
+                ))}
+            </div>
+        </Shell>
+    );
 }
 
 export function BatchDetail() {
@@ -390,33 +418,39 @@ export function BatchDetail() {
     const [downloadOpen, setDownloadOpen] = useState(false);
 
     const detailQuery = useQuery({
-        queryKey: ['analysis-detail', batchId, { includeAnnotations: false }],
+        queryKey: detailKey(batchId),
         enabled: Boolean(batchId),
         queryFn: ({ signal }) =>
             getAnalysisDetail(batchId as string, signal, { includeAnnotations: false }),
+        // Coming back from the editor or the upload page: show the cached
+        // batch at once, but always refresh it.
+        refetchOnMount: 'always',
+        refetchInterval: (query) =>
+            query.state.data?.status === 'processing' ? PROCESSING_POLL_MS : false,
     });
     const detail = detailQuery.data ?? null;
+    const hasDetail = detail !== null;
     const loading = detailQuery.isPending;
-    const error = detailQuery.error ? String(detailQuery.error) : null;
+    const error = detailQuery.error
+        ? detailQuery.error instanceof Error
+            ? detailQuery.error.message
+            : String(detailQuery.error)
+        : null;
 
     // Measure the grid so we can derive "how many cards fit per row" and
-    // page-size the list to exactly two rows. These constants must stay in
-    // sync with the grid className (`minmax(120px, 1fr)` + `gap-3` = 12 px).
+    // page-size the list to exactly two rows.
     //
     // Uses useLayoutEffect so the measurement commits before paint — otherwise
     // the first frame shows columns = initial default (e.g. 6) and the user
     // briefly sees the wrong page size even though the grid CSS has already
     // packed more columns than that.
-    const CARD_MIN_WIDTH = 120;
-    const GRID_GAP = 12;
     useLayoutEffect(() => {
         const el = gridRef.current;
         if (!el) return;
         const measure = () => {
-            // Use getBoundingClientRect to pick up sub-pixel sizing that
-            // clientWidth rounds away. Round UP by 0.5 px of slack when deciding
-            // column count so a 1283.5-wide grid still counts as fitting 8×150
-            // instead of falling back to 7.
+            // getBoundingClientRect keeps the sub-pixel width that clientWidth
+            // rounds away; the 0.5 px of slack stops a fractional width from
+            // dropping a column the CSS grid actually fits.
             const w = el.getBoundingClientRect().width;
             if (w <= 0) return;
             const cols = Math.max(
@@ -440,16 +474,41 @@ export function BatchDetail() {
             ro.disconnect();
             if (rafId) cancelAnimationFrame(rafId);
         };
-    }, [Boolean(detail)]);
+    }, [hasDetail]);
+
+    const imageCount = detail?.images.length ?? 0;
 
     // Clamp `page` when the derived `pageCount` shrinks under us (resize,
     // batch reload). Sits before the early returns to keep hook order stable.
     useEffect(() => {
-        if (!detail) return;
+        if (!hasDetail) return;
         const ps = Math.max(columns * 2, 1);
-        const pc = Math.max(1, Math.ceil(detail.images.length / ps));
+        const pc = Math.max(1, Math.ceil(imageCount / ps));
         if (page > pc) setPage(pc);
-    }, [page, columns, detail]);
+    }, [page, columns, hasDetail, imageCount]);
+
+    const stats = useMemo(() => {
+        const images = detail?.images ?? [];
+        let completed = 0;
+        let failed = 0;
+        const elapsed: number[] = [];
+        for (const img of images) {
+            if (img.status === 'completed') completed++;
+            else if (img.status === 'failed') failed++;
+            if (img.elapsed_secs !== null && img.elapsed_secs >= 0) elapsed.push(img.elapsed_secs);
+        }
+        let timing: string | undefined;
+        if (elapsed.length === 1) {
+            timing = `${formatDuration(elapsed[0])} for 1 image`;
+        } else if (elapsed.length > 1) {
+            const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length;
+            timing =
+                `avg ${formatDuration(avg)} per image · ` +
+                `min ${formatDuration(Math.min(...elapsed))} · ` +
+                `max ${formatDuration(Math.max(...elapsed))}`;
+        }
+        return { completed, failed, timing };
+    }, [detail]);
 
     async function loadFullDetailForEdit(): Promise<AnalysisBatchDetail | null> {
         if (!detail) return null;
@@ -475,7 +534,7 @@ export function BatchDetail() {
             return;
         }
         // Pre-populate sessionStorage as a hot cache for ResultViewer, then
-        // navigate with explicit ?batch=&image= so the URL is the canonical
+        // navigate with explicit batch + image ids so the URL is the canonical
         // source of truth (reload, share, back/forward all work).
         const ok = openBatchInResults(full, { singleImageId: image.id });
         if (!ok) {
@@ -507,6 +566,21 @@ export function BatchDetail() {
         requestAnimationFrame(() => navigate(url));
     }
 
+    async function rename(next: string) {
+        if (!detail) return;
+        try {
+            const updated = await renameBatch(detail.id, next);
+            queryClient.setQueryData(detailKey(detail.id), updated);
+            void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
+            toast.success('Batch renamed');
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : 'Failed to rename batch');
+            throw err;
+        }
+    }
+
+    const backToList = () => navigate('/recorded');
+
     if (transitioning) {
         return <LoadingScreen status="Opening batch..." />;
     }
@@ -516,63 +590,37 @@ export function BatchDetail() {
     }
 
     if (loading) {
+        return <DetailSkeleton onBack={backToList} />;
+    }
+
+    // A failed background refresh keeps the batch on screen; only a batch that
+    // never loaded shows the error page.
+    if (!detail) {
+        if (error === null) return null;
         return (
-            <div className="flex flex-col h-full">
-                <div className="flex items-center gap-3 border-b px-6 py-4">
-                    <Skeleton className="h-8 w-8 rounded-lg" />
-                    <div className="flex flex-col gap-1.5">
-                        <Skeleton className="h-5 w-48" />
-                        <Skeleton className="h-3 w-32" />
-                    </div>
+            <Shell>
+                <div>
+                    <BackButton onClick={backToList} />
                 </div>
-                <div className="flex-1 overflow-y-auto p-6">
-                    <div className="space-y-6">
-                        <div className="grid gap-4 sm:grid-cols-3">
-                            <Skeleton className="h-24 rounded-xl" />
-                            <Skeleton className="h-24 rounded-xl" />
-                            <Skeleton className="h-24 rounded-xl" />
-                        </div>
-                        <Skeleton className="h-px w-full" />
-                        <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-3">
-                            {Array.from({ length: 12 }).map((_, i) => (
-                                <Skeleton key={i} className="h-36 rounded-xl" />
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
+                <ErrorState
+                    message={error}
+                    title="Could not load this analysis batch"
+                    onRetry={() => void detailQuery.refetch()}
+                    onBack={backToList}
+                />
+            </Shell>
         );
     }
 
-    if (error !== null) {
-        return (
-            <div className="flex flex-col h-full">
-                <div className="flex items-center gap-3 border-b px-6 py-4">
-                    <Button variant="ghost" size="icon" onClick={() => navigate('/recorded')}>
-                        <ArrowLeft className="h-4 w-4" />
-                    </Button>
-                    <span className="text-sm text-muted-foreground">Batch detail</span>
-                </div>
-                <div className="flex flex-1 items-center justify-center px-6">
-                    <ErrorState
-                        message={error}
-                        title="Could not load this analysis batch"
-                        onRetry={() => void detailQuery.refetch()}
-                        onBack={() => navigate('/recorded')}
-                    />
-                </div>
-            </div>
-        );
-    }
-
-    if (!detail) return null;
-
-    const completedCount = detail.images.filter((i) => i.status === 'completed').length;
-    const failedCount = detail.images.filter((i) => i.status === 'failed').length;
+    const meta = organismMeta(detail.organism_type);
+    const { completed: completedCount, failed: failedCount } = stats;
     const canContinue = completedCount > 0;
+    const processing = detail.status === 'processing';
+    const countOnly =
+        isPolygonOrganism(detail.organism_type) && detail.config_snapshot?.count_only === true;
 
     // Exactly two rows per page. If the width gives us 6 columns → 12 per page,
-    // 8 columns → 16, etc. The clamp below handles the case where `page` sits
+    // 8 columns → 16, etc. The clamp above handles the case where `page` sits
     // past the end after a resize.
     const pageSize = Math.max(columns * 2, 1);
     const pageCount = Math.max(1, Math.ceil(detail.images.length / pageSize));
@@ -582,94 +630,94 @@ export function BatchDetail() {
     const pageImages = detail.images.slice(pageStart, pageEnd);
 
     return (
-        <div className="flex flex-col h-full">
-            {/* Header — integrated detail toolbar */}
-            <header className="px-6 py-5 border-b">
-                <div className="flex flex-col gap-4 mb-1.5 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex min-w-0 items-center gap-4">
-                        <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={() => navigate('/recorded')}
-                            title="Back to recorded analyses"
-                            className=" shrink-0 bg-muted/35 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                        >
-                            <ArrowLeft className="h-4 w-4" />
-                        </Button>
+        <Shell>
+            {/* Header */}
+            <header className="flex flex-col gap-2">
+                <div>
+                    <BackButton onClick={backToList} />
+                </div>
 
-                        <h1 className="min-w-0 text-xl font-semibold leading-tight tracking-normal">
+                <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+                    <div className="min-w-0 flex-1 basis-80">
+                        <h1 className="min-w-0 text-2xl font-semibold tracking-tight">
                             <InlineEditableText
                                 value={detail.name}
-                                onSave={async (next) => {
-                                    try {
-                                        const updated = await renameBatch(detail.id, next);
-                                        queryClient.setQueryData(
-                                            [
-                                                'analysis-detail',
-                                                detail.id,
-                                                { includeAnnotations: false },
-                                            ],
-                                            updated,
-                                        );
-                                        void queryClient.invalidateQueries({
-                                            queryKey: ['recorded-batches'],
-                                        });
-                                        toast.success('Batch renamed');
-                                    } catch (err) {
-                                        toast.error(
-                                            err instanceof Error
-                                                ? err.message
-                                                : 'Failed to rename batch',
-                                        );
-                                        throw err;
-                                    }
-                                }}
+                                onSave={rename}
                                 ariaLabel="Rename batch"
-                                className="max-w-fit"
+                                className="max-w-full"
+                                inputClassName="max-w-full"
                             />
                         </h1>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
+                            <OrganismBadge organism={detail.organism_type} />
+                            <StatusBadge status={detail.status} />
+                            {countOnly && (
+                                <span
+                                    title="Sizes are measured on demand in the result viewer"
+                                    className="inline-flex h-5 shrink-0 items-center rounded-md border border-info/25 bg-info/10 px-1.5 text-[11px] font-medium text-info"
+                                >
+                                    Count only
+                                </span>
+                            )}
+                            <span className="inline-flex items-center gap-1.5 pl-1">
+                                <Calendar className="size-3.5" aria-hidden />
+                                {formatDateTime(detail.created_at)}
+                            </span>
+                        </div>
                     </div>
 
-                    <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
-                        <Button
-                            variant="outline"
-                            onClick={() => setDownloadOpen(true)}
-                            disabled={!canContinue}
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <WithHint
+                            title={
+                                processing
+                                    ? 'This batch is still processing — wait for it to finish before adding images'
+                                    : 'Upload more images into this batch'
+                            }
+                        >
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={processing}
+                                onClick={() =>
+                                    navigate(addImagesPath(detail.id, detail.organism_type))
+                                }
+                            >
+                                <ImagePlus aria-hidden />
+                                Add images
+                            </Button>
+                        </WithHint>
+
+                        <WithHint
                             title={
                                 canContinue
                                     ? 'Download overlays + summary.xlsx as a ZIP'
                                     : 'No completed images to download'
                             }
-                            className="border-0 bg-muted/45 hover:bg-muted/70"
                         >
-                            <Download className="h-4 w-4" />
-                            Download
-                        </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setDownloadOpen(true)}
+                                disabled={!canContinue}
+                            >
+                                <Download aria-hidden />
+                                Download
+                            </Button>
+                        </WithHint>
 
-                        <Button
-                            onClick={openAllImages}
-                            disabled={!canContinue}
+                        <WithHint
                             title={
                                 canContinue
                                     ? 'Open all processed images in the review tool'
                                     : 'No completed images to review'
                             }
                         >
-                            Continue Edit
-                            <ArrowRight className="h-4 w-4" />
-                        </Button>
+                            <Button size="sm" onClick={openAllImages} disabled={!canContinue}>
+                                Continue edit
+                                <ArrowRight aria-hidden />
+                            </Button>
+                        </WithHint>
                     </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <span className="rounded-md bg-primary/10 px-2 py-1 font-medium text-primary">
-                        Recorded batch
-                    </span>
-                    <span className="capitalize">{detail.organism_type}</span>
-                    <span className="text-border">·</span>
-                    <span className="inline-flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        {formatDate(detail.created_at)} · {formatTime(detail.created_at)}
-                    </span>
                 </div>
             </header>
 
@@ -679,240 +727,143 @@ export function BatchDetail() {
                 batch={detail}
             />
 
-            {/* Body — full width, no narrow column */}
-            <div className="flex-1 overflow-y-auto p-6">
-                <div className="space-y-6">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span className="rounded-md bg-muted/35 px-2 py-1">
-                            {completedCount} of {detail.total_image_count} images processed
-                        </span>
-                        {detail.total_count !== null && (
-                            <span className="rounded-md bg-muted/35 px-2 py-1">
-                                {detail.total_count.toLocaleString()} total eggs
-                            </span>
-                        )}
-                        {detail.avg_confidence !== null && (
-                            <span className="rounded-md bg-muted/35 px-2 py-1">
-                                {(detail.avg_confidence * 100).toFixed(1)}% avg confidence
-                            </span>
-                        )}
-                    </div>
-
-                    {/* Meta row — CPU + mode pulled out of the header into proper tiles */}
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                            variant="secondary"
-                            className="gap-1.5 border-0 bg-muted/45 py-1.5 px-3 text-xs font-mono uppercase"
-                        >
-                            <Cpu className="h-3.5 w-3.5" />
-                            {detail.device}
-                        </Badge>
-                        <Badge
-                            variant="secondary"
-                            className="gap-1.5 border-0 bg-muted/45 py-1.5 px-3 text-xs capitalize"
-                        >
-                            {detail.mode}
-                        </Badge>
-                        {detail.classes &&
-                            detail.classes.length > 0 &&
-                            detail.classes.map((c) => (
-                                <Badge
-                                    key={c}
-                                    variant="secondary"
-                                    className="border-0 bg-muted/45 py-1.5 px-3 text-xs"
-                                >
-                                    {c}
-                                </Badge>
-                            ))}
-                    </div>
-
-                    {/* Summary stat cards — 4-up so Average confidence sits on the
-              same row as Images processed / Total eggs / Processing time. */}
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <StatCard
-                            icon={ImageIcon}
-                            label="Images processed"
-                            value={
-                                <span>
-                                    {completedCount}
-                                    {failedCount > 0 && (
-                                        <span className="ml-2 text-sm font-normal text-destructive">
-                                            +{failedCount} failed
-                                        </span>
-                                    )}
-                                </span>
-                            }
-                            sub={`of ${detail.total_image_count} total`}
-                        />
-
-                        <StatCard
-                            icon={Egg}
-                            label="Total eggs counted"
-                            value={
-                                detail.total_count !== null
-                                    ? detail.total_count.toLocaleString()
-                                    : '—'
-                            }
-                            sub={
-                                detail.avg_confidence !== null
-                                    ? `avg ${(detail.avg_confidence * 100).toFixed(1)}% confidence`
-                                    : undefined
-                            }
-                            accent
-                        />
-
-                        <StatCard
-                            icon={Clock}
-                            label="Processing time"
-                            value={formatElapsed(detail.total_elapsed_secs)}
-                            sub={(() => {
-                                const elapsed = detail.images
-                                    .map((i) => i.elapsed_secs)
-                                    .filter((s): s is number => s !== null && s >= 0);
-                                if (elapsed.length === 0) return undefined;
-                                if (elapsed.length === 1) {
-                                    return `${elapsed[0].toFixed(2)}s for 1 image`;
-                                }
-                                const avg = elapsed.reduce((a, b) => a + b, 0) / elapsed.length;
-                                const min = Math.min(...elapsed);
-                                const max = Math.max(...elapsed);
-                                return (
-                                    <span className="flex flex-col gap-0.5">
-                                        <span>avg {avg.toFixed(2)}s per image</span>
-                                        <span className="text-[10px] uppercase tracking-wider">
-                                            min {min.toFixed(2)}s · max {max.toFixed(2)}s
-                                        </span>
-                                    </span>
-                                );
-                            })()}
-                        />
-
-                        {/* Average confidence — keeps the inline progress bar since
-                the number alone is less informative at a glance. */}
-                        <div className="flex flex-col gap-2 rounded-md bg-card/55 p-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                <TrendingUp className="h-3.5 w-3.5" />
-                                Average confidence
-                            </div>
-                            {detail.avg_confidence !== null ? (
-                                <>
-                                    <div className="text-2xl font-bold tabular-nums leading-none">
-                                        {(detail.avg_confidence * 100).toFixed(1)}%
-                                    </div>
-                                    <Progress
-                                        value={detail.avg_confidence * 100}
-                                        variant={
-                                            detail.avg_confidence >= 0.75 ? 'success' : 'default'
-                                        }
-                                        className="mt-0.5 h-1.5"
-                                    />
-                                </>
-                            ) : (
-                                <div className="text-2xl font-bold tabular-nums leading-none text-muted-foreground">
-                                    —
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Config snapshot */}
-                    {detail.config_snapshot && Object.keys(detail.config_snapshot).length > 0 && (
-                        <div>
-                            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                Config snapshot
-                            </h2>
-                            <div className="flex flex-wrap gap-2">
-                                {Object.entries(detail.config_snapshot).map(([key, val]) => (
-                                    <span
-                                        key={key}
-                                        className="rounded-md bg-muted/45 px-2 py-1 font-mono text-xs"
-                                    >
-                                        {key}:{' '}
-                                        <span className="text-foreground font-medium">
-                                            {String(val)}
-                                        </span>
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Notes */}
-                    {detail.notes && (
-                        <div>
-                            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                Notes
-                            </h2>
-                            <p className="rounded-md bg-card/55 px-4 py-3 text-sm shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
-                                {detail.notes}
-                            </p>
-                        </div>
-                    )}
-
-                    <Separator />
-
-                    {/* Processed images grid */}
-                    <div>
-                        <div className="flex items-center justify-between mb-3">
-                            <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                Processed Images ({detail.images.length})
-                            </h2>
-                            {failedCount > 0 && (
-                                <Badge variant="destructive" className="text-xs">
-                                    {failedCount} failed
-                                </Badge>
-                            )}
-                        </div>
-
-                        {/* Stable wrapper — this div never unmounts across page flips,
-                so the ResizeObserver stays attached. The motion.div inside
-                takes `key={currentPage}` to replay the stagger animation
-                on each page change, but the outer width is what we measure. */}
-                        <div ref={gridRef} className="w-full">
-                            <motion.div
-                                className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(120px,1fr))]"
-                                variants={listContainerVariants}
-                                initial="hidden"
-                                animate="visible"
-                                key={currentPage}
-                            >
-                                {pageImages.map((image) => (
-                                    <motion.div key={image.id} variants={listItemVariants}>
-                                        <ImageCard
-                                            image={image}
-                                            batchId={detail.id}
-                                            onOpen={openSingleImage}
-                                        />
-                                    </motion.div>
-                                ))}
-                            </motion.div>
-                        </div>
-
-                        {pageCount > 1 && (
-                            <div className="mt-4 flex flex-col items-center gap-1">
-                                <PaginationBar
-                                    page={currentPage}
-                                    pageCount={pageCount}
-                                    onChange={(p) => {
-                                        setPage(p);
-                                        // Scroll the user back to the top of the grid so the
-                                        // newly-rendered page is visible without extra scroll.
-                                        requestAnimationFrame(() => {
-                                            gridRef.current?.scrollIntoView({
-                                                behavior: 'smooth',
-                                                block: 'start',
-                                            });
-                                        });
-                                    }}
-                                />
-                                <span className="text-[11px] text-muted-foreground">
-                                    Showing {pageStart + 1}–{pageEnd} of {detail.images.length}
-                                </span>
-                            </div>
-                        )}
-                    </div>
+            {detail.status === 'failed' && detail.failure_reason && (
+                <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-xl border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                >
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                    <span>{detail.failure_reason}</span>
                 </div>
+            )}
+
+            {/* Summary */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <StatTile
+                    label="Images processed"
+                    icon={Images}
+                    value={formatCount(completedCount)}
+                    unit={`of ${formatCount(detail.total_image_count)}`}
+                    hint={
+                        failedCount > 0 ? (
+                            <span className="font-medium text-destructive">
+                                +{formatCount(failedCount)} failed
+                            </span>
+                        ) : completedCount < detail.total_image_count ? (
+                            `${formatCount(detail.total_image_count - completedCount)} not processed yet`
+                        ) : (
+                            'All images processed'
+                        )
+                    }
+                />
+                <StatTile
+                    label={`Total ${meta.nounPlural}`}
+                    icon={Sigma}
+                    value={formatCount(detail.total_count)}
+                    hint={
+                        detail.total_count !== null && completedCount > 0
+                            ? `≈ ${formatNumber(detail.total_count / completedCount)} per image`
+                            : undefined
+                    }
+                />
+                <StatTile
+                    label="Processing time"
+                    icon={Clock}
+                    value={formatDuration(detail.total_elapsed_secs)}
+                    hint={stats.timing && <span title={stats.timing}>{stats.timing}</span>}
+                />
+                <StatTile
+                    label="Average confidence"
+                    icon={Gauge}
+                    value={formatPercent(detail.avg_confidence)}
+                    hint={
+                        detail.avg_confidence !== null && (
+                            <ConfidenceBar value={detail.avg_confidence} className="mt-1.5 h-1.5" />
+                        )
+                    }
+                />
             </div>
-        </div>
+
+            <RunDetails detail={detail} />
+
+            {/* Processed images */}
+            <section aria-labelledby="processed-images-title">
+                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h2 id="processed-images-title" className="text-sm font-semibold">
+                        Processed images
+                    </h2>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                        {formatCount(detail.images.length)}{' '}
+                        {pluralize(detail.images.length, 'image')}
+                    </span>
+                    {failedCount > 0 && (
+                        <span className="inline-flex h-5 items-center gap-1 rounded-md border border-destructive/25 bg-destructive/10 px-1.5 text-[11px] font-medium tabular-nums text-destructive">
+                            <AlertCircle className="size-3" aria-hidden />
+                            {formatCount(failedCount)} failed
+                        </span>
+                    )}
+                    {pageCount > 1 && (
+                        <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+                            Showing {pageStart + 1}–{pageEnd} of {detail.images.length}
+                        </span>
+                    )}
+                </div>
+
+                {/* Stable wrapper — this div never unmounts across page flips, so
+                    the ResizeObserver stays attached. The motion.div inside takes
+                    `key={currentPage}` to replay the stagger on each page change,
+                    but the outer width is what we measure. */}
+                <div ref={gridRef} className="w-full scroll-mt-14">
+                    {detail.images.length === 0 ? (
+                        <div className="panel px-4 py-10 text-center text-sm text-muted-foreground">
+                            This batch has no images yet.
+                        </div>
+                    ) : (
+                        <motion.div
+                            className={IMAGE_GRID}
+                            variants={listContainerVariants}
+                            initial="hidden"
+                            animate="visible"
+                            key={currentPage}
+                        >
+                            {pageImages.map((image) => (
+                                <motion.div
+                                    key={image.id}
+                                    variants={listItemVariants}
+                                    className="h-full min-w-0"
+                                >
+                                    <ImageCard
+                                        image={image}
+                                        batchId={detail.id}
+                                        organism={detail.organism_type}
+                                        onOpen={openSingleImage}
+                                    />
+                                </motion.div>
+                            ))}
+                        </motion.div>
+                    )}
+                </div>
+
+                {pageCount > 1 && (
+                    <div className="mt-6">
+                        <PaginationBar
+                            page={currentPage}
+                            pageCount={pageCount}
+                            onChange={(p) => {
+                                setPage(p);
+                                // Scroll back to the top of the grid so the new
+                                // page is visible without extra scrolling.
+                                requestAnimationFrame(() => {
+                                    gridRef.current?.scrollIntoView({
+                                        behavior: 'smooth',
+                                        block: 'start',
+                                    });
+                                });
+                            }}
+                        />
+                    </div>
+                )}
+            </section>
+        </Shell>
     );
 }

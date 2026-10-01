@@ -15,11 +15,12 @@ from uuid import UUID
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.models.analysis import AnalysisBatch, AnalysisImage
 from app.schemas.analysis import (
     ActiveBatchResponse,
+    AnalysisBatchAppend,
     AnalysisBatchCreate,
     AnalysisBatchDetail,
     AnalysisBatchSummary,
@@ -46,6 +47,21 @@ _DEFAULT_NAME_PREFIX = "Batch of "
 _ZOMBIE_TIMEOUT = timedelta(hours=24)
 
 _POLYGON_ORGANISMS = frozenset({"larvae", "pupae"})
+
+# config_snapshot keys that exist only while an append run is in flight.
+# ``_resume_status`` is the status the batch returns to when the run ends
+# (or is cancelled); ``_processing_started_at`` anchors the zombie timeout to
+# the append rather than to the batch's original creation time.
+_RESUME_STATUS_KEY = "_resume_status"
+_ACTIVE_SINCE_KEY = "_processing_started_at"
+
+
+def _batch_images_light():
+    """Loader option: batch images without their annotation JSONB payloads."""
+    return selectinload(AnalysisBatch.images).options(
+        defer(AnalysisImage.annotations, raiseload=True),
+        defer(AnalysisImage.edited_annotations, raiseload=True),
+    )
 
 
 def _default_batch_name_for_count(total_image_count: int, created_at: datetime) -> str:
@@ -261,6 +277,7 @@ class AnalysisService:
             elapsed_secs=result.elapsed_seconds,
             overlay_path=overlay_path_value,
             annotations=result.annotations or None,
+            sam_refined=bool(result.sam_refined),
         )
         db.add(image)
         await db.flush()
@@ -396,7 +413,11 @@ class AnalysisService:
         total_count, avg_conf, total_elapsed = await self._recompute_aggregates(
             batch_id, db
         )
-        batch.status = "draft"
+        # A batch that was already saved to Records before images were
+        # appended goes back to ``completed``; everything else lands in
+        # ``draft`` for review.
+        resume_status = self._pop_append_markers(batch)
+        batch.status = "completed" if resume_status == "completed" else "draft"
         batch.total_count = total_count
         batch.avg_confidence = avg_conf
         batch.total_elapsed_secs = total_elapsed
@@ -515,6 +536,19 @@ class AnalysisService:
             return None
         if batch.status != "processing":
             return None
+        if await self._abort_append(batch, db):
+            await db.refresh(batch)
+            logger.info(
+                "Append run aborted — batch restored",
+                extra={
+                    "context": {
+                        "batch_id": str(batch_id),
+                        "status": batch.status,
+                        "reason": error,
+                    }
+                },
+            )
+            return batch
         now = datetime.now(timezone.utc)
         batch.status = "failed"
         batch.failed_at = now
@@ -533,6 +567,115 @@ class AnalysisService:
         )
         return batch
 
+    # ── Append images to an existing batch ──────────────────────────────────────
+
+    @staticmethod
+    def _pop_append_markers(batch: AnalysisBatch) -> str | None:
+        """Strip the in-flight append markers; return the status to resume to."""
+        snapshot = dict(batch.config_snapshot or {})
+        resume_status = snapshot.pop(_RESUME_STATUS_KEY, None)
+        had_since = snapshot.pop(_ACTIVE_SINCE_KEY, None) is not None
+        if resume_status is not None or had_since:
+            batch.config_snapshot = snapshot
+        return resume_status
+
+    async def _count_images(self, batch_id: UUID, db: AsyncSession) -> int:
+        stmt = select(func.count(AnalysisImage.id)).where(
+            AnalysisImage.batch_id == batch_id
+        )
+        return int((await db.execute(stmt)).scalar() or 0)
+
+    async def _abort_append(self, batch: AnalysisBatch, db: AsyncSession) -> bool:
+        """Undo an in-flight append: restore the prior status, keep the images
+        that already landed. Returns False when the batch is not appending."""
+        if _RESUME_STATUS_KEY not in (batch.config_snapshot or {}):
+            return False
+        resume_status = self._pop_append_markers(batch)
+        actual = await self._count_images(batch.id, db)
+        total_count, avg_conf, total_elapsed = await self._recompute_aggregates(
+            batch.id, db
+        )
+        batch.status = "completed" if resume_status == "completed" else "draft"
+        batch.total_image_count = max(actual, 1)
+        batch.processed_image_count = actual
+        batch.total_count = total_count
+        batch.avg_confidence = avg_conf
+        batch.total_elapsed_secs = total_elapsed
+        await db.flush()
+        return True
+
+    async def append_to_batch(
+        self,
+        batch_id: UUID,
+        data: AnalysisBatchAppend,
+        db: AsyncSession,
+        user_id: UUID,
+    ) -> AnalysisBatch | None:
+        """Re-open a batch so more images can be processed into it.
+
+        The batch moves back to ``processing``; ``complete_batch`` (or an
+        abort via ``fail_batch``) returns it to the status it had before.
+        Raises ``ValueError`` when the batch is already processing.
+        """
+        batch = (
+            await db.execute(
+                select(AnalysisBatch)
+                .where(AnalysisBatch.id == batch_id)
+                .where(AnalysisBatch.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if batch is None:
+            return None
+        if batch.status == "processing":
+            raise ValueError(f"Batch {batch_id} is already processing.")
+
+        actual = await self._count_images(batch_id, db)
+        now = datetime.now(timezone.utc)
+        snapshot = dict(batch.config_snapshot or {})
+        snapshot.update(data.config_snapshot or {})
+        snapshot[_RESUME_STATUS_KEY] = (
+            "completed" if batch.status == "completed" else "draft"
+        )
+        snapshot[_ACTIVE_SINCE_KEY] = now.isoformat()
+
+        batch.config_snapshot = snapshot
+        batch.status = "processing"
+        batch.total_image_count = actual + data.additional_image_count
+        batch.processed_image_count = actual
+        batch.failed_at = None
+        batch.failure_reason = None
+        await db.flush()
+        await db.refresh(batch)
+        logger.info(
+            "Analysis batch re-opened for append",
+            extra={
+                "context": {
+                    "batch_id": str(batch_id),
+                    "existing_images": actual,
+                    "additional_images": data.additional_image_count,
+                }
+            },
+        )
+        return batch
+
+    # ── Counts after operator edits ─────────────────────────────────────────────
+
+    async def refresh_batch_aggregates(self, batch_id: UUID, db: AsyncSession) -> None:
+        """Re-derive a batch's totals from its image rows.
+
+        Called after an edit changes an image's ``count`` so Records and the
+        dashboard show the reviewed number, not the model's first pass.
+        """
+        batch = (
+            await db.execute(select(AnalysisBatch).where(AnalysisBatch.id == batch_id))
+        ).scalar_one_or_none()
+        if batch is None:
+            return
+        total_count, avg_conf, _elapsed = await self._recompute_aggregates(batch_id, db)
+        batch.total_count = total_count
+        batch.avg_confidence = avg_conf
+        await db.flush()
+
     # ── Active batch ────────────────────────────────────────────────────────────
 
     async def get_active_batch(
@@ -543,25 +686,28 @@ class AnalysisService:
         Zombie cleanup: if the active batch is older than 24 hours, auto-mark
         it as failed so it doesn't block new batches forever.
         """
-        stmt = (
-            select(AnalysisBatch)
-            .options(selectinload(AnalysisBatch.images))
-            .where(AnalysisBatch.status == "processing")
-            .where(AnalysisBatch.user_id == user_id)
-            .order_by(AnalysisBatch.created_at.desc())
-            .limit(1)
-        )
-        result = await db.execute(stmt)
-        batch = result.scalar_one_or_none()
+        batch = await self.has_active_batch(db=db, user_id=user_id)
 
         if batch is None:
             return ActiveBatchResponse(active=False, batch=None)
 
         now = datetime.now(timezone.utc)
-        created_at = batch.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-        if now - created_at > _ZOMBIE_TIMEOUT:
+        started_at = batch.created_at
+        since_raw = (batch.config_snapshot or {}).get(_ACTIVE_SINCE_KEY)
+        if isinstance(since_raw, str):
+            try:
+                started_at = datetime.fromisoformat(since_raw)
+            except ValueError:
+                pass
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        if now - started_at > _ZOMBIE_TIMEOUT:
+            if await self._abort_append(batch, db):
+                logger.warning(
+                    "Zombie append run aborted — batch restored",
+                    extra={"context": {"batch_id": str(batch.id)}},
+                )
+                return ActiveBatchResponse(active=False, batch=None)
             batch.status = "failed"
             batch.failed_at = now
             batch.failure_reason = "Timed out — no progress for 24 hours"
@@ -574,7 +720,10 @@ class AnalysisService:
             )
             return ActiveBatchResponse(active=False, batch=None)
 
-        detail = await self.get_batch_detail(batch_id=batch.id, db=db, user_id=user_id)
+        # Progress view only — callers that need boxes fetch the detail endpoint.
+        detail = await self.get_batch_detail(
+            batch_id=batch.id, db=db, user_id=user_id, include_annotations=False
+        )
         return ActiveBatchResponse(active=True, batch=detail)
 
     async def has_active_batch(
@@ -602,6 +751,8 @@ class AnalysisService:
         db: AsyncSession,
         user_id: UUID,
         statuses: list[str] | None = None,
+        sort: str = "created_at",
+        descending: bool = True,
     ) -> AnalysisListResponse:
         """Return a paginated list of analysis batches.
 
@@ -613,6 +764,9 @@ class AnalysisService:
             organism: Optional organism type filter.
             statuses: Optional list of status values to include (e.g.
                 ``["completed", "failed"]``). When None, no status filter.
+            sort: ``created_at`` (default) or ``total_count``. Applied before
+                pagination, so the order holds across pages.
+            descending: Largest / newest first.
         """
         # Base count query — always scoped to this user.
         count_stmt = select(func.count(AnalysisBatch.id)).where(
@@ -622,10 +776,21 @@ class AnalysisService:
         # Base batch query — no selectinload(images) because the summary view
         # does not touch the relationship. Loading every image per row was
         # shipping ~50× the rows we render.
+        if sort == "total_count":
+            # Batches without a count (failed before any image) sort last
+            # either way; creation date breaks ties so paging is stable.
+            count_col = AnalysisBatch.total_count
+            ordering = [
+                (count_col.desc() if descending else count_col.asc()).nulls_last(),
+                AnalysisBatch.created_at.desc(),
+            ]
+        else:
+            created = AnalysisBatch.created_at
+            ordering = [created.desc() if descending else created.asc()]
         batch_stmt = (
             select(AnalysisBatch)
             .where(AnalysisBatch.user_id == user_id)
-            .order_by(AnalysisBatch.created_at.desc())
+            .order_by(*ordering, AnalysisBatch.id)
         )
 
         if organism:
@@ -660,7 +825,8 @@ class AnalysisService:
         batch_result = await db.execute(batch_stmt)
         batches = list(batch_result.scalars().unique().all())
 
-        items = [self._to_summary(b) for b in batches]
+        covers = await self._cover_image_ids([b.id for b in batches], db)
+        items = [self._to_summary(b, covers.get(b.id)) for b in batches]
         return AnalysisListResponse(
             items=items,
             total=total,
@@ -683,9 +849,16 @@ class AnalysisService:
         Saves bandwidth + JSON parse time on big batches; the ResultViewer
         re-fetches with the full payload before entering edit mode.
         """
+        # Annotation arrays can run to thousands of boxes per image; when the
+        # caller doesn't want them, don't pull them out of Postgres at all.
+        images_loader = (
+            selectinload(AnalysisBatch.images)
+            if include_annotations
+            else _batch_images_light()
+        )
         stmt = (
             select(AnalysisBatch)
-            .options(selectinload(AnalysisBatch.images))
+            .options(images_loader)
             .where(AnalysisBatch.id == batch_id)
             .where(AnalysisBatch.user_id == user_id)
         )
@@ -730,7 +903,8 @@ class AnalysisService:
             processed_image_count=batch.processed_image_count,
             failed_at=batch.failed_at,
             failure_reason=batch.failure_reason,
-            config_snapshot=batch.config_snapshot or {},
+            classes=list(batch.classes or []),
+            config_snapshot=self._public_snapshot(batch.config_snapshot),
             notes=batch.notes,
             images=image_summaries,
         )
@@ -788,7 +962,7 @@ class AnalysisService:
         """
         stmt = (
             select(AnalysisBatch)
-            .options(selectinload(AnalysisBatch.images))
+            .options(_batch_images_light())
             .where(AnalysisBatch.id == batch_id)
             .where(AnalysisBatch.user_id == user_id)
         )
@@ -921,7 +1095,10 @@ class AnalysisService:
             return None
 
         image.edited_annotations = data.edited_annotations
+        # The reviewed box list is the count of record from here on.
+        image.count = len(data.edited_annotations)
         await db.flush()
+        await self.refresh_batch_aggregates(batch_id, db)
         await db.refresh(image)
 
         logger.info(
@@ -972,7 +1149,10 @@ class AnalysisService:
             return False
 
         image.edited_annotations = None
+        if isinstance(image.annotations, list):
+            image.count = len(image.annotations)
         await db.flush()
+        await self.refresh_batch_aggregates(batch_id, db)
 
         logger.info(
             "Edited annotations cleared",
@@ -987,7 +1167,45 @@ class AnalysisService:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _to_summary(self, batch: AnalysisBatch) -> AnalysisBatchSummary:
+    @staticmethod
+    def _public_snapshot(snapshot: dict | None) -> dict:
+        """Config snapshot without the internal append bookkeeping keys."""
+        return {
+            k: v
+            for k, v in (snapshot or {}).items()
+            if k not in (_RESUME_STATUS_KEY, _ACTIVE_SINCE_KEY)
+        }
+
+    async def _cover_image_ids(
+        self, batch_ids: list[UUID], db: AsyncSession
+    ) -> dict[UUID, UUID]:
+        """First completed image per batch, in one query."""
+        if not batch_ids:
+            return {}
+        ranked = (
+            select(
+                AnalysisImage.batch_id.label("batch_id"),
+                AnalysisImage.id.label("image_id"),
+                func.row_number()
+                .over(
+                    partition_by=AnalysisImage.batch_id,
+                    order_by=AnalysisImage.created_at,
+                )
+                .label("rn"),
+            )
+            .where(AnalysisImage.batch_id.in_(batch_ids))
+            .where(AnalysisImage.status == "completed")
+            .where(AnalysisImage.overlay_path.is_not(None))
+            .subquery()
+        )
+        rows = await db.execute(
+            select(ranked.c.batch_id, ranked.c.image_id).where(ranked.c.rn == 1)
+        )
+        return {row.batch_id: row.image_id for row in rows}
+
+    def _to_summary(
+        self, batch: AnalysisBatch, cover_image_id: UUID | None = None
+    ) -> AnalysisBatchSummary:
         return AnalysisBatchSummary(
             id=batch.id,
             user_id=batch.user_id,
@@ -1005,4 +1223,6 @@ class AnalysisService:
             processed_image_count=batch.processed_image_count,
             failed_at=batch.failed_at,
             failure_reason=batch.failure_reason,
+            classes=list(batch.classes or []),
+            cover_image_id=cover_image_id,
         )

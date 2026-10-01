@@ -137,3 +137,39 @@ async def test_inference_larvae_503_when_model_missing(client, app, tiny_png_byt
 
     # Restore for any later tests.
     deps_mod._model_registry.status = MagicMock(return_value="loaded")
+
+
+# ── count_only → refine flag ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected_refine"), [("?count_only=true", False), ("", None)]
+)
+async def test_larvae_inference_count_only_skips_sam(client, app, query, expected_refine):
+    import base64
+
+    import app.deps as deps_mod
+    from app.schemas.larvae import LarvaeDetectionResult
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    )
+    result = LarvaeDetectionResult(
+        filename="a",
+        count=0,
+        avg_confidence=0.0,
+        elapsed_seconds=0.1,
+        overlay_url="/inference/results/b/a/overlay.png",
+    )
+    deps_mod._model_registry.status = MagicMock(return_value="loaded")
+    deps_mod._larvae_inference_service.process_single = AsyncMock(return_value=result)
+
+    resp = await client.post(
+        f"/inference/larvae{query}", files={"file": ("a.png", png, "image/png")}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["sam_refined"] is False
+    kwargs = deps_mod._larvae_inference_service.process_single.await_args.kwargs
+    assert kwargs["refine"] is expected_refine

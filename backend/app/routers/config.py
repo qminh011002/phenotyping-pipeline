@@ -17,6 +17,7 @@ from app.schemas.config import (
     EggConfig,
     LarvaeConfig,
     LarvaeConfigUpdateRequest,
+    NeonateConfig,
     PupaeConfig,
     PupaeConfigUpdateRequest,
 )
@@ -113,6 +114,45 @@ async def update_config(update: ConfigUpdateRequest) -> EggConfig:
             },
         )
 
+    return merged
+
+
+@router.get(
+    "/neonate",
+    response_model=NeonateConfig,
+    summary="Get current neonate inference configuration",
+)
+async def get_neonate_config() -> NeonateConfig:
+    try:
+        cfg = get_pipeline_config()
+        return await asyncio.to_thread(cfg.get_neonate_config)
+    except Exception as exc:
+        logger.exception("GET /config/neonate failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read neonate config: {exc}",
+        ) from exc
+
+
+@router.put(
+    "/neonate",
+    response_model=NeonateConfig,
+    summary="Partial update of neonate inference configuration",
+)
+async def update_neonate_config(update: ConfigUpdateRequest) -> NeonateConfig:
+    cfg_mgr = get_pipeline_config()
+    try:
+        merged = await asyncio.to_thread(
+            cfg_mgr.update_neonate_config, update.model_dump(exclude_none=True)
+        )
+    except Exception as exc:
+        logger.exception("PUT /config/neonate failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist neonate config: {exc}",
+        ) from exc
+
+    logger.info("Neonate config updated: %s", update.model_dump(exclude_none=True))
     return merged
 
 

@@ -1,41 +1,59 @@
-// ThemeSection — appearance settings with light/dark toggle.
+// ThemeSection — appearance settings: choose the light or dark theme.
 // Uses the useTheme() hook from the theme provider.
 
-import { useTheme } from '@/hooks/useTheme';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import { Moon, Sun } from 'lucide-react';
 
+import { SegmentedControl, type SegmentedOption } from '@/components/common';
+import { useTheme, type Theme } from '@/hooks/useTheme';
+import { SettingsSection } from './SettingsSection';
+
+const THEME_OPTIONS: SegmentedOption<Theme>[] = [
+    {
+        value: 'light',
+        title: 'Switch to light theme',
+        label: (
+            <>
+                <Sun className="size-3.5" aria-hidden />
+                Light
+            </>
+        ),
+    },
+    {
+        value: 'dark',
+        title: 'Switch to dark theme',
+        label: (
+            <>
+                <Moon className="size-3.5" aria-hidden />
+                Dark
+            </>
+        ),
+    },
+];
+
 export function ThemeSection() {
-    const { theme, toggleTheme } = useTheme();
+    const { theme, setTheme } = useTheme();
     const isDark = theme === 'dark';
 
     return (
-        <section className="space-y-4">
-            <div>
-                <h2 className="text-base font-semibold">Appearance</h2>
-                <p className="text-sm text-muted-foreground">
-                    Customize how the app looks on your device.
-                </p>
-            </div>
-            <div className="flex items-center justify-between rounded-md border px-4 py-3">
-                <div className="flex items-center gap-3">
-                    {isDark ? (
-                        <Moon className="h-5 w-5 text-muted-foreground" />
-                    ) : (
-                        <Sun className="h-5 w-5 text-muted-foreground" />
-                    )}
-                    <div>
-                        <Label htmlFor="theme-toggle" className="font-medium cursor-pointer">
-                            {isDark ? 'Dark mode' : 'Light mode'}
-                        </Label>
-                        <p className="text-sm text-muted-foreground">
-                            {isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-                        </p>
-                    </div>
+        <SettingsSection
+            title="Appearance"
+            description="Customize how the app looks on your device."
+        >
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+                <div className="min-w-0">
+                    <p className="text-sm font-medium">Theme</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                        {isDark ? 'Dark mode' : 'Light mode'} is on. Your choice is saved on this
+                        device.
+                    </p>
                 </div>
-                <Switch id="theme-toggle" checked={isDark} onCheckedChange={toggleTheme} />
+                <SegmentedControl
+                    aria-label="Theme"
+                    value={theme}
+                    onChange={setTheme}
+                    options={THEME_OPTIONS}
+                />
             </div>
-        </section>
+        </SettingsSection>
     );
 }

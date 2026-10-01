@@ -19,6 +19,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { formatPercent, pluralize } from '@/lib/format';
+import { countLabel } from '@/lib/organism';
 import { cn } from '@/lib/utils';
 import { downloadBatchArchive } from '@/services/api';
 import type { AnalysisBatchDetail, AnalysisImageSummary } from '@/types/api';
@@ -107,13 +109,12 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
                 <DialogHeader>
                     <DialogTitle>Download batch</DialogTitle>
                     <DialogDescription className="truncate" title={batch.name}>
-                        {batch.name} · {images.length} completed image
-                        {images.length === 1 ? '' : 's'}
+                        {batch.name} · {images.length} completed {pluralize(images.length, 'image')}
                     </DialogDescription>
                 </DialogHeader>
 
                 {images.length === 0 ? (
-                    <div className="rounded-md border bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground">
+                    <div className="rounded-md border border-border bg-muted/40 px-4 py-6 text-center text-sm text-muted-foreground">
                         No completed images to download.
                     </div>
                 ) : (
@@ -128,6 +129,7 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
                         />
                         <ImageList
                             images={images}
+                            organism={batch.organism_type}
                             selected={selected}
                             onToggleOne={toggleOne}
                             disabled={downloading}
@@ -205,12 +207,13 @@ function SelectAllRow({
 
 interface ImageListProps {
     images: AnalysisImageSummary[];
+    organism: string;
     selected: Set<string>;
     onToggleOne: (id: string, checked: boolean) => void;
     disabled: boolean;
 }
 
-function ImageList({ images, selected, onToggleOne, disabled }: ImageListProps) {
+function ImageList({ images, organism, selected, onToggleOne, disabled }: ImageListProps) {
     return (
         <div className="max-h-[50vh] overflow-y-auto rounded-md border">
             <ul className="divide-y">
@@ -238,9 +241,9 @@ function ImageList({ images, selected, onToggleOne, disabled }: ImageListProps) 
                                         {img.original_filename}
                                     </p>
                                     <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-                                        {img.count ?? 0} detections
+                                        {countLabel(organism, img.count ?? 0)}
                                         {img.avg_confidence !== null &&
-                                            ` · ${(img.avg_confidence * 100).toFixed(1)}% conf`}
+                                            ` · ${formatPercent(img.avg_confidence)} conf`}
                                     </p>
                                 </div>
                             </label>

@@ -4,7 +4,6 @@
 import { AlertCircle, RefreshCw, type LucideIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Spinner } from './Spinner';
 import { FadeIn } from '@/components/motion/primitives';
 
@@ -17,7 +16,7 @@ interface LoadingStateProps {
 
 export function LoadingState({ label, size = 'md' }: LoadingStateProps) {
     return (
-        <FadeIn className="flex flex-col items-center justify-center gap-3 py-16">
+        <FadeIn className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
             <Spinner size={size} />
             {label && <p className="text-sm text-muted-foreground">{label}</p>}
         </FadeIn>
@@ -40,25 +39,36 @@ export function ErrorState({
     onBack,
 }: ErrorStateProps) {
     return (
-        <FadeIn className="flex flex-col items-center justify-center gap-4 py-16">
-            <Alert variant="destructive" className="max-w-sm">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <AlertTitle>{title}</AlertTitle>
-                {message && <AlertDescription>{message}</AlertDescription>}
-            </Alert>
-            <div className="flex items-center gap-2">
-                {onBack && (
-                    <Button variant="outline" onClick={onBack}>
-                        Go Back
-                    </Button>
-                )}
-                {onRetry && (
-                    <Button onClick={onRetry}>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Retry
-                    </Button>
+        <FadeIn className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div role="alert" className="flex max-w-sm flex-col items-center">
+                <div className="mb-4 flex size-10 items-center justify-center rounded-lg border border-destructive/25 bg-destructive/10 text-destructive">
+                    <AlertCircle className="size-5" aria-hidden />
+                </div>
+                <p className="text-sm font-semibold text-foreground">{title}</p>
+                {message && (
+                    <p
+                        data-slot="alert-description"
+                        className="mt-1 text-sm break-words text-muted-foreground"
+                    >
+                        {message}
+                    </p>
                 )}
             </div>
+            {(onBack || onRetry) && (
+                <div className="mt-5 flex items-center gap-2">
+                    {onBack && (
+                        <Button variant="outline" size="sm" onClick={onBack}>
+                            Go back
+                        </Button>
+                    )}
+                    {onRetry && (
+                        <Button size="sm" onClick={onRetry}>
+                            <RefreshCw className="size-3.5" aria-hidden />
+                            Retry
+                        </Button>
+                    )}
+                </div>
+            )}
         </FadeIn>
     );
 }
@@ -81,16 +91,16 @@ export function EmptyState({
     onAction,
 }: EmptyStateProps) {
     return (
-        <FadeIn className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="mb-4 rounded-full bg-muted p-4">
-                <Icon className="h-8 w-8 text-muted-foreground" />
+        <FadeIn className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div className="mb-4 flex size-10 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground">
+                <Icon className="size-5" aria-hidden />
             </div>
-            <p className="text-base font-medium">{title}</p>
+            <p className="text-sm font-semibold text-foreground">{title}</p>
             {description && (
                 <p className="mt-1 max-w-sm text-sm text-muted-foreground">{description}</p>
             )}
             {actionLabel && onAction && (
-                <Button variant="outline" className="mt-4" onClick={onAction}>
+                <Button variant="outline" size="sm" className="mt-5" onClick={onAction}>
                     {actionLabel}
                 </Button>
             )}

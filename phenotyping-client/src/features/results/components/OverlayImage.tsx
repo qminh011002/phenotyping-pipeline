@@ -1,36 +1,58 @@
-// OverlayImage — Konva-backed image viewer + annotation editor.
-// A single Konva Stage owns the image, bbox rendering, zoom/pan, and (when
-// the `editor` prop is provided) interactive editing: move / resize / draw /
-// delete. Using one Stage instead of two SVGs means hit testing is unified
-// and panning/zooming is handled by Konva's native transform (compositor-
-// accelerated canvas, no per-pixel React renders).
+// OverlayImage — Konva-backed image viewer + bounding-box editor.
+//
+// A single Konva Stage owns the image, the boxes, zoom/pan and (when the
+// `editor` prop is provided) the edit interactions: select / move / resize /
+// draw / erase.
+//
+// Rendering is arranged so the cost of a frame does not grow with the number
+// of React nodes (egg images routinely carry 1,000+ boxes):
+//   - every box is stroked by ONE Konva Shape (a single canvas path), on a
+//     non-listening layer, culled to the viewport;
+//   - only the hovered and the selected box exist as real Konva nodes — those
+//     are the only ones that can be dragged, resized or clicked;
+//   - "which box is under the pointer" is an AABB scan over plain arrays, so
+//     hovering never re-renders or re-binds listeners on the other boxes;
+//   - the dim/spotlight is one more Shape; pan, zoom and box drags mutate the
+//     stage imperatively and commit to React once.
 
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { CloudUpload, Minus, Plus } from 'lucide-react';
-import Konva from 'konva';
-import type { KonvaEventObject } from 'konva/lib/Node';
 import {
-    Image as KonvaImage,
-    Layer,
-    Line,
-    Rect,
-    Shape,
-    Stage,
-    Transformer,
-} from 'react-konva';
+    memo,
+    useCallback,
+    useDeferredValue,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type MouseEvent as ReactMouseEvent,
+    type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { Trash2 } from 'lucide-react';
+import Konva from 'konva';
+import type { Context } from 'konva/lib/Context';
+import type { KonvaEventObject } from 'konva/lib/Node';
+import { Image as KonvaImage, Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { http } from '@/services/http';
 import type { BBox } from '@/types/api';
-import { clampBox, enforceMinSize, MIN_BOX_SIZE, normalizeBox } from '../lib/bboxMath';
+
+import { clampBox, enforceMinSize, MIN_BOX_SIZE, normalizeBox, pickBoxAt } from '../lib/bboxMath';
+import { CanvasHint, SaveIndicator, ZoomControls } from './ViewerChrome';
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
+export type OverlayImageTool = 'drag' | 'draw' | 'erase';
+
 export interface OverlayImageEditor {
-    /** drag = select/move/resize; draw = rubber-band new box (pan disabled). */
-    mode: 'drag' | 'draw';
+    /**
+     * drag  = select / move / resize, drag empty space to pan;
+     * draw  = rubber-band a new box (pan with Space or the middle button);
+     * erase = click a box to delete it, drag to pan.
+     */
+    mode: OverlayImageTool;
     /** Index into `annotations` of the selected box; null = none. */
     selectedIndex: number | null;
     /** Confidence threshold — model-origin boxes below this are hidden. */
@@ -47,12 +69,17 @@ interface OverlayImageProps {
     alt?: string;
     annotations?: BBox[];
     className?: string;
+    /** An autosave request is in flight. */
     saveInProgress?: boolean;
+    /** An edit is waiting for the autosave debounce. */
+    savePending?: boolean;
     /**
-     * When true, the two-level dim overlay is rendered. Hidden during active
-     * drag/resize/draw and in draw mode so the user sees the raw pixels.
+     * When false, boxes and the dim overlay are hidden so the raw image is
+     * visible (Ctrl/Cmd-hold or the eye toggle). Defaults to true.
      */
-    dimEnabled?: boolean;
+    overlayVisible?: boolean;
+    /** Wires the eye toggle in the zoom bar; omit to hide the toggle. */
+    onToggleOverlay?: () => void;
     /**
      * Fired when the user clicks the empty background (pointerdown → up with
      * no drag). Used by the parent to deselect on empty-area clicks.
@@ -64,13 +91,6 @@ interface OverlayImageProps {
      * selection + resize handles + draw + delete are enabled.
      */
     editor?: OverlayImageEditor;
-    /**
-     * When true, render every non-selected box via a single rasterized canvas
-     * instead of per-box Konva.Rect nodes. Big perf win at 1k+ boxes; same
-     * pixels at natural image resolution. Defaults to false until proven on
-     * the dense neonate-egg case.
-     */
-    useOffscreen?: boolean;
 }
 
 // ── Tunables ───────────────────────────────────────────────────────────────
@@ -80,34 +100,36 @@ const MAX_SCALE = 20;
 const ZOOM_FACTOR = 1.15;
 
 // All non-selected boxes share one yellow stroke (model + user). Selection
-// stays blue so it remains distinguishable.
+// stays blue so it remains distinguishable; the erase target turns red.
 const STROKE_BOX = '#facc15'; // tailwind yellow-400
-const STROKE_MODEL = STROKE_BOX;
-const STROKE_USER = STROKE_BOX;
 const STROKE_SELECTED = '#3b82f6';
 const FILL_SELECTED = 'rgba(59,130,246,0.10)';
+const STROKE_ERASE = '#ef4444';
+const FILL_ERASE = 'rgba(239,68,68,0.28)';
+
+/** Stroke widths in screen pixels (constant at every zoom level). */
+const STROKE_PX = 1.5;
+const STROKE_ACTIVE_PX = 2.5;
 
 // Default dim is "darker" by design — emphasizes the boxes on busy scenes.
-// Hover layer adds a second pass that darkens everything *except* the hovered
-// box, producing a soft spotlight without per-box CPU work.
+// Hover adds a second pass that darkens everything *except* the hovered box,
+// producing a soft spotlight without per-box CPU work.
 const DIM_OPACITY_BASE = 0.5;
 const DIM_OPACITY_HOVER = 0.6; // additional dim on top of base when hovering
 
-// Dim is composited via a single Konva Shape's sceneFunc — N native
-// canvas fillRect calls per render instead of N Konva.Rect nodes — which
-// scales to several thousand boxes without dropping frames. No box-count
-// gate is needed.
-
 const HANDLE_PX = 10;
 
-// (Class-name labels removed — boxes now render strokes only.)
+/** Breathing room around a fitted image, in screen pixels. */
+const FIT_MARGIN = 12;
+/** Extra left inset while editing, so the fitted image clears the tool rail. */
+const FIT_RAIL_INSET = 52;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /**
  * Load an HTMLImageElement from `src`, going through the authed http client
- * so backend-served overlays carry the Bearer header (BE-021 made these
- * routes auth-required and `<img src=...>` can't attach the token itself).
+ * so backend-served images carry the Bearer header (`<img src=...>` can't
+ * attach the token itself).
  *
  * Yields an HTMLImageElement whose `src` is an `object:` URL backed by the
  * fetched bytes. The caller is responsible for releasing the URL — Konva's
@@ -157,6 +179,15 @@ function isVisible(b: BBox, threshold: number): boolean {
     return b.origin === 'user' || b.confidence >= threshold;
 }
 
+function isTyping(target: EventTarget | null): boolean {
+    return (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+    );
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export const OverlayImage = memo(function OverlayImage({
@@ -165,24 +196,24 @@ export const OverlayImage = memo(function OverlayImage({
     annotations = [],
     className,
     saveInProgress = false,
-    dimEnabled = true,
+    savePending = false,
+    overlayVisible = true,
+    onToggleOverlay,
     onBackgroundClick,
     onDimensions,
     editor,
-    useOffscreen = false,
 }: OverlayImageProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<Konva.Stage>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
     const selectedRectRef = useRef<Konva.Rect>(null);
-    const deleteHandleRef = useRef<Konva.Group>(null);
 
     const [imageEl, setImageEl] = useState<HTMLImageElement | null>(null);
     const [imageError, setImageError] = useState(false);
     const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
     const [scale, setScale] = useState(1);
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-    // Transient preview boxes during a body drag or rubber-band draw.
+    // Transient preview while rubber-banding a new box.
     const [rubberBand, setRubberBand] = useState<[number, number, number, number] | null>(null);
     // True while a drag / resize / rubber-band is in flight — hides the dim layer.
     const [interacting, setInteracting] = useState(false);
@@ -190,18 +221,21 @@ export const OverlayImage = memo(function OverlayImage({
     const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
     const cursorRafRef = useRef<number | null>(null);
     const cursorRafQueued = useRef(false);
+    // Space held → the next drag pans, whatever the tool.
+    const [spaceHeld, setSpaceHeld] = useState(false);
+    const [panning, setPanning] = useState(false);
 
     const editing = editor !== undefined;
-    const mode = editor?.mode ?? 'drag';
+    const mode: OverlayImageTool = editor?.mode ?? 'drag';
     const selectedIndex = editor?.selectedIndex ?? null;
     const confidenceThreshold = editor?.confidenceThreshold ?? 0;
-    // Defer the threshold for the expensive raster + box filter. The slider in
-    // the parent stays at 60 fps because React drops intermediate values that
-    // arrive before the previous raster finishes — only the latest surviving
-    // threshold rebuilds the canvas.
+    // Defer the threshold for the box filter. The slider in the parent stays
+    // at 60 fps because React drops intermediate values that arrive before
+    // the previous pass finishes.
     const deferredThreshold = useDeferredValue(confidenceThreshold);
 
-    const renderBoxes = annotations;
+    // Never hide the overlay out from under an active gesture.
+    const overlayShown = overlayVisible || interacting;
 
     // Latest onDimensions ref so reload only fires on src change.
     const onDimensionsRef = useRef(onDimensions);
@@ -268,144 +302,39 @@ export const OverlayImage = memo(function OverlayImage({
         };
     }, []);
 
-    // ── Fit-to-screen whenever image or container size changes ──────────────
-    const fitToScreen = useCallback(() => {
+    // ── Fit-to-screen ───────────────────────────────────────────────────────
+    // Once the user has zoomed or panned, a container resize (window resize,
+    // filmstrip toggle) leaves their view alone instead of snapping back.
+    const userAdjustedRef = useRef(false);
+    const fittedImageRef = useRef<HTMLImageElement | null>(null);
+
+    const fitToScreen = useCallback((): boolean => {
         const stage = stageRef.current;
-        if (!stage || !imageEl || stageSize.width === 0 || stageSize.height === 0) return;
+        if (!stage || !imageEl || stageSize.width === 0 || stageSize.height === 0) return false;
         const iw = imageEl.naturalWidth;
         const ih = imageEl.naturalHeight;
-        const fit = Math.min(stageSize.width / iw, stageSize.height / ih, 1);
+        // Fit inside the area the floating chrome leaves free.
+        const left = FIT_MARGIN + (editing ? FIT_RAIL_INSET : 0);
+        const availW = Math.max(1, stageSize.width - left - FIT_MARGIN);
+        const availH = Math.max(1, stageSize.height - 2 * FIT_MARGIN);
+        const fit = Math.min(availW / iw, availH / ih, 1);
         stage.scale({ x: fit, y: fit });
-        // Center image in stage.
+        // Center the image in that area.
         stage.position({
-            x: (stageSize.width - iw * fit) / 2,
-            y: (stageSize.height - ih * fit) / 2,
+            x: left + (availW - iw * fit) / 2,
+            y: FIT_MARGIN + (availH - ih * fit) / 2,
         });
         stage.batchDraw();
         setScale(fit);
-    }, [imageEl, stageSize.height, stageSize.width]);
+        userAdjustedRef.current = false;
+        return true;
+    }, [imageEl, stageSize.height, stageSize.width, editing]);
 
     useEffect(() => {
-        fitToScreen();
-    }, [fitToScreen]);
-
-    // ── Attach Transformer to the selected rect ─────────────────────────────
-    useEffect(() => {
-        const tr = transformerRef.current;
-        const rect = selectedRectRef.current;
-        if (!tr) return;
-        if (editing && mode === 'drag' && rect && selectedIndex !== null) {
-            tr.nodes([rect]);
-            tr.getLayer()?.batchDraw();
-        } else {
-            tr.nodes([]);
-            tr.getLayer()?.batchDraw();
-        }
-    }, [editing, mode, selectedIndex, renderBoxes]);
-
-    // ── Zoom (wheel) ─────────────────────────────────────────────────────────
-    // One fixed ZOOM_FACTOR step per wheel event, keyed only on scroll
-    // direction (magnitude ignored). This matches LarvaePolygonEditor so
-    // egg/neonate zoom at the same speed as larvae/pupae — the old
-    // proportional-to-deltaY zoom made trackpads (tiny per-event deltaY) crawl.
-    // Events are still coalesced per animation frame for perf on dense box
-    // images; the applied zoom equals stepping per-event: ZOOM_FACTOR^(steps).
-    const wheelAccumRef = useRef<{
-        steps: number;
-        pointer: { x: number; y: number } | null;
-    }>({ steps: 0, pointer: null });
-    const wheelRafRef = useRef<number | null>(null);
-
-    const handleWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
-        e.evt.preventDefault();
-        const stage = stageRef.current;
-        if (!stage) return;
-        const pointer = stage.getPointerPosition();
-        if (!pointer) return;
-
-        // Accumulate signed step count (in = +1, out = -1); commit per frame.
-        wheelAccumRef.current.steps += e.evt.deltaY < 0 ? 1 : -1;
-        wheelAccumRef.current.pointer = { x: pointer.x, y: pointer.y };
-
-        if (wheelRafRef.current !== null) return;
-        wheelRafRef.current = requestAnimationFrame(() => {
-            wheelRafRef.current = null;
-            const { steps, pointer: p } = wheelAccumRef.current;
-            wheelAccumRef.current.steps = 0;
-            wheelAccumRef.current.pointer = null;
-            if (!p || steps === 0) return;
-
-            const oldScale = stage.scaleX();
-            const factor = Math.pow(ZOOM_FACTOR, steps);
-            const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldScale * factor));
-            if (newScale === oldScale) return;
-
-            const mousePointTo = {
-                x: (p.x - stage.x()) / oldScale,
-                y: (p.y - stage.y()) / oldScale,
-            };
-            stage.scale({ x: newScale, y: newScale });
-            stage.position({
-                x: p.x - mousePointTo.x * newScale,
-                y: p.y - mousePointTo.y * newScale,
-            });
-            stage.batchDraw();
-            setScale(newScale);
-        });
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current);
-        };
-    }, []);
-
-    // ── Zoom buttons ────────────────────────────────────────────────────────
-    const zoomByFactor = useCallback((factor: number) => {
-        const stage = stageRef.current;
-        if (!stage) return;
-        const oldScale = stage.scaleX();
-        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldScale * factor));
-        if (newScale === oldScale) return;
-        // Zoom around stage center.
-        const cx = stage.width() / 2;
-        const cy = stage.height() / 2;
-        const mousePointTo = {
-            x: (cx - stage.x()) / oldScale,
-            y: (cy - stage.y()) / oldScale,
-        };
-        stage.scale({ x: newScale, y: newScale });
-        stage.position({
-            x: cx - mousePointTo.x * newScale,
-            y: cy - mousePointTo.y * newScale,
-        });
-        stage.batchDraw();
-        setScale(newScale);
-    }, []);
-
-    const handleZoomIn = useCallback(() => zoomByFactor(ZOOM_FACTOR), [zoomByFactor]);
-    const handleZoomOut = useCallback(() => zoomByFactor(1 / ZOOM_FACTOR), [zoomByFactor]);
-
-    // ── Keyboard shortcuts for zoom/fit ─────────────────────────────────────
-    useEffect(() => {
-        function handleKeyDown(e: KeyboardEvent) {
-            const inputFocused =
-                e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-            if (inputFocused) return;
-            if (e.key === '=' || e.key === '+') {
-                e.preventDefault();
-                handleZoomIn();
-            } else if (e.key === '-') {
-                e.preventDefault();
-                handleZoomOut();
-            } else if (e.key === '0') {
-                e.preventDefault();
-                fitToScreen();
-            }
-        }
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [fitToScreen, handleZoomIn, handleZoomOut]);
+        if (!imageEl) return;
+        if (fittedImageRef.current === imageEl && userAdjustedRef.current) return;
+        if (fitToScreen()) fittedImageRef.current = imageEl;
+    }, [fitToScreen, imageEl]);
 
     // ── Pointer → image-space helper ────────────────────────────────────────
     const getImagePointer = useCallback(() => {
@@ -417,66 +346,225 @@ export const OverlayImage = memo(function OverlayImage({
         return inv.point(pointer);
     }, []);
 
-    // ── Background click (deselect) ─────────────────────────────────────────
-    // Konva gives us this reliably: a click on the Stage (target === stage)
-    // means nothing else was clicked.
-    const backgroundDownPos = useRef<{ x: number; y: number } | null>(null);
-    const backgroundMoved = useRef(false);
-
-    const handleStageMouseDown = useCallback((e: KonvaEventObject<MouseEvent | TouchEvent>) => {
-        const stage = stageRef.current;
-        if (!stage) return;
-        // Only track as background press if the target is the stage itself
-        // (not a shape).
-        if (e.target === stage) {
-            const p = stage.getPointerPosition();
-            backgroundDownPos.current = p ? { x: p.x, y: p.y } : null;
-            backgroundMoved.current = false;
-        } else {
-            backgroundDownPos.current = null;
+    // ── Visible boxes + hover hit-test ──────────────────────────────────────
+    /** Indices into `annotations` that pass the confidence filter. */
+    const visible = useMemo(() => {
+        const out: number[] = [];
+        for (let i = 0; i < annotations.length; i++) {
+            if (isVisible(annotations[i], deferredThreshold)) out.push(i);
         }
-    }, []);
+        return out;
+    }, [annotations, deferredThreshold]);
 
-    // Hit-test the pointer against the visible-box set to find the topmost
-    // box under the cursor. Used by the stage-level hover handler so the dim
-    // spotlight works even when boxes are rendered as a single rasterized
-    // canvas (no per-Rect onMouseEnter events).
-    //
-    // Stored as a ref so the rAF throttle callback can read the latest set
-    // without re-binding on every render. Populated by the effect below
-    // (which runs after `visibleBoxesWithIdx` is computed further down).
-    const visibleBoxesRef = useRef<Array<{ box: BBox; index: number }>>([]);
+    // The latest box set for event handlers that outlive a render.
+    const boxesRef = useRef<{ annotations: BBox[]; visible: number[] }>({
+        annotations,
+        visible,
+    });
+    /** Whether the pointer is currently over the stage. */
+    const pointerInsideRef = useRef(false);
 
-    const hoverRafRef = useRef<number | null>(null);
-    const hoverRafQueued = useRef(false);
+    const hoverAllowed = overlayShown && mode !== 'draw' && !interacting;
 
-    const computeHoverFromPointer = useCallback(() => {
-        hoverRafQueued.current = false;
-        const pt = getImagePointer();
-        if (!pt) {
-            setHoverIdx(null);
-            return;
-        }
-        const list = visibleBoxesRef.current;
-        // Top-most wins — iterate in reverse so a small box drawn on top of a
-        // larger one gets the hover.
-        for (let i = list.length - 1; i >= 0; i--) {
-            const { box, index } = list[i];
-            const [x1, y1, x2, y2] = box.bbox;
-            if (pt.x >= x1 && pt.x <= x2 && pt.y >= y1 && pt.y <= y2) {
-                setHoverIdx((p) => (p === index ? p : index));
-                return;
-            }
-        }
-        setHoverIdx((p) => (p === null ? p : null));
+    const updateHover = useCallback(() => {
+        const pt = pointerInsideRef.current ? getImagePointer() : null;
+        const { annotations: boxes, visible: indices } = boxesRef.current;
+        const next = pt ? pickBoxAt(boxes, indices, pt.x, pt.y) : null;
+        setHoverIdx((prev) => (prev === next ? prev : next));
     }, [getImagePointer]);
 
-    const queueHoverHitTest = useCallback(() => {
-        if (hoverRafQueued.current) return;
-        hoverRafQueued.current = true;
-        hoverRafRef.current = requestAnimationFrame(computeHoverFromPointer);
-    }, [computeHoverFromPointer]);
+    // A delete / undo / filter change shifts indices under a stationary
+    // pointer — re-resolve the hover before the next paint so the highlight
+    // never lands on the wrong box.
+    useLayoutEffect(() => {
+        boxesRef.current = { annotations, visible };
+        if (hoverAllowed) updateHover();
+        else setHoverIdx(null);
+    }, [annotations, visible, hoverAllowed, updateHover]);
 
+    const hoverIndex =
+        hoverAllowed && hoverIdx !== null && hoverIdx < annotations.length ? hoverIdx : null;
+
+    // ── Attach Transformer to the selected rect ─────────────────────────────
+    useEffect(() => {
+        const tr = transformerRef.current;
+        const rect = selectedRectRef.current;
+        if (!tr) return;
+        if (editing && mode === 'drag' && rect && selectedIndex !== null) {
+            tr.nodes([rect]);
+        } else {
+            tr.nodes([]);
+        }
+        tr.getLayer()?.batchDraw();
+    }, [editing, mode, selectedIndex, annotations, visible, overlayShown]);
+
+    // ── Zoom (wheel) ─────────────────────────────────────────────────────────
+    // One fixed ZOOM_FACTOR step per wheel event, keyed only on scroll
+    // direction (magnitude ignored), matching LarvaePolygonEditor so every
+    // organism zooms at the same speed. Events are coalesced per animation
+    // frame; the applied zoom equals stepping per-event: ZOOM_FACTOR^(steps).
+    const wheelAccumRef = useRef<{
+        steps: number;
+        pointer: { x: number; y: number } | null;
+    }>({ steps: 0, pointer: null });
+    const wheelRafRef = useRef<number | null>(null);
+
+    const zoomAt = useCallback((factor: number, at: { x: number; y: number }) => {
+        const stage = stageRef.current;
+        if (!stage) return;
+        const oldScale = stage.scaleX();
+        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldScale * factor));
+        if (newScale === oldScale) return;
+        const anchor = {
+            x: (at.x - stage.x()) / oldScale,
+            y: (at.y - stage.y()) / oldScale,
+        };
+        stage.scale({ x: newScale, y: newScale });
+        stage.position({
+            x: at.x - anchor.x * newScale,
+            y: at.y - anchor.y * newScale,
+        });
+        stage.batchDraw();
+        userAdjustedRef.current = true;
+        setScale(newScale);
+    }, []);
+
+    const handleWheel = useCallback(
+        (e: KonvaEventObject<WheelEvent>) => {
+            e.evt.preventDefault();
+            const stage = stageRef.current;
+            if (!stage) return;
+            const pointer = stage.getPointerPosition();
+            if (!pointer) return;
+
+            // Accumulate signed step count (in = +1, out = -1); commit per frame.
+            wheelAccumRef.current.steps += e.evt.deltaY < 0 ? 1 : -1;
+            wheelAccumRef.current.pointer = { x: pointer.x, y: pointer.y };
+
+            if (wheelRafRef.current !== null) return;
+            wheelRafRef.current = requestAnimationFrame(() => {
+                wheelRafRef.current = null;
+                const { steps, pointer: p } = wheelAccumRef.current;
+                wheelAccumRef.current.steps = 0;
+                wheelAccumRef.current.pointer = null;
+                if (!p || steps === 0) return;
+                zoomAt(Math.pow(ZOOM_FACTOR, steps), p);
+            });
+        },
+        [zoomAt],
+    );
+
+    useEffect(() => {
+        return () => {
+            if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current);
+            if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
+        };
+    }, []);
+
+    // ── Zoom buttons ────────────────────────────────────────────────────────
+    const zoomCentered = useCallback(
+        (factor: number) => {
+            const stage = stageRef.current;
+            if (!stage) return;
+            zoomAt(factor, { x: stage.width() / 2, y: stage.height() / 2 });
+        },
+        [zoomAt],
+    );
+
+    const handleZoomIn = useCallback(() => zoomCentered(ZOOM_FACTOR), [zoomCentered]);
+    const handleZoomOut = useCallback(() => zoomCentered(1 / ZOOM_FACTOR), [zoomCentered]);
+
+    // ── Keyboard: zoom / fit / Space-to-pan ─────────────────────────────────
+    useEffect(() => {
+        function handleKeyDown(e: KeyboardEvent) {
+            if (isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (e.key === '=' || e.key === '+') {
+                e.preventDefault();
+                handleZoomIn();
+            } else if (e.key === '-') {
+                e.preventDefault();
+                handleZoomOut();
+            } else if (e.key === '0') {
+                e.preventDefault();
+                fitToScreen();
+            } else if (e.code === 'Space') {
+                // Don't hijack Space while a button has focus (it activates it).
+                if (e.target instanceof HTMLButtonElement) return;
+                e.preventDefault();
+                setSpaceHeld(true);
+            }
+        }
+        function handleKeyUp(e: KeyboardEvent) {
+            if (e.code === 'Space') setSpaceHeld(false);
+        }
+        const clear = () => setSpaceHeld(false);
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        window.addEventListener('blur', clear);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+            window.removeEventListener('blur', clear);
+        };
+    }, [fitToScreen, handleZoomIn, handleZoomOut]);
+
+    // ── Forced pan (Space-drag / middle-drag) ───────────────────────────────
+    // Captured on the container before Konva sees the press, so it pans from
+    // any tool — including draw mode and when the pointer is over a box.
+    const forcedPanRef = useRef<{
+        pointerId: number;
+        x: number;
+        y: number;
+        stageX: number;
+        stageY: number;
+    } | null>(null);
+
+    function startForcedPan(e: ReactPointerEvent<HTMLDivElement>) {
+        if (!(e.button === 1 || (e.button === 0 && spaceHeld))) return;
+        if ((e.target as Element).closest('[data-editor-chrome]')) return;
+        const stage = stageRef.current;
+        if (!stage || interacting) return;
+        e.preventDefault();
+        e.stopPropagation();
+        containerRef.current?.setPointerCapture?.(e.pointerId);
+        forcedPanRef.current = {
+            pointerId: e.pointerId,
+            x: e.clientX,
+            y: e.clientY,
+            stageX: stage.x(),
+            stageY: stage.y(),
+        };
+        setPanning(true);
+    }
+
+    /** The compat mousedown that follows a forced-pan pointerdown must not reach Konva. */
+    function swallowForcedPanMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+        if (!forcedPanRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    function continueForcedPan(e: ReactPointerEvent<HTMLDivElement>) {
+        const pan = forcedPanRef.current;
+        const stage = stageRef.current;
+        if (!pan || !stage || e.pointerId !== pan.pointerId) return;
+        stage.position({
+            x: pan.stageX + (e.clientX - pan.x),
+            y: pan.stageY + (e.clientY - pan.y),
+        });
+        stage.batchDraw();
+    }
+
+    function endForcedPan(e: ReactPointerEvent<HTMLDivElement>) {
+        const pan = forcedPanRef.current;
+        if (!pan || e.pointerId !== pan.pointerId) return;
+        forcedPanRef.current = null;
+        containerRef.current?.releasePointerCapture?.(e.pointerId);
+        userAdjustedRef.current = true;
+        setPanning(false);
+    }
+
+    // ── Draw-mode crosshair ─────────────────────────────────────────────────
     const updateCursorFromPointer = useCallback(() => {
         cursorRafQueued.current = false;
         const pt = getImagePointer();
@@ -490,99 +578,32 @@ export const OverlayImage = memo(function OverlayImage({
     }, [updateCursorFromPointer]);
 
     useEffect(() => {
-        return () => {
-            if (hoverRafRef.current !== null) cancelAnimationFrame(hoverRafRef.current);
-            if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
-        };
-    }, []);
-
-    const handleStageMouseMove = useCallback(() => {
-        const stage = stageRef.current;
-        if (!stage) return;
-        // Track cursor for the draw-mode crosshair on every move, not only while
-        // pressing. This is what makes the crosshair follow the pointer from the
-        // moment the user enters draw mode.
-        if (mode === 'draw') {
-            queueCursorUpdate();
-        }
-        if (backgroundDownPos.current) {
-            const p = stage.getPointerPosition();
-            if (!p) return;
-            const dx = p.x - backgroundDownPos.current.x;
-            const dy = p.y - backgroundDownPos.current.y;
-            if (Math.hypot(dx, dy) > 3) backgroundMoved.current = true;
-        }
-        // Stage-level hover hit-test for the dim spotlight. Runs at most
-        // once per animation frame, regardless of pointer event rate.
-        if (mode !== 'draw' && !interacting) {
-            queueHoverHitTest();
-        }
-    }, [mode, interacting, queueHoverHitTest, queueCursorUpdate]);
-
-    // Clear the hover state when the pointer leaves the stage or interaction
-    // begins so the spotlight doesn't stay locked on a box.
-    const handleStageMouseLeave = useCallback(() => {
-        setHoverIdx(null);
-    }, []);
-
-    useEffect(() => {
-        if (interacting || mode === 'draw') setHoverIdx(null);
-    }, [interacting, mode]);
-
-    // Reset cursor when leaving draw mode or the stage.
-    useEffect(() => {
         if (mode !== 'draw') setCursor(null);
     }, [mode]);
 
-    const handleStageMouseUp = useCallback(() => {
-        if (backgroundDownPos.current && !backgroundMoved.current) {
-            onBackgroundClick?.();
-        }
-        backgroundDownPos.current = null;
-        backgroundMoved.current = false;
-    }, [onBackgroundClick]);
+    // ── Commit helpers ──────────────────────────────────────────────────────
+    const deleteBox = useCallback(
+        (index: number) => {
+            if (!editor) return;
+            setHoverIdx(null);
+            editor.onCommit(annotations.filter((_, i) => i !== index));
+            editor.onSelect(null);
+        },
+        [editor, annotations],
+    );
 
     // ── Draw mode: rubber-band ──────────────────────────────────────────────
     const drawStartRef = useRef<{ x: number; y: number } | null>(null);
 
-    const handleStageMouseDownDraw = useCallback(
-        (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
-            if (!editing || mode !== 'draw') return;
-            const stage = stageRef.current;
-            if (!stage) return;
-            const evtButton = 'button' in e.evt ? e.evt.button : 0;
-            if (evtButton !== 0) return;
-            const pt = getImagePointer();
-            if (!pt) return;
-            drawStartRef.current = pt;
-            setRubberBand([pt.x, pt.y, pt.x, pt.y]);
-            setInteracting(true);
-        },
-        [editing, mode, getImagePointer],
-    );
-
-    const handleStageMouseMoveDraw = useCallback(() => {
-        if (!editing || mode !== 'draw' || !drawStartRef.current) return;
-        const pt = getImagePointer();
-        if (!pt) return;
-        const { x: sx, y: sy } = drawStartRef.current;
-        setRubberBand([sx, sy, pt.x, pt.y]);
-    }, [editing, mode, getImagePointer]);
-
-    const handleStageMouseUpDraw = useCallback(() => {
-        if (!editing || mode !== 'draw' || !drawStartRef.current || !editor) return;
-        const pt = getImagePointer();
-        if (!pt || !imageEl) {
-            drawStartRef.current = null;
-            setRubberBand(null);
-            setInteracting(false);
-            return;
-        }
-        const { x: sx, y: sy } = drawStartRef.current;
+    const finishDraw = useCallback(() => {
+        const start = drawStartRef.current;
+        if (!start) return;
         drawStartRef.current = null;
         setRubberBand(null);
         setInteracting(false);
-        const [nx1, ny1, nx2, ny2] = normalizeBox(sx, sy, pt.x, pt.y);
+        const pt = getImagePointer();
+        if (!pt || !imageEl || !editor) return;
+        const [nx1, ny1, nx2, ny2] = normalizeBox(start.x, start.y, pt.x, pt.y);
         const enforced = enforceMinSize(nx1, ny1, nx2, ny2);
         if (!enforced) return;
         const clamped = clampBox(enforced, imageEl.naturalWidth, imageEl.naturalHeight);
@@ -597,14 +618,130 @@ export const OverlayImage = memo(function OverlayImage({
         const next = [...annotations, newBox];
         editor.onCommit(next);
         editor.onSelect(next.length - 1);
-    }, [editing, mode, editor, getImagePointer, imageEl, annotations]);
+    }, [editor, getImagePointer, imageEl, annotations]);
 
-    // Enter ⇒ exit edit mode (close modal) when a box is selected.
+    // Releasing outside the canvas still finishes the box.
+    const drawing = rubberBand !== null;
+    useEffect(() => {
+        if (!drawing) return;
+        window.addEventListener('mouseup', finishDraw);
+        window.addEventListener('touchend', finishDraw);
+        return () => {
+            window.removeEventListener('mouseup', finishDraw);
+            window.removeEventListener('touchend', finishDraw);
+        };
+    }, [drawing, finishDraw]);
+
+    // Leaving draw mode mid-gesture (Esc) drops the rubber band.
+    useEffect(() => {
+        if (mode === 'draw' || !drawStartRef.current) return;
+        drawStartRef.current = null;
+        setRubberBand(null);
+        setInteracting(false);
+    }, [mode]);
+
+    // ── Stage pointer handlers ──────────────────────────────────────────────
+    // A press that starts on the stage itself (no node under it) and does not
+    // move is a "click": on a box it selects (drag) or deletes (erase), on
+    // empty space it deselects.
+    const backgroundDownPos = useRef<{ x: number; y: number } | null>(null);
+    const backgroundMoved = useRef(false);
+
+    const handleStageDown = useCallback(
+        (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
+            const stage = stageRef.current;
+            if (!stage) return;
+            pointerInsideRef.current = true;
+            if (e.target === stage) {
+                const p = stage.getPointerPosition();
+                backgroundDownPos.current = p ? { x: p.x, y: p.y } : null;
+                backgroundMoved.current = false;
+            } else {
+                backgroundDownPos.current = null;
+            }
+            if (!editing || mode !== 'draw') return;
+            const button = 'button' in e.evt ? e.evt.button : 0;
+            if (button !== 0) return;
+            const pt = getImagePointer();
+            if (!pt) return;
+            drawStartRef.current = pt;
+            setRubberBand([pt.x, pt.y, pt.x, pt.y]);
+            setInteracting(true);
+        },
+        [editing, mode, getImagePointer],
+    );
+
+    const handleStageMove = useCallback(() => {
+        const stage = stageRef.current;
+        if (!stage) return;
+        pointerInsideRef.current = true;
+        if (mode === 'draw') {
+            // The crosshair follows the pointer from the moment the user
+            // enters draw mode, not only while pressing.
+            queueCursorUpdate();
+            const start = drawStartRef.current;
+            if (start) {
+                const pt = getImagePointer();
+                if (pt) setRubberBand([start.x, start.y, pt.x, pt.y]);
+            }
+            return;
+        }
+        if (backgroundDownPos.current) {
+            const p = stage.getPointerPosition();
+            if (p) {
+                const dx = p.x - backgroundDownPos.current.x;
+                const dy = p.y - backgroundDownPos.current.y;
+                if (Math.hypot(dx, dy) > 3) backgroundMoved.current = true;
+            }
+        }
+        if (hoverAllowed) updateHover();
+    }, [mode, hoverAllowed, updateHover, queueCursorUpdate, getImagePointer]);
+
+    const handleStageLeave = useCallback(() => {
+        pointerInsideRef.current = false;
+        setHoverIdx(null);
+    }, []);
+
+    const handleStageUp = useCallback(() => {
+        const clicked = backgroundDownPos.current !== null && !backgroundMoved.current;
+        backgroundDownPos.current = null;
+        backgroundMoved.current = false;
+        if (editing && mode === 'draw') {
+            finishDraw();
+            return;
+        }
+        if (!clicked) return;
+        const pt = overlayShown ? getImagePointer() : null;
+        const hit = pt ? pickBoxAt(annotations, visible, pt.x, pt.y) : null;
+        if (hit !== null) {
+            if (!editor) return;
+            if (mode === 'erase') deleteBox(hit);
+            else editor.onSelect(hit);
+            return;
+        }
+        onBackgroundClick?.();
+    }, [
+        editing,
+        mode,
+        finishDraw,
+        overlayShown,
+        getImagePointer,
+        annotations,
+        visible,
+        editor,
+        deleteBox,
+        onBackgroundClick,
+    ]);
+
+    const handleStageDragEnd = useCallback((e: KonvaEventObject<DragEvent>) => {
+        if (e.target === stageRef.current) userAdjustedRef.current = true;
+    }, []);
+
+    // Enter ⇒ finish editing the selected box (deselect).
     useEffect(() => {
         if (!editing || !editor || selectedIndex === null) return;
         const onKey = (e: KeyboardEvent) => {
-            const target = e.target;
-            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+            if (isTyping(e.target)) return;
             if (e.key === 'Enter') {
                 e.preventDefault();
                 editor.onSelect(null);
@@ -627,9 +764,9 @@ export const OverlayImage = memo(function OverlayImage({
     const handleBoxDragMove = useCallback(
         (index: number, e: KonvaEventObject<DragEvent>) => {
             if (!editing || !imageEl) return;
-            // Clamp to image bounds. Konva moves the rect imperatively each frame,
-            // so we DON'T call setState here — that would trigger React renders on
-            // every pointermove. The bbox is read back from the node on dragEnd.
+            // Clamp to image bounds. Konva moves the rect imperatively each
+            // frame, so we DON'T set state here. The bbox is read back from
+            // the node on dragEnd.
             const node = e.target;
             const [x1, y1, x2, y2] = annotations[index].bbox;
             const w = x2 - x1;
@@ -638,8 +775,6 @@ export const OverlayImage = memo(function OverlayImage({
             const ny = Math.max(0, Math.min(imageEl.naturalHeight - h, node.y()));
             if (nx !== node.x()) node.x(nx);
             if (ny !== node.y()) node.y(ny);
-            // Keep the delete icon pinned to the box top-left as it moves.
-            deleteHandleRef.current?.position({ x: nx, y: ny });
         },
         [editing, imageEl, annotations],
     );
@@ -672,23 +807,6 @@ export const OverlayImage = memo(function OverlayImage({
     // ── Transformer resize (selected box) ───────────────────────────────────
     const handleTransformStart = useCallback(() => {
         setInteracting(true);
-    }, []);
-
-    // Fires continuously during resize — keep the delete icon pinned to the
-    // rect's (possibly-moving) top-left corner.
-    const handleTransform = useCallback(() => {
-        const rect = selectedRectRef.current;
-        const handle = deleteHandleRef.current;
-        if (!rect || !handle) return;
-        // During transform the rect's scale is !=1; compute the true top-left.
-        const sx = rect.scaleX();
-        const sy = rect.scaleY();
-        const w = rect.width() * sx;
-        const h = rect.height() * sy;
-        // When scale goes negative (flipped), offset origin accordingly.
-        const x = rect.x() + (w < 0 ? w : 0);
-        const y = rect.y() + (h < 0 ? h : 0);
-        handle.position({ x, y });
     }, []);
 
     const handleTransformEnd = useCallback(() => {
@@ -733,231 +851,237 @@ export const OverlayImage = memo(function OverlayImage({
         editor.onCommit(next);
     }, [editing, editor, selectedIndex, imageEl, annotations]);
 
-    // ── Delete selected (handled via button inside selected box) ────────────
-    const handleDeleteSelected = useCallback(() => {
-        if (!editing || !editor || selectedIndex === null) return;
-        const next = annotations.filter((_, i) => i !== selectedIndex);
-        editor.onCommit(next);
-        editor.onSelect(null);
-    }, [editing, editor, selectedIndex, annotations]);
-
     // ── Derived geometry ────────────────────────────────────────────────────
-    const imageSize = imageEl
-        ? { width: imageEl.naturalWidth, height: imageEl.naturalHeight }
-        : null;
+    const imageW = imageEl?.naturalWidth ?? 0;
+    const imageH = imageEl?.naturalHeight ?? 0;
 
-    // Visible boxes after confidence filter.
-    const visibleBoxesWithIdx = useMemo(() => {
-        return renderBoxes
-            .map((b, i) => ({ box: b, index: i }))
-            .filter(({ box }) => isVisible(box, deferredThreshold));
-    }, [renderBoxes, deferredThreshold]);
+    /** The selected box, when it has its own node (drag mode, passes the filter). */
+    const selectedNodeIndex =
+        editing &&
+        mode === 'drag' &&
+        overlayShown &&
+        selectedIndex !== null &&
+        annotations[selectedIndex] !== undefined &&
+        isVisible(annotations[selectedIndex], deferredThreshold)
+            ? selectedIndex
+            : null;
 
-    // Keep the hover hit-test's source-of-truth in sync with the latest
-    // visible set. Declared here (instead of next to the ref above) because
-    // `visibleBoxesWithIdx` isn't in scope until this point.
-    useEffect(() => {
-        visibleBoxesRef.current = visibleBoxesWithIdx;
-    }, [visibleBoxesWithIdx]);
+    // The erase target is marked in red; the spotlight would only make a
+    // sweep across a dense image flicker.
+    const hovered = hoverIndex !== null && mode !== 'erase' ? annotations[hoverIndex] : null;
 
-    // Rasterize all non-selected boxes off the main thread via a Web Worker
-    // that writes into an OffscreenCanvas and transfers back an ImageBitmap.
-    // The main thread never allocates the full-resolution canvas or strokes
-    // thousands of rects, so the slider / zoom / pan stay at 60 fps no matter
-    // how many boxes there are. Stale responses are dropped by request id.
-    const [rasterBitmap, setRasterBitmap] = useState<ImageBitmap | null>(null);
-    const workerRef = useRef<Worker | null>(null);
-    const latestReqIdRef = useRef(0);
-
-    useEffect(() => {
-        const worker = new Worker(new URL('../lib/rasterizeBoxes.worker.ts', import.meta.url), {
-            type: 'module',
-        });
-        workerRef.current = worker;
-        worker.onmessage = (e: MessageEvent<{ id: number; bitmap: ImageBitmap }>) => {
-            if (e.data.id !== latestReqIdRef.current) {
-                // Stale — close the bitmap to free its GPU memory.
-                e.data.bitmap.close();
-                return;
+    // Every box except the selected one, as a single stroked path. Depends
+    // only on the box set and the selection — hovering never repaints it.
+    const boxesSceneFunc = useCallback(
+        (context: Context, shape: Konva.Shape) => {
+            const stage = shape.getStage();
+            if (!stage) return;
+            const ctx = context._context as CanvasRenderingContext2D;
+            const s = stage.scaleX();
+            // Visible part of the image, with a little slack for the stroke.
+            const pad = 2 / s;
+            const vx1 = -stage.x() / s - pad;
+            const vy1 = -stage.y() / s - pad;
+            const vx2 = vx1 + stage.width() / s + 2 * pad;
+            const vy2 = vy1 + stage.height() / s + 2 * pad;
+            ctx.save();
+            ctx.lineWidth = STROKE_PX / s;
+            ctx.strokeStyle = STROKE_BOX;
+            ctx.beginPath();
+            for (let i = 0; i < visible.length; i++) {
+                const index = visible[i];
+                if (index === selectedNodeIndex) continue;
+                const b = annotations[index].bbox;
+                if (b[2] < vx1 || b[0] > vx2 || b[3] < vy1 || b[1] > vy2) continue;
+                const w = b[2] - b[0];
+                const h = b[3] - b[1];
+                if (w > 0 && h > 0) ctx.rect(b[0], b[1], w, h);
             }
-            setRasterBitmap((prev) => {
-                prev?.close();
-                return e.data.bitmap;
-            });
-        };
-        return () => {
-            worker.terminate();
-            workerRef.current = null;
-        };
-    }, []);
+            ctx.stroke();
+            ctx.restore();
+        },
+        [annotations, visible, selectedNodeIndex],
+    );
 
-    useEffect(() => {
-        if (!useOffscreen || !imageEl || !workerRef.current) {
-            setRasterBitmap((prev) => {
-                prev?.close();
-                return null;
-            });
-            return;
-        }
-        const id = ++latestReqIdRef.current;
-        workerRef.current.postMessage({
-            id,
-            imageWidth: imageEl.naturalWidth,
-            imageHeight: imageEl.naturalHeight,
-            boxes: renderBoxes,
-            excludeIndex: editing && mode === 'drag' ? selectedIndex : null,
-            confidenceThreshold: deferredThreshold,
-            strokeModel: STROKE_MODEL,
-            strokeUser: STROKE_USER,
-            strokeWidth: 1,
-            ssaa: 2,
-            // Labels are drawn separately in screen space via a single Konva
-            // Shape so they stay the same size on screen across zoom levels.
-            labelFontSize: 0,
-        });
-    }, [useOffscreen, imageEl, renderBoxes, selectedIndex, editing, mode, deferredThreshold]);
-
-    // Edit-mode click-to-select when non-selected boxes are inside the raster
-    // (they have no individual Konva nodes to listen on). AABB test in reverse
-    // order so top-drawn boxes win, matching the per-Rect path's z-order.
-    const handleRasterClick = useCallback(() => {
-        if (!editing || mode !== 'drag' || !editor) return;
-        const pt = getImagePointer();
-        if (!pt) return;
-        for (let i = visibleBoxesWithIdx.length - 1; i >= 0; i--) {
-            const { box, index } = visibleBoxesWithIdx[i];
-            if (index === selectedIndex) continue;
-            const [x1, y1, x2, y2] = box.bbox;
-            if (pt.x >= x1 && pt.x <= x2 && pt.y >= y1 && pt.y <= y2) {
-                editor.onSelect(index);
-                return;
+    // Base dim: fill the image with semi-transparent black, then
+    // destination-out every visible box so the boxes appear clear. Depends
+    // only on the box set — hovering never repaints it.
+    const dimSceneFunc = useCallback(
+        (context: Context) => {
+            const ctx = context._context as CanvasRenderingContext2D;
+            ctx.save();
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_BASE})`;
+            ctx.fillRect(0, 0, imageW, imageH);
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+            ctx.beginPath();
+            for (let i = 0; i < visible.length; i++) {
+                const b = annotations[visible[i]].bbox;
+                const w = b[2] - b[0];
+                const h = b[3] - b[1];
+                if (w > 0 && h > 0) ctx.rect(b[0], b[1], w, h);
             }
-        }
-        editor.onSelect(null);
-    }, [editing, mode, editor, getImagePointer, visibleBoxesWithIdx, selectedIndex]);
+            // Non-zero winding: overlapping boxes stay cleared.
+            ctx.fill('nonzero');
+            ctx.restore();
+        },
+        [annotations, visible, imageW, imageH],
+    );
+
+    // Hover spotlight, on its own layer: a second, darker veil over the whole
+    // image with a hole at the hovered box. Two canvas calls per hover change.
+    const spotlightSceneFunc = useCallback(
+        (context: Context) => {
+            if (!hovered) return;
+            const ctx = context._context as CanvasRenderingContext2D;
+            const [hx1, hy1, hx2, hy2] = hovered.bbox;
+            ctx.save();
+            ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_HOVER})`;
+            ctx.beginPath();
+            ctx.rect(0, 0, imageW, imageH);
+            ctx.rect(hx1, hy1, Math.max(0, hx2 - hx1), Math.max(0, hy2 - hy1));
+            ctx.fill('evenodd');
+            ctx.restore();
+        },
+        [hovered, imageW, imageH],
+    );
 
     // Dim is hidden during interaction and in draw mode so the user sees raw
-    // pixels while editing. Otherwise it's always on — a single Konva Shape
-    // composites the whole effect (base dim + per-box holes + optional hover
-    // dim) in one sceneFunc, which scales fine to thousands of boxes.
-    const showDim = dimEnabled && !interacting && mode !== 'draw';
+    // pixels while editing.
+    const showDim = overlayShown && !interacting && mode !== 'draw';
 
-    const hovered = hoverIdx !== null ? renderBoxes[hoverIdx] : null;
+    // Boxes that exist as real Konva nodes: the selected one (transformer +
+    // drag) and the hovered one (drag / click target, or the erase target).
+    // Keyed by index so a hovered node survives becoming the selected node
+    // mid-drag.
+    const activeIndices: number[] = [];
+    if (selectedNodeIndex !== null) activeIndices.push(selectedNodeIndex);
+    if (hoverIndex !== null && hoverIndex !== selectedNodeIndex) activeIndices.push(hoverIndex);
 
-    const stageDraggable = editing ? mode === 'drag' : true;
+    const stageDraggable = editing ? mode !== 'draw' : true;
 
-    // Cursor: hovering a box → "move" (snappy, uses raw hoverIdx). Otherwise
-    // crosshair in draw mode, grab when stage is pannable.
-    const cursorStyle =
-        hoverIdx !== null && !interacting
-            ? 'move'
-            : mode === 'draw'
-              ? 'crosshair'
-              : stageDraggable
-                ? 'grab'
-                : 'default';
+    const cursorStyle = panning
+        ? 'grabbing'
+        : spaceHeld
+          ? 'grab'
+          : mode === 'draw'
+            ? 'crosshair'
+            : editing && mode === 'erase'
+              ? hoverIndex !== null
+                  ? 'pointer'
+                  : 'default'
+              : hoverIndex !== null && !interacting
+                ? 'move'
+                : 'grab';
 
-
-    // With useOffscreen: non-selected boxes live inside rasterCanvas, so the
-    // per-box <Rect> loop only needs to render the selected one (for its
-    // Transformer + drag handlers). Without useOffscreen: render all of them
-    // as before.
-    const rectBoxes = useOffscreen
-        ? visibleBoxesWithIdx.filter(
-              ({ index }) => editing && mode === 'drag' && index === selectedIndex,
-          )
-        : visibleBoxesWithIdx;
+    const selectedBox = selectedNodeIndex !== null ? annotations[selectedNodeIndex] : null;
 
     return (
         <div className={cn('h-full', className)}>
             <div
                 ref={containerRef}
-                className="relative h-full overflow-hidden bg-muted/20 select-none"
+                className="canvas-grid relative h-full overflow-hidden select-none"
                 style={{ cursor: cursorStyle }}
+                onPointerDownCapture={startForcedPan}
+                onMouseDownCapture={swallowForcedPanMouseDown}
+                onPointerMove={continueForcedPan}
+                onPointerUp={endForcedPan}
+                onPointerCancel={endForcedPan}
+                data-testid="bbox-editor"
             >
                 {/* Edit panel — selected box */}
-                {editing &&
-                    mode === 'drag' &&
-                    selectedIndex !== null &&
-                    renderBoxes[selectedIndex] && (
-                        <div className="pointer-events-auto absolute left-4 top-4 z-20 w-64 rounded-lg border border-border/60 bg-card/90 p-3 text-card-foreground shadow-lg backdrop-blur">
-                            <div className="mb-2 flex items-center justify-between">
-                                <span className="text-sm font-semibold tabular-nums">
-                                    #{selectedIndex + 1}
-                                </span>
-                                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                                    Editing
-                                </span>
-                            </div>
-                            <div className="mb-3 text-xs text-muted-foreground">
-                                Updating...
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    className="flex-1"
-                                    onClick={handleDeleteSelected}
-                                >
-                                    Delete
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    className="flex-1"
-                                    onClick={() => editor?.onSelect(null)}
-                                >
-                                    Save (Enter)
-                                </Button>
-                            </div>
+                {selectedBox && selectedNodeIndex !== null && (
+                    <div
+                        data-editor-chrome
+                        className="floating-panel pointer-events-auto absolute top-3 right-3 z-20 w-56 p-3"
+                    >
+                        <div className="mb-2 flex items-center justify-between">
+                            <span className="text-sm font-semibold tabular-nums">
+                                #{selectedNodeIndex + 1}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                                {selectedBox.origin === 'user'
+                                    ? 'Edited by hand'
+                                    : 'Model detection'}
+                            </span>
                         </div>
-                    )}
+                        <dl className="mb-3 space-y-1 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Size (px)</dt>
+                                <dd className="font-mono tabular-nums">
+                                    {Math.round(selectedBox.bbox[2] - selectedBox.bbox[0])} ×{' '}
+                                    {Math.round(selectedBox.bbox[3] - selectedBox.bbox[1])}
+                                </dd>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <dt className="text-muted-foreground">Confidence</dt>
+                                <dd className="font-mono tabular-nums">
+                                    {(selectedBox.confidence * 100).toFixed(1)}%
+                                </dd>
+                            </div>
+                        </dl>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => deleteBox(selectedNodeIndex)}
+                            >
+                                <Trash2 />
+                                Delete
+                            </Button>
+                            <Button
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => editor?.onSelect(null)}
+                            >
+                                Done
+                                <span className="kbd border-primary-foreground/30 bg-primary-foreground/15 text-primary-foreground">
+                                    ↵
+                                </span>
+                            </Button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Zoom controls + saving indicator */}
-                <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex items-center gap-2">
-                    <div className="pointer-events-auto flex items-center rounded-[12px] border border-cyan-400/40 bg-card/70 px-1.5 py-1 text-cyan-50 shadow-[0_14px_40px_rgba(0,0,0,0.32)] backdrop-blur-md">
-                        <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            title="Zoom out (-)"
-                            onClick={handleZoomOut}
-                            className="h-8 w-8 rounded-[10px] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100 disabled:text-cyan-900"
-                        >
-                            <Minus className="h-4 w-4" />
-                        </Button>
-                        <div className="min-w-16 px-0.5 text-center font-mono text-[1.05rem] font-semibold tabular-nums tracking-[-0.03em] text-slate-100">
-                            {Math.round(scale * 100)}%
-                        </div>
-                        <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            title="Zoom in (+)"
-                            onClick={handleZoomIn}
-                            className="h-8 w-8 rounded-[10px] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100 disabled:text-cyan-900"
-                        >
-                            <Plus className="h-4 w-4" />
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            title="Reset to fit the viewport (0)"
-                            onClick={fitToScreen}
-                            className="h-8 rounded-[10px] px-2.5 text-[11px] font-bold tracking-[0.12em] text-cyan-300 hover:bg-cyan-500/12 hover:text-cyan-100"
-                        >
-                            RESET
-                        </Button>
-                    </div>
-                    <div
-                        className={cn(
-                            'pointer-events-none flex items-center gap-1 rounded-[10px] border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[11px] font-semibold tracking-[0.08em] text-cyan-100 backdrop-blur transition-opacity duration-200 ease-out',
-                            saveInProgress ? 'opacity-100' : 'opacity-0',
-                        )}
-                        aria-hidden={!saveInProgress}
-                    >
-                        <CloudUpload className="h-3.5 w-3.5 animate-pulse" />
-                        <span>SAVING</span>
-                    </div>
+                <div
+                    data-editor-chrome
+                    className="pointer-events-none absolute bottom-3 left-3 z-20 flex items-center gap-2"
+                >
+                    <ZoomControls
+                        scale={scale}
+                        onZoomIn={handleZoomIn}
+                        onZoomOut={handleZoomOut}
+                        onFit={fitToScreen}
+                        overlayVisible={overlayVisible}
+                        onToggleOverlay={onToggleOverlay}
+                    />
+                    <SaveIndicator saving={saveInProgress} pending={savePending} />
                 </div>
 
+                {/* What the active tool expects next */}
+                {editing && mode === 'draw' && (
+                    <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2">
+                        <CanvasHint>
+                            Drag to draw a box
+                            <span className="text-border">|</span>
+                            <span className="kbd">Space</span> pan
+                            <span className="kbd">Esc</span> cancel
+                        </CanvasHint>
+                    </div>
+                )}
+                {editing && mode === 'erase' && (
+                    <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2">
+                        <CanvasHint>
+                            Click a box to delete it
+                            <span className="text-border">|</span>
+                            <span className="kbd">Ctrl Z</span> undo
+                            <span className="kbd">Esc</span> done
+                        </CanvasHint>
+                    </div>
+                )}
 
                 {/* Placeholders */}
                 {!src && (
@@ -982,8 +1106,8 @@ export const OverlayImage = memo(function OverlayImage({
                     </div>
                 )}
                 {src && !imageEl && !imageError && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <Skeleton className="h-full w-full" />
+                    <div className="absolute inset-0 flex items-center justify-center p-10">
+                        <Skeleton className="h-full w-full rounded-xl" />
                     </div>
                 )}
                 {imageError && (
@@ -1007,95 +1131,45 @@ export const OverlayImage = memo(function OverlayImage({
                 )}
 
                 {/* Konva Stage */}
-                {imageEl && imageSize && stageSize.width > 0 && stageSize.height > 0 && (
+                {imageEl && stageSize.width > 0 && stageSize.height > 0 && (
                     <Stage
                         ref={stageRef}
                         width={stageSize.width}
                         height={stageSize.height}
                         draggable={stageDraggable}
                         onWheel={handleWheel}
-                        onMouseDown={(e) => {
-                            handleStageMouseDown(e);
-                            handleStageMouseDownDraw(e);
-                        }}
-                        onMouseMove={() => {
-                            handleStageMouseMove();
-                            handleStageMouseMoveDraw();
-                        }}
-                        onMouseUp={() => {
-                            handleStageMouseUp();
-                            handleStageMouseUpDraw();
-                        }}
-                        onMouseLeave={handleStageMouseLeave}
-                        onTouchStart={(e) => {
-                            handleStageMouseDown(e);
-                            handleStageMouseDownDraw(e);
-                        }}
-                        onTouchMove={() => {
-                            handleStageMouseMove();
-                            handleStageMouseMoveDraw();
-                        }}
-                        onTouchEnd={() => {
-                            handleStageMouseUp();
-                            handleStageMouseUpDraw();
-                        }}
+                        onMouseDown={handleStageDown}
+                        onMouseMove={handleStageMove}
+                        onMouseUp={handleStageUp}
+                        onMouseLeave={handleStageLeave}
+                        onTouchStart={handleStageDown}
+                        onTouchMove={handleStageMove}
+                        onTouchEnd={handleStageUp}
+                        onDragEnd={handleStageDragEnd}
                     >
                         {/* Image layer */}
                         <Layer listening={false} imageSmoothingEnabled={false}>
                             <KonvaImage
                                 image={imageEl}
-                                width={imageSize.width}
-                                height={imageSize.height}
+                                width={imageW}
+                                height={imageH}
                                 imageSmoothingEnabled={false}
+                                perfectDrawEnabled={false}
                             />
                         </Layer>
 
-                        {/* Dim layer — a single Shape paints the full effect in one
-                sceneFunc:
-                  1. Fill image area with semi-transparent black (base dim).
-                  2. destination-out each visible box → boxes appear clear.
-                  3. If hovering, paint a second black layer over everything,
-                     then destination-out only the hovered box → spotlight.
-                Drawing all of this with native canvas calls (a single Konva
-                node) keeps it cheap even at thousands of boxes. */}
+                        {/* Dim, then the hover spotlight on a layer of its own */}
+                        {showDim && (
+                            <Layer listening={false}>
+                                <Shape perfectDrawEnabled={false} sceneFunc={dimSceneFunc} />
+                            </Layer>
+                        )}
                         {showDim && (
                             <Layer listening={false}>
                                 <Shape
                                     perfectDrawEnabled={false}
-                                    sceneFunc={(context) => {
-                                        const ctx = context._context as CanvasRenderingContext2D;
-                                        ctx.save();
-                                        // Base dim across the image.
-                                        ctx.globalCompositeOperation = 'source-over';
-                                        ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_BASE})`;
-                                        ctx.fillRect(0, 0, imageSize.width, imageSize.height);
-                                        // Punch holes for every visible box.
-                                        ctx.globalCompositeOperation = 'destination-out';
-                                        ctx.fillStyle = 'rgba(0, 0, 0, 1)';
-                                        for (let i = 0; i < visibleBoxesWithIdx.length; i++) {
-                                            const [x1, y1, x2, y2] =
-                                                visibleBoxesWithIdx[i].box.bbox;
-                                            const w = x2 - x1;
-                                            const h = y2 - y1;
-                                            if (w > 0 && h > 0) ctx.fillRect(x1, y1, w, h);
-                                        }
-                                        // Hover spotlight: re-dim everything, then clear the
-                                        // hovered box so it pops above its neighbours.
-                                        if (hovered) {
-                                            ctx.globalCompositeOperation = 'source-over';
-                                            ctx.fillStyle = `rgba(0, 0, 0, ${DIM_OPACITY_HOVER})`;
-                                            ctx.fillRect(0, 0, imageSize.width, imageSize.height);
-                                            const [hx1, hy1, hx2, hy2] = hovered.bbox;
-                                            const hw = hx2 - hx1;
-                                            const hh = hy2 - hy1;
-                                            if (hw > 0 && hh > 0) {
-                                                ctx.globalCompositeOperation = 'destination-out';
-                                                ctx.fillStyle = 'rgba(0, 0, 0, 1)';
-                                                ctx.fillRect(hx1, hy1, hw, hh);
-                                            }
-                                        }
-                                        ctx.restore();
-                                    }}
+                                    visible={hovered !== null}
+                                    sceneFunc={spotlightSceneFunc}
                                 />
                             </Layer>
                         )}
@@ -1104,62 +1178,48 @@ export const OverlayImage = memo(function OverlayImage({
                         {editing && mode === 'draw' && cursor && (
                             <Layer listening={false}>
                                 <Line
-                                    points={[0, cursor.y, imageSize.width, cursor.y]}
+                                    points={[0, cursor.y, imageW, cursor.y]}
                                     stroke="white"
                                     strokeWidth={1.5}
                                     strokeScaleEnabled={false}
                                     dash={[6, 4]}
                                     opacity={0.8}
+                                    perfectDrawEnabled={false}
                                 />
                                 <Line
-                                    points={[cursor.x, 0, cursor.x, imageSize.height]}
+                                    points={[cursor.x, 0, cursor.x, imageH]}
                                     stroke="white"
                                     strokeWidth={1.5}
                                     strokeScaleEnabled={false}
                                     dash={[6, 4]}
                                     opacity={0.8}
+                                    perfectDrawEnabled={false}
                                 />
                             </Layer>
                         )}
 
-                        {/* Boxes layer — interactive when editing, display-only otherwise */}
+                        {/* Every box, one path. Never listens — hit-testing is
+                            done on the plain arrays. */}
+                        {overlayShown && (
+                            <Layer listening={false}>
+                                <Shape perfectDrawEnabled={false} sceneFunc={boxesSceneFunc} />
+                            </Layer>
+                        )}
+
+                        {/* Interactive layer — hovered / selected box, handles,
+                            rubber band. A handful of nodes at most. */}
                         <Layer>
-                            {/* Rasterized non-selected boxes (useOffscreen path).
-                  One KonvaImage node for thousands of strokes. Click is
-                  routed to an AABB hit test so edit-mode selection works. */}
-                            {useOffscreen && rasterBitmap && (
-                                <KonvaImage
-                                    image={rasterBitmap as unknown as HTMLImageElement}
-                                    width={imageSize.width}
-                                    height={imageSize.height}
-                                    listening={editing && mode === 'drag'}
-                                    onClick={handleRasterClick}
-                                    onTap={handleRasterClick}
-                                    perfectDrawEnabled={false}
-                                    shadowForStrokeEnabled={false}
-                                />
-                            )}
-                            {rectBoxes.map(({ box, index }) => {
-                                const [x1, y1, x2, y2] = box.bbox;
-                                const w = Math.max(0, x2 - x1);
-                                const h = Math.max(0, y2 - y1);
-                                const isSelected = editing && selectedIndex === index;
-                                const isHover = hoverIdx === index;
-                                const stroke = isSelected
-                                    ? STROKE_SELECTED
-                                    : box.origin === 'user'
-                                      ? STROKE_USER
-                                      : STROKE_MODEL;
-                                const commonProps = {
+                            {activeIndices.map((index) => {
+                                const [x1, y1, x2, y2] = annotations[index].bbox;
+                                const isSelected = index === selectedNodeIndex;
+                                const erasing = editing && mode === 'erase';
+                                const common = {
                                     x: x1,
                                     y: y1,
-                                    width: w,
-                                    height: h,
-                                    fill: isSelected ? FILL_SELECTED : 'transparent',
-                                    stroke,
-                                    strokeWidth: isHover || isSelected ? 2.5 : 1.5,
+                                    width: Math.max(0, x2 - x1),
+                                    height: Math.max(0, y2 - y1),
+                                    strokeWidth: STROKE_ACTIVE_PX,
                                     strokeScaleEnabled: false,
-                                    // Konva perf flags — skip extra drawing passes we don't need.
                                     perfectDrawEnabled: false,
                                     shadowForStrokeEnabled: false,
                                 };
@@ -1168,12 +1228,10 @@ export const OverlayImage = memo(function OverlayImage({
                                         <Rect
                                             key={`box-${index}`}
                                             ref={isSelected ? selectedRectRef : undefined}
-                                            {...commonProps}
+                                            {...common}
+                                            fill={isSelected ? FILL_SELECTED : 'transparent'}
+                                            stroke={isSelected ? STROKE_SELECTED : STROKE_BOX}
                                             draggable
-                                            onMouseEnter={() => setHoverIdx(index)}
-                                            onMouseLeave={() =>
-                                                setHoverIdx((p) => (p === index ? null : p))
-                                            }
                                             onClick={() => editor?.onSelect(index)}
                                             onTap={() => editor?.onSelect(index)}
                                             onDragStart={() => handleBoxDragStart(index)}
@@ -1182,22 +1240,21 @@ export const OverlayImage = memo(function OverlayImage({
                                         />
                                     );
                                 }
-                                // View / draw mode: non-interactive hover detect (only in view).
+                                // Erase / view mode: highlight only. Clicks are
+                                // resolved by the stage-level hit test.
                                 return (
                                     <Rect
                                         key={`box-${index}`}
-                                        {...commonProps}
-                                        listening={!editing}
-                                        onMouseEnter={() => !editing && setHoverIdx(index)}
-                                        onMouseLeave={() =>
-                                            !editing && setHoverIdx((p) => (p === index ? null : p))
-                                        }
+                                        {...common}
+                                        fill={erasing ? FILL_ERASE : 'transparent'}
+                                        stroke={erasing ? STROKE_ERASE : STROKE_BOX}
+                                        listening={false}
                                     />
                                 );
                             })}
 
                             {/* Transformer — resize handles for the selected box */}
-                            {editing && mode === 'drag' && (
+                            {editing && mode === 'drag' && overlayShown && (
                                 <Transformer
                                     ref={transformerRef}
                                     rotateEnabled={false}
@@ -1208,16 +1265,15 @@ export const OverlayImage = memo(function OverlayImage({
                                     anchorSize={HANDLE_PX}
                                     ignoreStroke
                                     flipEnabled={false}
-                                    boundBoxFunc={(_oldBox, newBox) => {
+                                    boundBoxFunc={(oldBox, newBox) => {
                                         if (
                                             Math.abs(newBox.width) < MIN_BOX_SIZE ||
                                             Math.abs(newBox.height) < MIN_BOX_SIZE
                                         )
-                                            return _oldBox;
+                                            return oldBox;
                                         return newBox;
                                     }}
                                     onTransformStart={handleTransformStart}
-                                    onTransform={handleTransform}
                                     onTransformEnd={handleTransformEnd}
                                 />
                             )}
@@ -1245,10 +1301,10 @@ export const OverlayImage = memo(function OverlayImage({
                                             strokeScaleEnabled={false}
                                             dash={[4, 3]}
                                             listening={false}
+                                            perfectDrawEnabled={false}
                                         />
                                     );
                                 })()}
-
                         </Layer>
                     </Stage>
                 )}
@@ -1256,4 +1312,3 @@ export const OverlayImage = memo(function OverlayImage({
         </div>
     );
 });
-

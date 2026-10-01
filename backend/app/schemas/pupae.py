@@ -64,6 +64,7 @@ class PupaeDetectionResult(BaseModel):
         description="URL to the locally saved overlay image, never base64"
     )
     calibration: CalibrationCorners | None = None
+    sam_refined: bool = False
 
 
 class PupaeBatchDetectionResult(BaseModel):
@@ -128,6 +129,10 @@ class PupaeImageDetail(BaseModel):
     detections: list[StoredPupaeAnnotation] = Field(default_factory=list)
     calibration: CalibrationCorners | None = None
     measurements: list[PupaeMeasurement] = Field(default_factory=list)
+    sam_refined: bool = False
+    detection_count: int = Field(default=0, ge=0)
+    measured_count: int = Field(default=0, ge=0)
+    stale_count: int = Field(default=0, ge=0)
 
 
 class PupaeBatchDetail(BaseModel):
@@ -138,6 +143,7 @@ class PupaeBatchDetail(BaseModel):
     total_image_count: int
     detection_model: str | None = None
     sam_model: str | None = None
+    count_only: bool = False
     images: list[PupaeImageDetail] = Field(default_factory=list)
     weight_stats: WeightStats | None = None
 

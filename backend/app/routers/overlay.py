@@ -13,13 +13,18 @@ import uuid as _uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from sqlalchemy import select
 
 from app.database import AsyncSession, get_session
 from app.deps import CurrentUser, get_cached_storage_dir
-from app.models.analysis import AnalysisBatch
+from app.models.analysis import AnalysisBatch, AnalysisImage
+from app.routers.inference_utils import cached_file_response
+from app.services.image_artifacts import (
+    ensure_polygon_overlay_fresh,
+    is_overlay_stale,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +57,10 @@ def _resolve_warped_path(storage_dir: Path, batch_id: str, filename: str) -> Pat
 async def get_overlay(
     batch_id: str,
     filename: str,
+    request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> FileResponse:
+) -> Response:
     """Return the overlay PNG image for the specified batch and original filename.
 
     The file is read from disk at:
@@ -73,11 +79,12 @@ async def get_overlay(
             detail="Invalid batch_id",
         ) from exc
     stmt = (
-        select(AnalysisBatch.id)
+        select(AnalysisBatch.organism_type)
         .where(AnalysisBatch.id == bid)
         .where(AnalysisBatch.user_id == user.id)
     )
-    if (await db.execute(stmt)).scalar_one_or_none() is None:
+    organism = (await db.execute(stmt)).scalar_one_or_none()
+    if organism is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Overlay not found for batch {batch_id}.",
@@ -109,11 +116,20 @@ async def get_overlay(
             detail=f"Overlay not found: {overlay_path}",
         )
 
-    return FileResponse(
-        path=overlay_path,
-        media_type="image/png",
-        filename=overlay_path.name,
-    )
+    # Polygon edits / SAM refinement leave the PNG behind; redraw on demand.
+    if is_overlay_stale(overlay_path):
+        relative = f"{bid}/{overlay_path.name}"
+        image_id = (
+            await db.execute(
+                select(AnalysisImage.id)
+                .where(AnalysisImage.batch_id == bid)
+                .where(AnalysisImage.overlay_path == relative)
+            )
+        ).scalar_one_or_none()
+        if image_id is not None:
+            await ensure_polygon_overlay_fresh(image_id, overlay_path, organism, db)
+
+    return cached_file_response(request, overlay_path, "image/png")
 
 
 @router.get(
@@ -127,9 +143,10 @@ async def get_overlay(
 async def get_warped(
     batch_id: str,
     filename: str,
+    request: Request,
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_session)],
-) -> FileResponse:
+) -> Response:
     """Serve the warped raw PNG written by larvae inference. The polygon
     editor uses this as its backing image so the cyan SVG polygons aren't
     double-drawn on top of overlay marks.
@@ -164,8 +181,4 @@ async def get_warped(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Warped image not found: {warped_path}",
         )
-    return FileResponse(
-        path=warped_path,
-        media_type="image/png",
-        filename=warped_path.name,
-    )
+    return cached_file_response(request, warped_path, "image/png")

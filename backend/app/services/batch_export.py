@@ -11,6 +11,10 @@ We deliberately do NOT export the script-generated overlay PNG (which carries
 the inference-time Configuration/Result text boards), because that is not
 what the operator reviewed.
 
+Larvae / pupae batches are the exception: their overlay PNG carries only the
+polygon outlines on the calibrated frame, so it is exported directly (after
+being re-rendered from the current, possibly edited, polygons).
+
 Summary columns reflect the *edited* count/average confidence when the
 operator has saved edits, otherwise the model's output.
 """
@@ -36,8 +40,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analysis import AnalysisBatch, AnalysisImage
+from app.services.image_artifacts import ensure_polygon_overlay_fresh
 
 logger = logging.getLogger(__name__)
+
+_POLYGON_ORGANISMS = frozenset({"larvae", "pupae"})
 
 # Excel styling — a calm, "corporate report" look: dark header with white
 # bold text, zebra-striped body, thin borders, auto-sized columns.
@@ -337,6 +344,21 @@ async def build_batch_archive(
             "No completed images match the requested selection for this batch."
         )
 
+    # Larvae / pupae: the overlay PNG *is* the reviewed view (polygons on the
+    # calibrated frame). Bring it up to date with any polygon edits, then
+    # export it as-is — drawing bbox rectangles on the raw image, as done for
+    # egg / neonate below, would show neither the outlines nor the edits.
+    polygon_batch = batch.organism_type in _POLYGON_ORGANISMS
+    if polygon_batch:
+        for img in images:
+            if img.overlay_path:
+                await ensure_polygon_overlay_fresh(
+                    img.id,
+                    _resolve_overlay_path(img.overlay_path, storage_dir),
+                    batch.organism_type,
+                    db,
+                )
+
     def _build(out: tempfile.SpooledTemporaryFile) -> None:
         with zipfile.ZipFile(out, mode="w", compression=zipfile.ZIP_STORED) as zf:
             stem_counts: dict[str, int] = {}
@@ -347,7 +369,7 @@ async def build_batch_archive(
                 raw_src = _find_raw_path(overlay_src)
 
                 rendered: bytes | None = None
-                if raw_src is not None and raw_src.exists():
+                if not polygon_batch and raw_src is not None and raw_src.exists():
                     rendered = _render_reviewed_png(raw_src, _boxes_for_render(img))
 
                 if rendered is None:
@@ -366,16 +388,17 @@ async def build_batch_archive(
                             },
                         )
                         continue
-                    logger.warning(
-                        "Falling back to script overlay during export",
-                        extra={
-                            "context": {
-                                "batch_id": str(batch_id),
-                                "image_id": str(img.id),
-                                "raw_path": str(raw_src) if raw_src else None,
-                            }
-                        },
-                    )
+                    if not polygon_batch:
+                        logger.warning(
+                            "Falling back to script overlay during export",
+                            extra={
+                                "context": {
+                                    "batch_id": str(batch_id),
+                                    "image_id": str(img.id),
+                                    "raw_path": str(raw_src) if raw_src else None,
+                                }
+                            },
+                        )
 
                 stem = Path(img.original_filename).stem
                 count = stem_counts.get(stem, 0)

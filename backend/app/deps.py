@@ -294,6 +294,11 @@ AnnotatedLarvaeMeasurementService = Annotated[
     Depends(get_larvae_measurement_service),
 ]
 
+AnnotatedSamRefinementService = Annotated[
+    SamRefinementService,
+    Depends(get_sam_refinement_service),
+]
+
 
 # AnalysisService is stateless — return a cached singleton instance
 @lru_cache
@@ -303,6 +308,14 @@ def get_analysis_service() -> AnalysisService:
     Stateless; safe to reuse across all requests.
     """
     return AnalysisService()
+
+
+@lru_cache
+def get_dashboard_service():
+    """Return a cached DashboardService instance (stateless)."""
+    from app.services.dashboard_service import DashboardService
+
+    return DashboardService()
 
 
 @lru_cache

@@ -96,7 +96,7 @@ export function ProjectTypeCard({
                                 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
                                 modelStatus === 'error'
                                     ? 'bg-destructive/10 text-destructive'
-                                    : 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+                                    : 'bg-warning/10 text-warning',
                             )}
                         >
                             <AlertTriangle className="h-3 w-3" />

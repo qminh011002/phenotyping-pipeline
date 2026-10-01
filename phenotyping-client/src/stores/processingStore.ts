@@ -6,7 +6,7 @@
 // (readers: ProcessingPage, ProcessingIndicator, etc.) talk through.
 
 import { create } from 'zustand';
-import type { Organism } from '@/types/api';
+import type { AnalysisMode, Organism } from '@/types/api';
 
 export type ImageStatus =
     | 'pending'
@@ -62,6 +62,10 @@ interface ProcessingStore {
      * entry is the default used when the user draws a new box in the editor.
      */
     classes: string[];
+    /** Larvae / pupae: count-only (default) or count + SAM + measure. */
+    analysisMode: AnalysisMode;
+    /** Name of the existing batch this run adds images to; null for a new batch. */
+    appendingToName: string | null;
 
     // FS-012: persistent processing state
     activeBatchId: string | null;
@@ -69,6 +73,9 @@ interface ProcessingStore {
     isRestoredFromBackend: boolean;
     // "completed" means the batch finished while the user was on another page
     completedBatchId: string | null;
+    /** Image to open the result viewer on — the first one this run processed
+     *  (for an append, that is the first *new* image, not the batch's first). */
+    completedFirstImageId: string | null;
 
     // Runtime fields written by the manager — used to render ETA / errors / etc.
     currentImageStartMs: number | null;
@@ -95,7 +102,7 @@ interface ProcessingStore {
     setActiveBatch: (batchId: string, processedCount: number, totalImages: number) => void;
     incrementProcessed: () => void;
     markRestoredFromBackend: () => void;
-    setCompletedBatch: (batchId: string | null) => void;
+    setCompletedBatch: (batchId: string | null, firstImageId?: string | null) => void;
 
     // Runtime updaters used by the manager
     setCurrentImageStart: (ms: number | null) => void;
@@ -110,6 +117,8 @@ interface ProcessingStore {
     setProjectName: (name: string | null) => void;
     setOrganism: (organism: Organism) => void;
     setClasses: (classes: string[]) => void;
+    setAnalysisMode: (mode: AnalysisMode) => void;
+    setAppendingToName: (name: string | null) => void;
 }
 
 export const useProcessingStore = create<ProcessingStore>((set) => ({
@@ -122,6 +131,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     processedCount: 0,
     isRestoredFromBackend: false,
     completedBatchId: null,
+    completedFirstImageId: null,
     currentImageStartMs: null,
     completedDurations: [],
     totalElapsedSeconds: 0,
@@ -132,6 +142,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     projectName: null,
     organism: 'egg',
     classes: [],
+    analysisMode: 'count',
+    appendingToName: null,
 
     startProcessing: (totalImages) =>
         set({
@@ -141,6 +153,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             imageIndexById: new Map(),
             toastId: null,
             completedBatchId: null,
+            completedFirstImageId: null,
             error: null,
             interruptedBatch: null,
             completedDurations: [],
@@ -180,6 +193,7 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             processedCount: 0,
             isRestoredFromBackend: false,
             completedBatchId: null,
+            completedFirstImageId: null,
             currentImageStartMs: null,
             completedDurations: [],
             totalElapsedSeconds: 0,
@@ -190,6 +204,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
             projectName: null,
             organism: 'egg',
             classes: [],
+            analysisMode: 'count',
+            appendingToName: null,
         }),
 
     setToastId: (toastId) => set({ toastId }),
@@ -206,9 +222,10 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
 
     markRestoredFromBackend: () => set({ isRestoredFromBackend: true }),
 
-    setCompletedBatch: (batchId) =>
+    setCompletedBatch: (batchId, firstImageId = null) =>
         set({
             completedBatchId: batchId,
+            completedFirstImageId: batchId ? firstImageId : null,
             isProcessing: false,
             currentImageStartMs: null,
             stage: null,
@@ -248,4 +265,8 @@ export const useProcessingStore = create<ProcessingStore>((set) => ({
     setOrganism: (organism) => set({ organism }),
 
     setClasses: (classes) => set({ classes }),
+
+    setAnalysisMode: (analysisMode) => set({ analysisMode }),
+
+    setAppendingToName: (appendingToName) => set({ appendingToName }),
 }));

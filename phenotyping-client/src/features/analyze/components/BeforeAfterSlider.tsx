@@ -100,7 +100,7 @@ export function BeforeAfterSlider({
         <div
             ref={containerRef}
             className={cn(
-                'relative h-full w-full flex-1 select-none overflow-hidden rounded-lg bg-muted',
+                'relative h-full w-full flex-1 select-none overflow-hidden rounded-xl border border-border bg-muted',
                 className,
             )}
             onPointerDown={onPointerDown}
@@ -150,7 +150,7 @@ export function BeforeAfterSlider({
                     setDragging(true);
                 }}
                 className={cn(
-                    'absolute top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full border border-white/90 bg-white text-foreground shadow-md outline-none ring-0 transition-transform',
+                    'absolute top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full border border-white/90 bg-white text-neutral-900 shadow-md outline-none ring-0 transition-transform',
                     'hover:scale-105 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
                     dragging && 'scale-110',
                 )}

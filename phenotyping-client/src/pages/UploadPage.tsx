@@ -1,38 +1,58 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+// UploadPage — pick the images for a run and choose how they are processed.
+//
+// Two entry points share this page:
+//   /analyze/upload?type=larvae&mode=upload            → new batch
+//   /analyze/upload?batch=<id>                         → add images to an
+//                                                        existing batch
+// In both cases the files are handed to the processing manager, which owns
+// the inference loop from there.
+
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-    Upload,
-    X,
-    Plus,
-    Settings,
-    Check,
+    AlertTriangle,
     ArrowLeft,
     ArrowRight,
     ArrowUpFromLine,
+    Camera,
+    Check,
     FileIcon,
     FolderIcon,
     Image as ImageIcon,
-    Camera,
+    ImagePlus,
+    Plus,
+    Settings2,
+    Trash2,
+    Upload,
+    X,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import {
-    Pagination,
-    PaginationContent,
-    PaginationItem,
-    PaginationLink,
-    PaginationNext,
-    PaginationPrevious,
-    PaginationEllipsis,
-} from '@/components/ui/pagination';
 import { toast } from 'sonner';
-import { storeProcessingFiles, generateBatchId } from '@/features/upload/lib/processingSession';
-import { useProcessingStore } from '@/stores/processingStore';
-import { startProcessingFromSession, isManagerRunning } from '@/services/processingManager';
+
+import { OrganismBadge, PaginationBar } from '@/components/common';
+import { Spinner } from '@/components/common/Spinner';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
+import { FlowSteps } from '@/features/analyze/components/FlowSteps';
+import { AnalysisModePicker } from '@/features/upload/components/AnalysisModePicker';
 import { ConfigPanel } from '@/features/upload/components/ConfigPanel';
 import { LarvaeConfigPanel } from '@/features/upload/components/LarvaeConfigPanel';
+import {
+    generateBatchId,
+    storeAnalysisMode,
+    storeAppendTarget,
+    storeProcessingFiles,
+} from '@/features/upload/lib/processingSession';
+import { formatBytes, pluralize } from '@/lib/format';
+import { isPolygonOrganism, organismMeta } from '@/lib/organism';
 import { cn } from '@/lib/utils';
+import { useBoot } from '@/providers/BootProvider';
+import { getAnalysisDetail, getBboxConfig, getPolygonConfig } from '@/services/api';
+import { isManagerRunning, startProcessingFromSession } from '@/services/processingManager';
+import { useProcessingStore } from '@/stores/processingStore';
+import type { AnalysisMode, EggConfig, LarvaeConfig, Organism } from '@/types/api';
 
 interface FileEntry {
     id: string;
@@ -48,41 +68,39 @@ const SUPPORTED_TYPES = new Set([
     'image/bmp',
 ]);
 
-function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+const ORGANISMS = new Set<Organism>(['egg', 'neonate', 'larvae', 'pupae']);
 
 function genId() {
     return Math.random().toString(36).slice(2);
 }
 
+const stemOf = (filename: string) => filename.replace(/\.[^.]+$/, '');
+
 // Thumbnail size/quality — intentionally low. Users identify images by filename;
 // the preview just needs to be recognizable, not sharp. Keeping these small
 // prevents lag when loading a 500MB+ folder of full-resolution photos.
 const THUMB_MAX_EDGE = 300;
-const THUMB_QUALITY = 0.4;
+const THUMB_QUALITY = 0.5;
 const THUMB_CONCURRENCY = 4;
-const THUMB_MIN_SIZE = 110;
-const GRID_GAP_PX = 16;
-const MAX_GRID_ROWS = 3;
-const DEFAULT_GRID_COLUMNS = 8;
-const THUMB_TILE_CLASS = 'min-w-0';
+const THUMB_MIN_SIZE = 116;
+const GRID_GAP_PX = 12;
+const MAX_GRID_ROWS = 4;
+const DEFAULT_GRID_COLUMNS = 6;
 
 async function makeThumbnail(file: File): Promise<string> {
     try {
-        const bitmap = await createImageBitmap(file);
-        const scale = Math.min(1, THUMB_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-        const w = Math.max(1, Math.round(bitmap.width * scale));
-        const h = Math.max(1, Math.round(bitmap.height * scale));
+        // Ask the decoder for a small bitmap directly: decoding a 20 MP photo
+        // at full size just to shrink it costs ~80 MB and most of the time.
+        const bitmap = await createImageBitmap(file, {
+            resizeWidth: THUMB_MAX_EDGE,
+            resizeQuality: 'low',
+        });
         const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('canvas 2d context unavailable');
-        ctx.drawImage(bitmap, 0, 0, w, h);
+        ctx.drawImage(bitmap, 0, 0);
         bitmap.close?.();
         const blob: Blob | null = await new Promise((resolve) =>
             canvas.toBlob(resolve, 'image/jpeg', THUMB_QUALITY),
@@ -142,27 +160,19 @@ async function mapWithConcurrency<T, R>(
     return results;
 }
 
-// ── Thumbnail ─────────────────────────────────────────────────────────────────
+// ── Thumbnail tile ────────────────────────────────────────────────────────────
 
-interface ThumbnailProps {
+interface TileProps {
     entry: FileEntry;
+    selected: boolean;
     onRemove: (id: string) => void;
     onOpen: (id: string) => void;
-    isSelected?: boolean;
-    onToggleSelect?: (id: string) => void;
-    anySelected?: boolean;
+    onToggleSelect: (id: string) => void;
 }
 
-function Thumbnail({
-    entry,
-    onRemove,
-    onOpen,
-    isSelected,
-    onToggleSelect,
-    anySelected,
-}: ThumbnailProps) {
+const Tile = memo(function Tile({ entry, selected, onRemove, onOpen, onToggleSelect }: TileProps) {
     return (
-        <div className={cn('group relative flex flex-col gap-2', THUMB_TILE_CLASS)}>
+        <div className="group relative flex min-w-0 flex-col gap-1.5">
             <div
                 role="button"
                 tabIndex={0}
@@ -174,157 +184,82 @@ function Thumbnail({
                     }
                 }}
                 className={cn(
-                    'relative aspect-square w-full cursor-zoom-in overflow-hidden rounded-md border bg-muted transition-shadow duration-200 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                    isSelected
-                        ? 'ring-2 ring-primary ring-offset-2 ring-offset-background'
-                        : 'border-border',
+                    'relative aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg border bg-muted transition-[border-color,box-shadow] duration-150',
+                    'focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                    selected
+                        ? 'border-primary ring-2 ring-primary/40'
+                        : 'border-border hover:border-foreground/25',
                 )}
                 aria-label={`Preview ${entry.file.name}`}
             >
                 <img
                     src={entry.previewUrl}
                     alt={entry.file.name}
-                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                    className="h-full w-full object-cover"
                     loading="lazy"
+                    decoding="async"
+                    draggable={false}
                 />
+                <button
+                    type="button"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleSelect(entry.id);
+                    }}
+                    className={cn(
+                        'absolute top-1.5 left-1.5 flex size-5 items-center justify-center rounded-md border transition-opacity duration-150',
+                        'focus:outline-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                        selected
+                            ? 'border-primary bg-primary text-primary-foreground opacity-100'
+                            : 'border-white/70 bg-black/35 text-white opacity-0 group-hover:opacity-100',
+                    )}
+                    aria-label={
+                        selected ? `Deselect ${entry.file.name}` : `Select ${entry.file.name}`
+                    }
+                    aria-pressed={selected}
+                >
+                    {selected && <Check className="size-3" />}
+                </button>
                 <button
                     type="button"
                     onClick={(e) => {
                         e.stopPropagation();
                         onRemove(entry.id);
                     }}
-                    className="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white opacity-0 transition-opacity duration-150 hover:bg-black/80 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+                    className="absolute top-1.5 right-1.5 flex size-5 items-center justify-center rounded-md bg-black/55 text-white opacity-0 transition-opacity duration-150 hover:bg-black/75 focus:outline-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 group-hover:opacity-100"
                     aria-label={`Remove ${entry.file.name}`}
                 >
-                    <X className="h-3 w-3" />
+                    <X className="size-3" />
                 </button>
-                {(anySelected || isSelected) && (
-                    <button
-                        type="button"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleSelect?.(entry.id);
-                        }}
-                        className={cn(
-                            'absolute left-1 top-1 rounded border-2 p-0.5 transition-all duration-150',
-                            isSelected
-                                ? 'border-primary bg-primary text-primary-foreground opacity-100'
-                                : 'border-white/60 bg-black/30 text-white opacity-0 group-hover:opacity-100 hover:border-white/80',
-                        )}
-                        aria-label={isSelected ? 'Deselect image' : 'Select image'}
-                    >
-                        {isSelected && <Check className="h-2.5 w-2.5" />}
-                    </button>
-                )}
             </div>
             <span
-                className="block w-full truncate text-center text-xs text-muted-foreground"
-                title={entry.file.name}
+                className="block w-full truncate text-center text-[11px] text-muted-foreground"
+                title={`${entry.file.name} · ${formatBytes(entry.file.size)}`}
             >
                 {entry.file.name}
             </span>
         </div>
     );
-}
+});
 
-// ── Pagination bar ────────────────────────────────────────────────────────────
-
-function PaginationBar({
-    page,
-    pageCount,
-    onChange,
-}: {
-    page: number;
-    pageCount: number;
-    onChange: (page: number) => void;
-}) {
-    // Compact window: first, last, current ±1, with ellipses.
-    const pages: (number | 'ellipsis')[] = [];
-    const push = (v: number | 'ellipsis') => {
-        if (v === 'ellipsis' || pages[pages.length - 1] !== v) pages.push(v);
-    };
-    for (let i = 1; i <= pageCount; i++) {
-        if (i === 1 || i === pageCount || Math.abs(i - page) <= 1) push(i);
-        else if (i < page) push('ellipsis');
-        else if (i > page) {
-            push('ellipsis');
-            // jump to tail
-            while (i < pageCount) i++;
-            push(pageCount);
-            break;
-        }
-    }
-
+function AddMoreTile({ onClick }: { onClick: () => void }) {
     return (
-        <Pagination>
-            <PaginationContent>
-                <PaginationItem>
-                    <PaginationPrevious
-                        href="#"
-                        onClick={(e) => {
-                            e.preventDefault();
-                            if (page > 1) onChange(page - 1);
-                        }}
-                        aria-disabled={page === 1}
-                        className={page === 1 ? 'pointer-events-none opacity-50' : ''}
-                    />
-                </PaginationItem>
-                {pages.map((p, idx) =>
-                    p === 'ellipsis' ? (
-                        <PaginationItem key={`e${idx}`}>
-                            <PaginationEllipsis />
-                        </PaginationItem>
-                    ) : (
-                        <PaginationItem key={p}>
-                            <PaginationLink
-                                href="#"
-                                isActive={p === page}
-                                onClick={(e) => {
-                                    e.preventDefault();
-                                    onChange(p);
-                                }}
-                            >
-                                {p}
-                            </PaginationLink>
-                        </PaginationItem>
-                    ),
-                )}
-                <PaginationItem>
-                    <PaginationNext
-                        href="#"
-                        onClick={(e) => {
-                            e.preventDefault();
-                            if (page < pageCount) onChange(page + 1);
-                        }}
-                        aria-disabled={page === pageCount}
-                        className={page === pageCount ? 'pointer-events-none opacity-50' : ''}
-                    />
-                </PaginationItem>
-            </PaginationContent>
-        </Pagination>
-    );
-}
-
-function AddMoreCard({ onClick }: { onClick: () => void }) {
-    return (
-        <div className={cn('flex flex-col gap-2', THUMB_TILE_CLASS)}>
+        <div className="flex min-w-0 flex-col gap-1.5">
             <button
                 type="button"
                 onClick={onClick}
-                className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-input text-muted-foreground transition-colors duration-150 hover:border-primary/60 hover:bg-primary/5 hover:text-foreground focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 aria-label="Add more images"
             >
-                <Plus className="h-6 w-6" />
+                <Plus className="size-5" />
                 <span className="text-xs">Add more</span>
             </button>
-            <span className="block w-full truncate text-center text-xs text-transparent select-none">
-                Add more
-            </span>
+            <span className="block text-[11px] select-none">&nbsp;</span>
         </div>
     );
 }
 
-// ── Drop Zone (empty state) ──────────────────────────────────────────────────
+// ── Drop zone (empty state) ──────────────────────────────────────────────────
 
 interface DropZoneProps {
     isDragOver: boolean;
@@ -339,85 +274,162 @@ function DropZone({ isDragOver, onDrop, onPick, onPickFolder }: DropZoneProps) {
         e.stopPropagation();
     }, []);
 
-    const onDrop_ = useCallback(
-        (e: React.DragEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const files = Array.from(e.dataTransfer.files).filter((f) =>
-                SUPPORTED_TYPES.has(f.type),
-            );
-            if (files.length > 0) onDrop(files);
-        },
-        [onDrop],
-    );
-
     return (
         <div
             onDragOver={stop}
             onDragEnter={stop}
             onDragLeave={stop}
-            onDrop={onDrop_}
+            onDrop={(e) => {
+                stop(e);
+                const files = Array.from(e.dataTransfer.files).filter((f) =>
+                    SUPPORTED_TYPES.has(f.type),
+                );
+                if (files.length > 0) onDrop(files);
+            }}
             className={cn(
-                'flex flex-col items-center justify-center gap-5 rounded-lg border border-dashed p-14 text-center transition-colors duration-150',
-                isDragOver
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border bg-muted/20 hover:bg-muted/30',
+                'flex min-h-[26rem] flex-col items-center justify-center gap-5 rounded-xl border border-dashed p-10 text-center transition-colors duration-150',
+                isDragOver ? 'border-primary bg-primary/5' : 'border-input bg-card',
             )}
             aria-label="Drop zone for image upload"
         >
             <div
                 className={cn(
-                    'flex size-12 items-center justify-center rounded-full transition-colors',
-                    isDragOver
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-muted text-muted-foreground',
+                    'flex size-14 items-center justify-center rounded-full transition-colors duration-150',
+                    isDragOver ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
                 )}
             >
-                <ArrowUpFromLine className="h-5 w-5" />
+                <ArrowUpFromLine className="size-6" />
             </div>
             <div className="space-y-1">
-                <p className="text-sm font-semibold text-foreground">
-                    {isDragOver ? 'Drop images to upload' : 'Drop images here'}
+                <p className="text-base font-semibold text-foreground">
+                    {isDragOver ? 'Drop images to add them' : 'Drop images here'}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                    or browse a file or folder from your computer
+                <p className="text-sm text-muted-foreground">
+                    or choose files or a whole folder from your computer
                 </p>
             </div>
-            <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={onPick}>
-                    <FileIcon className="mr-2 h-4 w-4" />
+            <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button onClick={onPick}>
+                    <FileIcon />
                     Select files
+                    <span className="kbd ml-1 border-primary-foreground/30 bg-primary-foreground/15 text-primary-foreground">
+                        Ctrl O
+                    </span>
                 </Button>
-                <Button variant="outline" size="sm" onClick={onPickFolder}>
-                    <FolderIcon className="mr-2 h-4 w-4" />
+                <Button variant="outline" onClick={onPickFolder}>
+                    <FolderIcon />
                     Select folder
                 </Button>
             </div>
-            <div className="mt-1 flex items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-                <ImageIcon className="h-3.5 w-3.5" />
-                <span>.jpg · .png · .bmp · .tiff</span>
-                <span className="text-muted-foreground/40">·</span>
-                <span>Max 20 MB per image</span>
-            </div>
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <ImageIcon className="size-3.5" />
+                .jpg · .png · .bmp · .tiff
+                <span className="text-border">|</span>
+                Max 20 MB per image
+            </p>
         </div>
     );
 }
 
+// ── Run setup rail ───────────────────────────────────────────────────────────
+
+function SettingRow({ label, value }: { label: string; value: React.ReactNode }) {
+    return (
+        <div className="flex items-center justify-between gap-3 text-xs">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="font-mono font-medium text-foreground tabular-nums">{value}</dd>
+        </div>
+    );
+}
+
+function SettingsSummary({
+    organism,
+    config,
+    loading,
+    mode,
+}: {
+    organism: Organism;
+    config: EggConfig | LarvaeConfig | undefined;
+    loading: boolean;
+    mode: AnalysisMode;
+}) {
+    if (loading) {
+        return (
+            <div className="space-y-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4" />
+            </div>
+        );
+    }
+    if (!config) {
+        return (
+            <p className="text-xs text-muted-foreground">
+                Could not read the server's settings. The run will use its current configuration.
+            </p>
+        );
+    }
+    const polygon = isPolygonOrganism(organism);
+    const sam = polygon ? ((config as LarvaeConfig).sam?.enabled ?? true) : false;
+    return (
+        <dl className="space-y-1.5">
+            <SettingRow label="Confidence" value={`≥ ${config.confidence_threshold.toFixed(2)}`} />
+            <SettingRow label="Tile size" value={`${config.tile_size} px`} />
+            <SettingRow label="Tile overlap" value={`${Math.round(config.overlap * 100)}%`} />
+            {polygon && (
+                <SettingRow
+                    label="SAM refinement"
+                    value={mode === 'count' ? 'Skipped' : sam ? 'On' : 'Off'}
+                />
+            )}
+            <SettingRow label="Device" value={String(config.device).toUpperCase()} />
+        </dl>
+    );
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
+
 export default function UploadPage() {
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const [searchParams] = useSearchParams();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
     const gridRef = useRef<HTMLDivElement>(null);
 
-    const organism = (searchParams.get('type') ?? 'egg') as string;
-    const organismLabel = organism.charAt(0).toUpperCase() + organism.slice(1);
-    const mode = (searchParams.get('mode') ?? 'upload') as 'upload' | 'camera';
-    const modeLabel = mode === 'camera' ? 'Camera' : 'Upload';
-    const ModeIcon = mode === 'camera' ? Camera : Upload;
+    // ── What is this upload for? ────────────────────────────────────────────
+    const appendBatchId = searchParams.get('batch');
+    const appendQuery = useQuery({
+        queryKey: ['analysis-detail', appendBatchId, { includeAnnotations: false }],
+        enabled: Boolean(appendBatchId),
+        queryFn: ({ signal }) =>
+            getAnalysisDetail(appendBatchId as string, signal, { includeAnnotations: false }),
+    });
+    const appendBatch = appendQuery.data ?? null;
 
-    const projectName = useProcessingStore((s) => s.projectName);
+    const typeParam = searchParams.get('type') as Organism | null;
+    const organism: Organism = (
+        appendBatch?.organism_type && ORGANISMS.has(appendBatch.organism_type as Organism)
+            ? appendBatch.organism_type
+            : typeParam && ORGANISMS.has(typeParam)
+              ? typeParam
+              : 'egg'
+    ) as Organism;
+    const meta = organismMeta(organism);
+    const polygon = isPolygonOrganism(organism);
+    const captureMode = (searchParams.get('mode') ?? 'upload') as 'upload' | 'camera';
+    const CaptureIcon = captureMode === 'camera' ? Camera : Upload;
 
+    const storeProjectName = useProcessingStore((s) => s.projectName);
+    const title = appendBatchId
+        ? (appendBatch?.name ?? 'Batch')
+        : (storeProjectName ?? 'Untitled project');
+
+    const { modelsStatus } = useBoot();
+    const modelStatus = modelsStatus[organism];
+    const modelReady = modelStatus === undefined || modelStatus === 'loaded';
+
+    // ── State ───────────────────────────────────────────────────────────────
     const [files, setFiles] = useState<FileEntry[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isDragOver, setIsDragOver] = useState(false);
@@ -426,11 +438,25 @@ export default function UploadPage() {
     const [gridColumns, setGridColumns] = useState(DEFAULT_GRID_COLUMNS);
     const [previewId, setPreviewId] = useState<string | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('count');
     const [uploadProgress, setUploadProgress] = useState<{
         current: number;
         total: number;
         currentName: string;
     } | null>(null);
+
+    // The inference settings the server will use — shown in the rail.
+    const configQuery = useQuery<EggConfig | LarvaeConfig>({
+        queryKey: ['inference-config', organism],
+        queryFn: ({ signal }) =>
+            organism === 'larvae' || organism === 'pupae'
+                ? getPolygonConfig(organism, signal)
+                : getBboxConfig(organism, signal),
+        enabled: !appendBatchId || appendBatch !== null,
+        staleTime: 0,
+    });
+
+    const openFilePicker = useCallback(() => fileInputRef.current?.click(), []);
 
     useEffect(() => {
         function onKeyDown(e: KeyboardEvent) {
@@ -441,8 +467,9 @@ export default function UploadPage() {
         }
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
+    }, [openFilePicker]);
 
+    // Window-level drag tracking so the whole page reacts, not just the zone.
     useEffect(() => {
         let depth = 0;
         const onDragEnter = (e: DragEvent) => {
@@ -475,25 +502,24 @@ export default function UploadPage() {
         };
     }, []);
 
+    const hasFiles = files.length > 0;
+
+    // Measure the grid so a page holds a whole number of rows.
     useEffect(() => {
         const grid = gridRef.current;
         if (!grid) return;
-
-        const updateGridColumns = () => {
+        const update = () => {
             const width = grid.clientWidth;
             if (width <= 0) return;
-            const columns = Math.max(
-                1,
-                Math.floor((width + GRID_GAP_PX) / (THUMB_MIN_SIZE + GRID_GAP_PX)),
+            setGridColumns(
+                Math.max(1, Math.floor((width + GRID_GAP_PX) / (THUMB_MIN_SIZE + GRID_GAP_PX))),
             );
-            setGridColumns(columns);
         };
-
-        updateGridColumns();
-        const observer = new ResizeObserver(updateGridColumns);
+        update();
+        const observer = new ResizeObserver(update);
         observer.observe(grid);
         return () => observer.disconnect();
-    }, []);
+    }, [hasFiles]);
 
     async function addFiles(newFiles: File[]) {
         const valid = newFiles.filter((f) => SUPPORTED_TYPES.has(f.type));
@@ -512,22 +538,41 @@ export default function UploadPage() {
             },
         );
 
-        const entries: FileEntry[] = valid.map((file, i) => ({
-            id: genId(),
-            file,
-            previewUrl: previews[i],
-        }));
-
-        setFiles((prev) => [...prev, ...entries]);
+        setFiles((prev) => [
+            ...prev,
+            ...valid.map((file, i) => ({ id: genId(), file, previewUrl: previews[i] })),
+        ]);
         setUploadProgress(null);
     }
 
-    function removeFile(id: string) {
+    const removeFile = useCallback((id: string) => {
         setFiles((prev) => {
             const target = prev.find((f) => f.id === id);
             if (target) URL.revokeObjectURL(target.previewUrl);
             return prev.filter((f) => f.id !== id);
         });
+        setSelectedIds((prev) => {
+            if (!prev.has(id)) return prev;
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+        });
+    }, []);
+
+    function removeSelected() {
+        setFiles((prev) => {
+            for (const f of prev) if (selectedIds.has(f.id)) URL.revokeObjectURL(f.previewUrl);
+            return prev.filter((f) => !selectedIds.has(f.id));
+        });
+        setSelectedIds(new Set());
+    }
+
+    function clearAll() {
+        setFiles((prev) => {
+            for (const f of prev) URL.revokeObjectURL(f.previewUrl);
+            return [];
+        });
+        setSelectedIds(new Set());
     }
 
     // Release all object URLs when this page unmounts so the browser can free
@@ -548,18 +593,14 @@ export default function UploadPage() {
         };
     }, []);
 
-    function toggleSelect(id: string) {
+    const toggleSelect = useCallback((id: string) => {
         setSelectedIds((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);
             else next.add(id);
             return next;
         });
-    }
-
-    function openFilePicker() {
-        fileInputRef.current?.click();
-    }
+    }, []);
 
     async function openFolderPicker() {
         // Prefer the File System Access API — it shows a single silent permission
@@ -582,6 +623,7 @@ export default function UploadPage() {
             const collected: File[] = [];
             await collectFilesFromDirectory(dir, collected);
             if (collected.length > 0) await addFiles(collected);
+            else toast.info('No supported images in that folder');
         } catch (err) {
             // User cancelled or permission denied — ignore.
             if ((err as DOMException)?.name !== 'AbortError') {
@@ -591,7 +633,7 @@ export default function UploadPage() {
     }
 
     function onFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-        if (e.target.files) addFiles(Array.from(e.target.files));
+        if (e.target.files) void addFiles(Array.from(e.target.files));
         e.target.value = '';
     }
 
@@ -605,40 +647,59 @@ export default function UploadPage() {
             });
             return;
         }
-        const batchId = generateBatchId();
         storeProcessingFiles(
             files.map((f) => ({ id: f.id, file: f.file })),
             organism,
-            batchId,
+            generateBatchId(),
         );
+        storeAnalysisMode(polygon ? analysisMode : 'count');
+        if (appendBatch) {
+            storeAppendTarget({
+                batchId: appendBatch.id,
+                batchName: appendBatch.name,
+                baseCount: appendBatch.images.length,
+            });
+            store.setProjectName(appendBatch.name);
+            store.setOrganism(organism);
+            // The batch's image list is about to change.
+            void queryClient.invalidateQueries({ queryKey: ['analysis-detail', appendBatch.id] });
+        } else {
+            storeAppendTarget(null);
+        }
         void startProcessingFromSession();
         navigate('/analyze/processing');
     }
 
     const totalBytes = useMemo(() => files.reduce((sum, f) => sum + f.file.size, 0), [files]);
-    const hasFiles = files.length > 0;
     const pageSize = Math.max(gridColumns * MAX_GRID_ROWS, 1);
     const pageCount = Math.max(1, Math.ceil(files.length / pageSize));
     const currentPage = Math.min(page, pageCount);
     const pageStart = (currentPage - 1) * pageSize;
     const pageEnd = Math.min(pageStart + pageSize, files.length);
     const pageFiles = useMemo(() => files.slice(pageStart, pageEnd), [files, pageStart, pageEnd]);
-    const showAddMoreCard = currentPage === pageCount && pageFiles.length < pageSize;
+    const showAddMoreTile = currentPage === pageCount && pageFiles.length < pageSize;
 
     // Clamp page when files change (removals etc.)
     useEffect(() => {
         if (page > pageCount) setPage(pageCount);
     }, [page, pageCount]);
 
-    function openPreview(id: string) {
-        const entry = files.find((f) => f.id === id);
+    // Names that already exist in the batch being appended to. The server
+    // stores those as "<name>_2" rather than overwriting; say so up front.
+    const duplicateNames = useMemo(() => {
+        if (!appendBatch) return 0;
+        const existing = new Set(appendBatch.images.map((img) => img.original_filename));
+        return files.filter((f) => existing.has(stemOf(f.file.name))).length;
+    }, [appendBatch, files]);
+
+    const openPreview = useCallback((id: string) => {
+        const entry = filesRef.current.find((f) => f.id === id);
         if (!entry) return;
-        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
         // Create a fresh object URL for the ORIGINAL file — full quality, on demand.
-        const url = URL.createObjectURL(entry.file);
-        setPreviewUrl(url);
+        setPreviewUrl(URL.createObjectURL(entry.file));
         setPreviewId(id);
-    }
+    }, []);
 
     function closePreview() {
         if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -648,8 +709,44 @@ export default function UploadPage() {
 
     const previewEntry = previewId ? (files.find((f) => f.id === previewId) ?? null) : null;
 
+    const backTarget = appendBatchId ? `/recorded?batch=${appendBatchId}` : '/analyze';
+    const appendBlocked = appendBatch?.status === 'processing';
+    const canProcess = hasFiles && !uploadProgress && modelReady && !appendBlocked;
+    const what = hasFiles ? `${files.length} ${pluralize(files.length, 'image')}` : 'images';
+    const processLabel = appendBatchId
+        ? `Add ${what} to batch`
+        : polygon && analysisMode === 'count'
+          ? `Count ${what}`
+          : `Process ${what}`;
+
+    // ── Append target could not be loaded ───────────────────────────────────
+    if (appendBatchId && appendQuery.isError) {
+        return (
+            <div className="flex h-svh flex-col items-center justify-center gap-4 bg-background px-6 text-center">
+                <AlertTriangle className="size-8 text-destructive" aria-hidden />
+                <div>
+                    <p className="text-base font-semibold">This batch could not be opened</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                        It may have been deleted, or it belongs to another account.
+                    </p>
+                </div>
+                <Button variant="outline" onClick={() => navigate('/recorded')}>
+                    <ArrowLeft />
+                    Back to Recorded
+                </Button>
+            </div>
+        );
+    }
+    if (appendBatchId && !appendBatch) {
+        return (
+            <div className="flex h-svh items-center justify-center bg-background">
+                <Spinner />
+            </div>
+        );
+    }
+
     return (
-        <div className="flex h-full flex-col">
+        <div className="flex h-svh flex-col bg-background">
             {/* Hidden file inputs */}
             <input
                 ref={fileInputRef}
@@ -670,215 +767,332 @@ export default function UploadPage() {
                 onChange={onFileInputChange}
             />
 
-            <div className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-screen-2xl px-6 py-8">
-                    {/* Breadcrumb: project name · mode · organism */}
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => navigate('/analyze')}
-                                aria-label="Back to project setup"
-                                className="h-8 w-8"
-                            >
-                                <ArrowLeft className="h-4 w-4" />
-                            </Button>
-                            <span className="truncate font-medium text-foreground">
-                                {projectName ?? 'Untitled project'}
-                            </span>
-                            <span className="text-muted-foreground/40">·</span>
-                            <span className="inline-flex items-center gap-1">
-                                <ModeIcon className="h-3.5 w-3.5" />
-                                {modeLabel}
-                            </span>
-                            <span className="text-muted-foreground/40">·</span>
-                            <span>{organismLabel}</span>
-                        </div>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setConfigOpen(true)}
-                            aria-label="Open inference settings"
-                            className="h-8 gap-2"
-                        >
-                            <Settings className="h-4 w-4" />
-                            Inference settings
-                        </Button>
-                    </div>
-
-                    {/* Title */}
-                    <div className="mb-6 flex flex-col">
-                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                            Step 2 of 3
+            {/* Top bar */}
+            <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-border bg-card px-4 py-2.5">
+                <div className="flex min-w-0 items-center gap-2">
+                    <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => navigate(backTarget)}
+                        aria-label={appendBatchId ? 'Back to batch' : 'Back to project setup'}
+                    >
+                        <ArrowLeft />
+                    </Button>
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold" title={title}>
+                            {title}
                         </p>
-                        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-                            Upload images
-                        </h1>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                            Add the {organismLabel.toLowerCase()} images you want to analyse. You can drag
-                            and drop or pick a folder.
+                        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <CaptureIcon className="size-3" aria-hidden />
+                            {appendBatchId
+                                ? 'Adding images to an existing batch'
+                                : captureMode === 'camera'
+                                  ? 'Camera'
+                                  : 'Upload'}
                         </p>
                     </div>
+                    <OrganismBadge organism={organism} className="ml-1" />
+                </div>
+                <FlowSteps
+                    current={2}
+                    labels={appendBatchId ? ['Batch', 'Images', 'Review'] : undefined}
+                    className="hidden md:flex"
+                />
+                <div />
+            </header>
 
-                    {/* Upload progress bar */}
-                    {uploadProgress && (
-                        <div className="mb-6 rounded-lg border border-border bg-card px-5 py-4">
-                            <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-foreground">
-                                        Processing files…
-                                    </p>
-                                    <p
-                                        className="mt-0.5 max-w-full truncate font-mono text-xs text-muted-foreground"
-                                        title={uploadProgress.currentName}
-                                    >
-                                        {uploadProgress.currentName}
-                                    </p>
-                                </div>
-                                <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-                                    {uploadProgress.current} / {uploadProgress.total}
-                                </span>
-                            </div>
-                            <Progress
-                                className="mt-3 h-1.5"
-                                value={
-                                    (uploadProgress.current / Math.max(uploadProgress.total, 1)) *
-                                    100
-                                }
-                            />
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+                {/* Images */}
+                <main className="min-h-0 flex-1 overflow-y-auto">
+                    <div className="mx-auto w-full max-w-6xl px-6 py-6">
+                        <div className="mb-5">
+                            <h1 className="text-2xl font-semibold tracking-tight">
+                                {appendBatchId ? 'Add images' : 'Upload images'}
+                            </h1>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                                {appendBatchId ? (
+                                    <>
+                                        New images are analysed and added to{' '}
+                                        <span className="font-medium text-foreground">
+                                            {appendBatch?.name}
+                                        </span>{' '}
+                                        ({appendBatch?.images.length ?? 0} already in it). Existing
+                                        results are left untouched.
+                                    </>
+                                ) : (
+                                    <>
+                                        Add the {meta.label.toLowerCase()} images you want to
+                                        analyse. Drag and drop, pick files, or choose a folder.
+                                    </>
+                                )}
+                            </p>
                         </div>
-                    )}
 
-                    {/* Empty state — big drop zone */}
-                    {!hasFiles && !uploadProgress && (
-                        <DropZone
-                            isDragOver={isDragOver}
-                            onDrop={addFiles}
-                            onPick={openFilePicker}
-                            onPickFolder={openFolderPicker}
-                        />
-                    )}
-
-                    {/* With files — compact strip + left-aligned grid */}
-                    {hasFiles && (
-                        <div
-                            onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                            }}
-                            onDrop={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const dropped = Array.from(e.dataTransfer.files).filter((f) =>
-                                    SUPPORTED_TYPES.has(f.type),
-                                );
-                                if (dropped.length > 0) addFiles(dropped);
-                                setIsDragOver(false);
-                            }}
-                            className={cn(
-                                'overflow-hidden rounded-lg border bg-card transition-colors',
-                                isDragOver ? 'border-primary bg-primary/5' : 'border-border',
-                            )}
-                        >
-                            {/* Compact header strip */}
-                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/30 px-5 py-3">
-                                <div className="flex min-w-0 items-baseline gap-3">
-                                    <h2 className="text-sm font-semibold text-foreground">
-                                        {files.length} image
-                                        {files.length !== 1 ? 's' : ''} selected
-                                    </h2>
-                                    <span className="text-xs text-muted-foreground tabular-nums">
-                                        {formatBytes(totalBytes)}
+                        {uploadProgress && (
+                            <div className="panel mb-4 px-4 py-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-medium">Preparing previews…</p>
+                                        <p
+                                            className="mt-0.5 truncate font-mono text-xs text-muted-foreground"
+                                            title={uploadProgress.currentName}
+                                        >
+                                            {uploadProgress.currentName}
+                                        </p>
+                                    </div>
+                                    <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                                        {uploadProgress.current} / {uploadProgress.total}
                                     </span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={openFilePicker}
-                                        className="h-8"
-                                    >
-                                        <FileIcon className="mr-1.5 h-4 w-4" />
-                                        Add files
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={openFolderPicker}
-                                        className="h-8"
-                                    >
-                                        <FolderIcon className="mr-1.5 h-4 w-4" />
-                                        Add folder
-                                    </Button>
-                                    <div className="h-5 w-px bg-border" />
-                                    <Button
-                                        size="sm"
-                                        onClick={handleProcess}
-                                        className="h-8 gap-2"
-                                    >
-                                        Process {files.length} image
-                                        {files.length !== 1 ? 's' : ''}
-                                        <ArrowRight className="h-4 w-4" />
-                                    </Button>
-                                </div>
+                                <Progress
+                                    className="mt-2.5 h-1.5"
+                                    value={
+                                        (uploadProgress.current /
+                                            Math.max(uploadProgress.total, 1)) *
+                                        100
+                                    }
+                                />
                             </div>
+                        )}
 
-                            {/* Thumbnails — responsive square tiles that fill each row */}
+                        {!hasFiles && !uploadProgress && (
+                            <DropZone
+                                isDragOver={isDragOver}
+                                onDrop={(dropped) => void addFiles(dropped)}
+                                onPick={openFilePicker}
+                                onPickFolder={() => void openFolderPicker()}
+                            />
+                        )}
+
+                        {hasFiles && (
                             <div
-                                ref={gridRef}
-                                className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] items-start gap-4 p-5"
+                                onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                }}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    const dropped = Array.from(e.dataTransfer.files).filter((f) =>
+                                        SUPPORTED_TYPES.has(f.type),
+                                    );
+                                    if (dropped.length > 0) void addFiles(dropped);
+                                    setIsDragOver(false);
+                                }}
+                                className={cn(
+                                    'panel overflow-hidden transition-colors duration-150',
+                                    isDragOver && 'border-primary bg-primary/5',
+                                )}
                             >
-                                {pageFiles.map((entry) => (
-                                    <Thumbnail
-                                        key={entry.id}
-                                        entry={entry}
-                                        onRemove={removeFile}
-                                        onOpen={openPreview}
-                                        isSelected={selectedIds.has(entry.id)}
-                                        onToggleSelect={toggleSelect}
-                                        anySelected={selectedIds.size > 0}
-                                    />
-                                ))}
-                                {showAddMoreCard && <AddMoreCard onClick={openFilePicker} />}
-                            </div>
-
-                            {/* Pagination */}
-                            {pageCount > 1 && (
-                                <div className="border-t border-border px-5 py-2.5">
-                                    <PaginationBar
-                                        page={currentPage}
-                                        pageCount={pageCount}
-                                        onChange={setPage}
-                                    />
-                                </div>
-                            )}
-
-                            {/* Footnote */}
-                            <div className="flex items-center justify-between border-t border-border bg-muted/20 px-5 py-2 text-xs text-muted-foreground">
-                                <span>
-                                    {files.length} image{files.length !== 1 ? 's' : ''} ·{' '}
-                                    {formatBytes(totalBytes)}
-                                    {pageCount > 1 && (
-                                        <>
-                                            {' '}
-                                            · showing {pageStart + 1}–{pageEnd}
-                                        </>
+                                {/* Toolbar */}
+                                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-2.5">
+                                    {selectedIds.size > 0 ? (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium">
+                                                {selectedIds.size} selected
+                                            </span>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                                onClick={removeSelected}
+                                            >
+                                                <Trash2 />
+                                                Remove
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => setSelectedIds(new Set())}
+                                            >
+                                                Clear selection
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm">
+                                            <span className="font-semibold tabular-nums">
+                                                {files.length}
+                                            </span>{' '}
+                                            {pluralize(files.length, 'image')}
+                                            <span className="ml-2 text-xs text-muted-foreground tabular-nums">
+                                                {formatBytes(totalBytes)}
+                                            </span>
+                                        </p>
                                     )}
-                                </span>
-                                <span className="font-mono">
-                                    .jpg · .png · .bmp · .tiff
-                                </span>
+                                    <div className="flex items-center gap-1">
+                                        <Button variant="ghost" size="sm" onClick={openFilePicker}>
+                                            <FileIcon />
+                                            Add files
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => void openFolderPicker()}
+                                        >
+                                            <FolderIcon />
+                                            Add folder
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-muted-foreground"
+                                            onClick={clearAll}
+                                        >
+                                            Clear all
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                {/* Thumbnails — responsive square tiles that fill each row */}
+                                <div
+                                    ref={gridRef}
+                                    className="grid grid-cols-[repeat(auto-fill,minmax(116px,1fr))] items-start gap-3 p-4"
+                                >
+                                    {pageFiles.map((entry) => (
+                                        <Tile
+                                            key={entry.id}
+                                            entry={entry}
+                                            selected={selectedIds.has(entry.id)}
+                                            onRemove={removeFile}
+                                            onOpen={openPreview}
+                                            onToggleSelect={toggleSelect}
+                                        />
+                                    ))}
+                                    {showAddMoreTile && <AddMoreTile onClick={openFilePicker} />}
+                                </div>
+
+                                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
+                                    <span className="tabular-nums">
+                                        {pageCount > 1
+                                            ? `Showing ${pageStart + 1}–${pageEnd} of ${files.length}`
+                                            : 'Drop more images anywhere on this panel'}
+                                    </span>
+                                    {pageCount > 1 && (
+                                        <div>
+                                            <PaginationBar
+                                                page={currentPage}
+                                                pageCount={pageCount}
+                                                onChange={setPage}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    )}
-                </div>
+                        )}
+                    </div>
+                </main>
+
+                {/* Run setup */}
+                <aside className="flex w-full shrink-0 flex-col border-t border-border bg-card lg:w-[340px] lg:border-t-0 lg:border-l">
+                    <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-5">
+                        {polygon && (
+                            <section className="space-y-3">
+                                <h2 className="eyebrow">Analysis</h2>
+                                <AnalysisModePicker
+                                    value={analysisMode}
+                                    onChange={setAnalysisMode}
+                                />
+                            </section>
+                        )}
+
+                        <section className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <h2 className="eyebrow">Inference settings</h2>
+                                <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => setConfigOpen(true)}
+                                    aria-label="Open inference settings"
+                                >
+                                    <Settings2 />
+                                    Edit
+                                </Button>
+                            </div>
+                            <SettingsSummary
+                                organism={organism}
+                                config={configQuery.data}
+                                loading={
+                                    configQuery.isPending && configQuery.fetchStatus !== 'idle'
+                                }
+                                mode={analysisMode}
+                            />
+                        </section>
+
+                        {!modelReady && (
+                            <div className="flex gap-2.5 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-foreground">
+                                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                                <p>
+                                    The {meta.label.toLowerCase()} model isn't loaded on the server,
+                                    so this run can't start. Install or assign a model on the Models
+                                    page.
+                                </p>
+                            </div>
+                        )}
+                        {appendBlocked && (
+                            <div className="flex gap-2.5 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-foreground">
+                                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                                <p>
+                                    This batch is processing right now. Wait for it to finish first.
+                                </p>
+                            </div>
+                        )}
+                        {duplicateNames > 0 && (
+                            <div className="flex gap-2.5 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+                                <ImagePlus className="mt-0.5 size-4 shrink-0" />
+                                <p>
+                                    {duplicateNames} {pluralize(duplicateNames, 'file')}{' '}
+                                    {duplicateNames === 1 ? 'shares its name' : 'share their names'}{' '}
+                                    with images already in this batch. They'll be added as new
+                                    images (name ending in “_2”), not replace the existing ones.
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="shrink-0 space-y-3 border-t border-border p-5">
+                        <dl className="space-y-1 text-xs">
+                            <div className="flex justify-between">
+                                <dt className="text-muted-foreground">Images</dt>
+                                <dd className="font-medium tabular-nums">{files.length}</dd>
+                            </div>
+                            <div className="flex justify-between">
+                                <dt className="text-muted-foreground">Total size</dt>
+                                <dd className="font-medium tabular-nums">
+                                    {formatBytes(totalBytes)}
+                                </dd>
+                            </div>
+                        </dl>
+                        <Button
+                            className="w-full"
+                            size="lg"
+                            disabled={!canProcess}
+                            onClick={handleProcess}
+                        >
+                            {processLabel}
+                            <ArrowRight />
+                        </Button>
+                    </div>
+                </aside>
             </div>
 
-            {organism === 'larvae' ? (
-                <LarvaeConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
+            {polygon ? (
+                <LarvaeConfigPanel
+                    open={configOpen}
+                    onOpenChange={setConfigOpen}
+                    organism={organism as 'larvae' | 'pupae'}
+                    onSaved={(cfg) => queryClient.setQueryData(['inference-config', organism], cfg)}
+                />
             ) : (
-                <ConfigPanel open={configOpen} onOpenChange={setConfigOpen} />
+                <ConfigPanel
+                    open={configOpen}
+                    onOpenChange={setConfigOpen}
+                    organism={organism as 'egg' | 'neonate'}
+                    onSaved={() =>
+                        void queryClient.invalidateQueries({
+                            queryKey: ['inference-config', organism],
+                        })
+                    }
+                />
             )}
 
             {/* Full-quality preview dialog — loads the ORIGINAL file on demand. */}
@@ -888,24 +1102,24 @@ export default function UploadPage() {
                     if (!open) closePreview();
                 }}
             >
-                <DialogContent className="max-w-5xl p-0 sm:max-w-5xl">
+                <DialogContent className="max-w-5xl overflow-hidden p-0 sm:max-w-5xl">
                     <DialogTitle className="sr-only">
                         {previewEntry?.file.name ?? 'Image preview'}
                     </DialogTitle>
                     {previewEntry && previewUrl && (
                         <div className="flex flex-col">
-                            <div className="flex max-h-[80vh] items-center justify-center overflow-auto bg-black/90 p-2">
+                            <div className="canvas-grid flex max-h-[80vh] items-center justify-center overflow-auto p-2">
                                 <img
                                     src={previewUrl}
                                     alt={previewEntry.file.name}
                                     className="max-h-[78vh] w-auto object-contain"
                                 />
                             </div>
-                            <div className="flex items-center justify-between gap-3 border-t bg-background px-5 py-3 text-xs">
+                            <div className="flex items-center justify-between gap-3 border-t border-border bg-card px-5 py-3 text-xs">
                                 <span className="truncate font-mono" title={previewEntry.file.name}>
                                     {previewEntry.file.name}
                                 </span>
-                                <span className="shrink-0 text-muted-foreground">
+                                <span className="shrink-0 text-muted-foreground tabular-nums">
                                     {formatBytes(previewEntry.file.size)}
                                 </span>
                             </div>

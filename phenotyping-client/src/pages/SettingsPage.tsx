@@ -1,32 +1,37 @@
 // SettingsPage — top-level settings page composing all setting sections.
 // Route: /settings
 
-import { DeviceSection } from '@/features/settings/components/DeviceSection';
-import { ThemeSection } from '@/features/settings/components/ThemeSection';
+import { PageHeader } from '@/components/common';
 import { LogViewer } from '@/features/logs/components/LogViewer';
-import { Separator } from '@/components/ui/separator';
+import { DeviceSection } from '@/features/settings/components/DeviceSection';
+import { SettingsSection } from '@/features/settings/components/SettingsSection';
+import { ThemeSection } from '@/features/settings/components/ThemeSection';
 
 export default function SettingsPage() {
     return (
-        <div className="flex flex-col h-full">
-            <div className="flex-1 overflow-y-auto p-6">
-                <div className="w-full max-w-5xl space-y-6">
-                    <ThemeSection />
-                    <Separator />
-                    <DeviceSection />
-                    <Separator />
-                    <section className="space-y-4">
-                        <div>
-                            <h2 className="text-base font-semibold">Log Viewer</h2>
-                            <p className="text-sm text-muted-foreground">
-                                Live stream of backend logs. Auto-scrolls to the latest entry when
-                                enabled.
-                            </p>
-                        </div>
-                        <div className="h-96 overflow-hidden rounded-md border">
-                            <LogViewer />
-                        </div>
-                    </section>
+        <div className="flex h-full flex-col">
+            <div className="flex-1 overflow-y-auto">
+                <div className="mx-auto w-full max-w-5xl px-6 py-6">
+                    <PageHeader
+                        eyebrow="Workspace"
+                        title="Settings"
+                        description="Appearance, the compute device used for inference, and the live backend log."
+                    />
+
+                    <div className="mt-6 flex flex-col gap-4">
+                        <ThemeSection />
+                        <DeviceSection />
+                        <SettingsSection
+                            layout="stacked"
+                            flush
+                            title="Log viewer"
+                            description="Live stream of backend logs. Auto-scrolls to the latest entry when enabled."
+                        >
+                            <div className="h-[28rem]">
+                                <LogViewer />
+                            </div>
+                        </SettingsSection>
+                    </div>
                 </div>
             </div>
         </div>

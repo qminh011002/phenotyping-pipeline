@@ -42,10 +42,13 @@ export function CalibrationManualForm({
         yNum < 100;
 
     return (
-        <div className="space-y-3 rounded-lg border bg-card p-4 shadow-sm">
-            <p className="text-xs text-muted-foreground">
-                Overriding auto-detected calibration. Values must be {'>'} 0 and {'<'} 100 mm/px.
-            </p>
+        <div className="floating-panel space-y-3 p-4">
+            <div>
+                <h3 className="text-sm font-semibold">Manual scale</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                    Overrides the detected calibration. Values must be {'>'} 0 and {'<'} 100 mm/px.
+                </p>
+            </div>
             <div className="flex items-center gap-2">
                 <Checkbox
                     id="cal-iso"

@@ -42,14 +42,14 @@ describe('Badge', () => {
         expect(screen.getByText('Custom')).toHaveClass('mt-2');
     });
 
-    it('renders success variant with green styles', () => {
+    it('renders success variant with the success token', () => {
         render(<Badge variant="success">Success</Badge>);
-        expect(screen.getByText('Success')).toHaveClass(/green-100|dark:bg-green-900/);
+        expect(screen.getByText('Success')).toHaveClass('bg-success/10', 'text-success');
     });
 
-    it('renders warning variant with amber styles', () => {
+    it('renders warning variant with the warning token', () => {
         render(<Badge variant="warning">Warning</Badge>);
-        expect(screen.getByText('Warning')).toHaveClass(/amber-100|dark:bg-amber-900/);
+        expect(screen.getByText('Warning')).toHaveClass('bg-warning/10', 'text-warning');
     });
 
     it('renders destructive variant', () => {

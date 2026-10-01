@@ -177,6 +177,14 @@ export interface UsePolygonEditsApi {
     redo: () => void;
     /** Replace all polygons with their model baselines (clears any user-drawn). */
     resetToBaseline: () => void;
+    /**
+     * Put every model polygon back to the outline the model produced and drop
+     * hand-drawn ones. One undoable commit — unlike `resetToBaseline`, this
+     * still has something to restore after the edits were autosaved.
+     */
+    resetToModel: () => void;
+    /** True when `resetToModel` would change anything. */
+    differsFromModel: boolean;
     /** Replace polygons with a freshly-loaded server snapshot (e.g. after save). */
     syncFromDetections: (detections: StoredLarvaeAnnotation[]) => void;
 
@@ -223,6 +231,10 @@ export function usePolygonEdits({
         return { past: [], present: initial, future: [] };
     });
 
+    // `isDirty` compares against a ref; this tick makes it recompute when the
+    // baseline moves without the working set changing (a plain autosave).
+    const [baselineTick, bumpBaseline] = useReducer((n: number) => n + 1, 0);
+
     // Mirror of the live working set so the resync effect can build the
     // new:N → UUID mapping from the polygons actually on screen.
     const presentRef = useRef(history.present);
@@ -236,8 +248,12 @@ export function usePolygonEdits({
     //     `new:N` as real UUIDs) → remap past/present/future snapshots so
     //     each `new:N` becomes its server UUID (matched by polygon
     //     fingerprint), keeping the undo stack intact.
+    //   - same imageKey, server dropped IDs the working set had already
+    //     deleted (autosave persisted a delete) → snapshots that still hold
+    //     those polygons get a fresh `new:N` id for them, so undo brings the
+    //     polygon back and the next save re-creates it.
     //   - any other structural mismatch (server-side deletes we don't
-    //     account for, fingerprint match failure) → fall back to full reset.
+    //     account for) → fall back to full reset.
     const detectionsRef = useRef(detections);
     useEffect(() => {
         const imageChanged = imageKeyRef.current !== imageKey;
@@ -262,6 +278,7 @@ export function usePolygonEdits({
             // Polygon contents may have shifted (server rounded our edits)
             // but the id set matches. Just refresh baseline.
             baselineRef.current = next;
+            bumpBaseline();
             return;
         }
         // Structural change. Try a fingerprint-based remap of `new:N`
@@ -285,8 +302,19 @@ export function usePolygonEdits({
         const newBaselineById = new Map(
             next.map((wp) => [wp.detection_id, wp] as const),
         );
+        // Deletes the user made themselves (gone from the working set and now
+        // gone from the server). Older snapshots still reference those rows;
+        // give each a client id so restoring one is saved as a new row.
+        const presentIds = new Set(presentRef.current.map((p) => p.detection_id));
+        const rebornIds = new Map<string, string>();
+        for (const p of removedRealIds) {
+            if (presentIds.has(p.detection_id)) continue;
+            rebornIds.set(p.detection_id, `new:${++newIdSeqRef.current}`);
+        }
         const mapper = (snapshot: WorkingPolygon[]): WorkingPolygon[] =>
             snapshot.map((wp) => {
+                const reborn = rebornIds.get(wp.detection_id);
+                if (reborn) return { ...wp, detection_id: reborn };
                 if (!wp.detection_id.startsWith('new:')) return wp;
                 const uuid = fingerprintToNewId.get(polyFingerprint(wp.polygon));
                 if (!uuid) return wp;
@@ -309,7 +337,7 @@ export function usePolygonEdits({
         // We only fall back to a destructive reset if the server removed
         // baseline detections that weren't in our working set — those we
         // can't reconcile.
-        const remapPossible = removedRealIds.length === 0;
+        const remapPossible = removedRealIds.every((p) => rebornIds.has(p.detection_id));
         baselineRef.current = next;
         if (remapPossible) {
             // Tell the parent which client-side ids just became server UUIDs so
@@ -340,6 +368,25 @@ export function usePolygonEdits({
         dispatch({ type: 'reset', next: baselineRef.current });
         newIdSeqRef.current = 0;
     }, []);
+
+    const differsFromModel = useMemo(
+        () =>
+            history.present.some(
+                (p) =>
+                    p.origin === 'user' ||
+                    (p.baseline !== null &&
+                        p.baseline !== p.polygon &&
+                        polyFingerprint(p.baseline) !== polyFingerprint(p.polygon)),
+            ),
+        [history.present],
+    );
+
+    const resetToModel = useCallback(() => {
+        const next = history.present
+            .filter((p) => p.origin !== 'user')
+            .map((p) => (p.baseline ? { ...p, polygon: p.baseline } : p));
+        apply(next);
+    }, [history.present, apply]);
 
     const syncFromDetections = useCallback(
         (next: StoredLarvaeAnnotation[]) => {
@@ -459,7 +506,8 @@ export function usePolygonEdits({
 
     const isDirty = useMemo(
         () => !polysEqual(history.present, baselineRef.current),
-        [history.present],
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [history.present, baselineTick],
     );
 
     return {
@@ -470,6 +518,8 @@ export function usePolygonEdits({
         undo,
         redo,
         resetToBaseline,
+        resetToModel,
+        differsFromModel,
         syncFromDetections,
         moveVertex,
         translatePolygon,

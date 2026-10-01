@@ -77,6 +77,8 @@ class AnalysisImageResult(BaseModel):
     # Polygon organisms: auto-calibration output forwarded from inference so the
     # backend persists corners + mm/px in the same atomic write as detections.
     calibration: dict | None = None
+    # Polygon organisms: whether SAM refined the polygons during inference.
+    sam_refined: bool = False
 
 
 class AnalysisImageSummary(BaseModel):
@@ -112,6 +114,18 @@ class EditedAnnotationsUpdate(BaseModel):
             "Full list of bounding boxes. Each entry is a superset of the base "
             "BBox shape: {label, bbox, confidence} plus optional {origin, edited_at}."
         ),
+    )
+
+
+class AnalysisBatchAppend(BaseModel):
+    """Payload for POST /analyses/{batch_id}/append — add images to an existing batch."""
+
+    additional_image_count: int = Field(
+        ge=1, description="Number of images about to be processed into the batch"
+    )
+    config_snapshot: dict = Field(
+        default_factory=dict,
+        description="Config for this run; merged over the batch's stored snapshot",
     )
 
 
@@ -153,6 +167,9 @@ class AnalysisBatchSummary(BaseModel):
     failed_at: datetime | None = None
     failure_reason: str | None = None
     classes: list[str] = Field(default_factory=list)
+    # First image of the batch — lets list views request a cover thumbnail
+    # without fetching the batch detail. Populated by list endpoints only.
+    cover_image_id: UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -184,6 +201,112 @@ class DashboardStats(BaseModel):
     total_eggs_counted: int
     avg_confidence: float | None = None
     avg_processing_time: float | None = None
+    recent_analyses: list[AnalysisBatchSummary] = Field(default_factory=list)
+
+
+# ── Dashboard overview ────────────────────────────────────────────────────────
+
+
+class DashboardKpis(BaseModel):
+    """Headline totals for one period."""
+
+    batches: int = 0
+    images: int = 0
+    detections: int = 0
+    avg_count_per_image: float | None = None
+    avg_confidence: float | None = None
+    avg_secs_per_image: float | None = None
+
+
+class DashboardTimePoint(BaseModel):
+    """One time bucket for one organism."""
+
+    bucket: datetime
+    organism: str
+    batches: int = 0
+    images: int = 0
+    detections: int = 0
+    avg_secs_per_image: float | None = None
+
+
+class DashboardOrganismRow(BaseModel):
+    organism: str
+    batches: int = 0
+    images: int = 0
+    detections: int = 0
+    avg_count_per_image: float | None = None
+    avg_confidence: float | None = None
+
+
+class DashboardHistogramBin(BaseModel):
+    start: float
+    end: float
+    count: int
+
+
+class DashboardSizeStats(BaseModel):
+    """Distribution of one measured metric (mm, mm², mg) for one organism."""
+
+    organism: str
+    metric: str
+    unit: str
+    n: int = 0
+    mean: float | None = None
+    median: float | None = None
+    p5: float | None = None
+    p95: float | None = None
+    min: float | None = None
+    max: float | None = None
+    bins: list[DashboardHistogramBin] = Field(default_factory=list)
+
+
+class DashboardBatchRow(BaseModel):
+    """Per-batch comparison row (most recent batches in the period)."""
+
+    id: UUID
+    name: str
+    organism: str
+    status: str
+    created_at: datetime
+    images: int = 0
+    total_count: int = 0
+    mean_count: float | None = None
+    min_count: int | None = None
+    max_count: int | None = None
+    avg_confidence: float | None = None
+    mean_length_mm: float | None = None
+    measured_objects: int = 0
+
+
+class DashboardAttention(BaseModel):
+    """Work the operator still has to do."""
+
+    drafts: int = 0
+    failed: int = 0
+    needs_calibration: int = 0
+    unmeasured_images: int = 0
+    low_confidence_images: int = 0
+
+
+class DashboardOverview(BaseModel):
+    """Response for GET /dashboard/overview."""
+
+    days: int
+    bucket: str = Field(description="'day' | 'week' | 'month'")
+    range_start: datetime | None = None
+    range_end: datetime
+    kpis: DashboardKpis
+    previous: DashboardKpis | None = None
+    buckets: list[datetime] = Field(
+        default_factory=list,
+        description="Start of every bucket in the window, including empty ones",
+    )
+    timeseries: list[DashboardTimePoint] = Field(default_factory=list)
+    organisms: list[DashboardOrganismRow] = Field(default_factory=list)
+    confidence_histogram: list[DashboardHistogramBin] = Field(default_factory=list)
+    sizes: list[DashboardSizeStats] = Field(default_factory=list)
+    batches: list[DashboardBatchRow] = Field(default_factory=list)
+    attention: DashboardAttention = Field(default_factory=DashboardAttention)
     recent_analyses: list[AnalysisBatchSummary] = Field(default_factory=list)
 
 

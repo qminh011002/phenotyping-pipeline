@@ -315,6 +315,24 @@ class PipelineConfigManager:
             self._cached_mtime = self._file_mtime()
             return merged
 
+    def update_neonate_config(self, updates: dict[str, Any]) -> NeonateConfig:
+        """Patch the ``neonate`` section — same field set as the egg block."""
+        validated = ConfigUpdateRequest.model_validate(updates)
+        with self._lock:
+            raw = self._load_yaml()
+            section = dict(raw.get("neonate", {}))
+            for field_name, field_value in validated.model_dump().items():
+                if field_value is not None:
+                    section[field_name] = field_value
+            merged = NeonateConfig.model_validate(section)
+            # Preserve pipeline-only keys (input_folders, output_suffix, …)
+            # that NeonateConfig doesn't model.
+            raw["neonate"] = {**section, **merged.model_dump(exclude_none=True)}
+            self._save_yaml(raw)
+            self._cached_config = raw
+            self._cached_mtime = self._file_mtime()
+            return merged
+
     def update_larvae(self, updates: dict[str, Any]) -> LarvaeConfig:
         """Patch top-level fields of the ``larvae`` section in inference_config.yaml.
 

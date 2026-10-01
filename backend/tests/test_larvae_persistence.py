@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.services.larvae_persistence import update_polygons
+from app.services.larvae_persistence import RestoredDetection, update_polygons
 
 
 class _ScalarResult:
@@ -72,3 +72,37 @@ async def test_update_polygons_deletes_existing_detection_for_image():
     assert db.added == []
     assert db.execute.await_count == 2
     db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_polygons_restores_a_deleted_model_detection():
+    """Undo of a saved delete re-creates the row as the model detection it was."""
+    db = _FakeDb([])
+    model_outline = [(0, 0), (4, 0), (0, 3)]
+    edited_outline = [(0, 0), (6, 0), (0, 3)]
+
+    touched, deleted = await update_polygons(
+        uuid.uuid4(),
+        [(None, edited_outline), (None, model_outline), (None, model_outline)],
+        uuid.uuid4(),
+        db,
+        restored={
+            0: RestoredDetection(confidence=0.83, baseline=model_outline),
+            1: RestoredDetection(confidence=0.5, baseline=model_outline),
+        },
+    )
+
+    assert (touched, deleted) == (3, 0)
+    edited, untouched, drawn = db.added
+    # Restored with operator edits: model outline kept, edit on top of it.
+    assert edited.origin == "model"
+    assert edited.confidence == 0.83
+    assert edited.polygon == [[0, 0], [4, 0], [0, 3]]
+    assert edited.edited_polygon == [[0, 0], [6, 0], [0, 3]]
+    assert edited.area_px == 9
+    # Restored unedited: no redundant edited_polygon.
+    assert untouched.origin == "model"
+    assert untouched.edited_polygon is None
+    # No restore entry → still a hand-drawn detection.
+    assert drawn.origin == "user"
+    assert drawn.confidence == 1.0

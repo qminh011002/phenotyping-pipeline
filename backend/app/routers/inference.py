@@ -24,6 +24,7 @@ from app.routers.inference_utils import (
     map_inference_error,
     parse_and_verify_optional_batch,
     read_image_upload,
+    unique_stem_in_batch,
     validate_image_extension,
 )
 from app.schemas.detection import BatchDetectionResult, DetectionResult
@@ -75,7 +76,8 @@ async def run_single_inference(
     stem, suffix = validate_image_extension(file.filename or "unknown")
 
     # Verify ownership of the supplied batch (if any) before doing any work.
-    await parse_and_verify_optional_batch(batch_id, db, user.id)
+    bid = await parse_and_verify_optional_batch(batch_id, db, user.id)
+    stem = await unique_stem_in_batch(bid, stem, db)
 
     # Check model is ready
     registry = get_model_registry()
@@ -144,7 +146,8 @@ async def run_single_neonate_inference(
 ) -> DetectionResult:
     """Run neonate detection on a single uploaded image."""
     stem, suffix = validate_image_extension(file.filename or "unknown")
-    await parse_and_verify_optional_batch(batch_id, db, user.id)
+    bid = await parse_and_verify_optional_batch(batch_id, db, user.id)
+    stem = await unique_stem_in_batch(bid, stem, db)
 
     registry = get_model_registry()
     if not registry.neonate_model_loaded:

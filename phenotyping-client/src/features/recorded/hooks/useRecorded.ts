@@ -1,35 +1,50 @@
 // useRecorded — stateful hook for the recorded-analyses list.
-// Handles search, filter, sort, pagination, and data fetching.
+// Handles search, organism / status filters, sort, pagination and deletion.
+//
+// One request per page: the list endpoint already carries everything a card
+// needs, including `cover_image_id` for the cover thumbnail.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { listAnalyses, deleteAnalysis, getAnalysisDetail } from '@/services/api';
-import type { AnalysisBatchSummary, AnalysisImageSummary, Organism } from '@/types/api';
+
+import { deleteAnalysis, listAnalyses } from '@/services/api';
+import type { AnalysisBatchSummary, Organism } from '@/types/api';
 
 export type SortKey = 'created_at' | 'total_count';
 export type SortDir = 'asc' | 'desc';
+export type StatusFilter = 'all' | 'completed' | 'draft' | 'failed';
 
 export interface RecordedFilters {
     q: string;
     organism: Organism | '';
+    status: StatusFilter;
     sortKey: SortKey;
     sortDir: SortDir;
 }
 
-const DEFAULT_FILTERS: RecordedFilters = {
+export const DEFAULT_FILTERS: RecordedFilters = {
     q: '',
     organism: '',
+    status: 'all',
     sortKey: 'created_at',
     sortDir: 'desc',
 };
 
 const PAGE_SIZE = 12;
+const SEARCH_DEBOUNCE_MS = 250;
 
-const firstImageCache = new Map<string, AnalysisImageSummary | null>();
+// "All" shows drafts alongside saved/failed batches so a batch the operator
+// left via Quit & Save can be found and resumed. Batches still processing
+// stay out of the list.
+const STATUSES: Record<StatusFilter, string[]> = {
+    all: ['completed', 'failed', 'draft'],
+    completed: ['completed'],
+    draft: ['draft'],
+    failed: ['failed'],
+};
 
-export interface RecordedBatchSummary extends AnalysisBatchSummary {
-    firstImage: AnalysisImageSummary | null;
-}
+/** A list row. Kept as a named type for the components of this feature. */
+export type RecordedBatchSummary = AnalysisBatchSummary;
 
 export interface UseRecordedReturn {
     batches: RecordedBatchSummary[];
@@ -38,109 +53,107 @@ export interface UseRecordedReturn {
     pageSize: number;
     totalPages: number;
     filters: RecordedFilters;
+    /** Search, organism or status differ from the defaults. */
+    hasActiveFilters: boolean;
+    /** First load — nothing to show yet. */
     loading: boolean;
+    /** The previous page is still on screen while the next one loads. */
+    refreshing: boolean;
     error: string | null;
     setPage: (page: number) => void;
     setFilters: (updates: Partial<RecordedFilters>) => void;
+    clearFilters: () => void;
+    refetch: () => void;
     deleteBatch: (batchId: string) => Promise<void>;
 }
 
 export interface UseRecordedOptions {
     enabled?: boolean;
+    /** Filters to start from (e.g. a `?status=draft` deep link). */
+    initialFilters?: Partial<RecordedFilters>;
 }
 
-async function fetchRecordedBatches(
-    currentPage: number,
-    currentFilters: RecordedFilters,
-    signal: AbortSignal,
-): Promise<{ batches: RecordedBatchSummary[]; total: number }> {
-    const data = await listAnalyses(
-        {
-            page: currentPage,
-            pageSize: PAGE_SIZE,
-            q: currentFilters.q || undefined,
-            organism: currentFilters.organism || undefined,
-            // Show drafts alongside completed/failed so the operator can find a
-            // batch they exited via Quit & Save and resume it. The BatchCard
-            // status badge differentiates draft vs complete.
-            statuses: ['completed', 'failed', 'draft'],
-        },
-        signal,
-    );
+const STATUS_FILTERS: StatusFilter[] = ['all', 'completed', 'draft', 'failed'];
 
-    let items = data.items;
-
-    // Client-side sort (backend only supports date; sort by count here)
-    if (currentFilters.sortKey === 'total_count') {
-        items = [...items].sort((a, b) => {
-            const aVal = a.total_count ?? -1;
-            const bVal = b.total_count ?? -1;
-            return currentFilters.sortDir === 'asc' ? aVal - bVal : bVal - aVal;
-        });
-    } else {
-        items = [...items].sort((a, b) => {
-            const aVal = new Date(a.created_at).getTime();
-            const bVal = new Date(b.created_at).getTime();
-            return currentFilters.sortDir === 'asc' ? aVal - bVal : bVal - aVal;
-        });
-    }
-
-    const batches = await Promise.all(
-        items.map(async (batch) => {
-            if (firstImageCache.has(batch.id)) {
-                return {
-                    ...batch,
-                    firstImage: firstImageCache.get(batch.id) ?? null,
-                };
-            }
-
-            try {
-                const detail = await getAnalysisDetail(batch.id, signal, {
-                    includeAnnotations: false,
-                });
-                const firstImage = detail.images[0] ?? null;
-                firstImageCache.set(batch.id, firstImage);
-                return {
-                    ...batch,
-                    firstImage,
-                };
-            } catch (err) {
-                if ((err as Error).name === 'AbortError') throw err;
-                firstImageCache.set(batch.id, null);
-                return {
-                    ...batch,
-                    firstImage: null,
-                };
-            }
-        }),
-    );
-
-    return { batches, total: data.total };
+/** Parse a `?status=` URL value; anything unknown means "all". */
+export function parseStatusFilter(raw: string | null): StatusFilter {
+    return STATUS_FILTERS.includes(raw as StatusFilter) ? (raw as StatusFilter) : 'all';
 }
 
 export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn {
     const enabled = options.enabled ?? true;
     const queryClient = useQueryClient();
     const [page, setPage] = useState(1);
-    const [filters, setFiltersState] = useState<RecordedFilters>(DEFAULT_FILTERS);
+    const [filters, setFiltersState] = useState<RecordedFilters>(() => ({
+        ...DEFAULT_FILTERS,
+        ...options.initialFilters,
+    }));
+
+    // The input updates on every keystroke; the request waits for a pause.
+    // The page resets together with the committed term, so a search costs
+    // one request.
+    const [searchTerm, setSearchTerm] = useState(filters.q.trim());
+    useEffect(() => {
+        const next = filters.q.trim();
+        if (next === searchTerm) return;
+        const timer = setTimeout(
+            () => {
+                setSearchTerm(next);
+                setPage(1);
+            },
+            next ? SEARCH_DEBOUNCE_MS : 0,
+        );
+        return () => clearTimeout(timer);
+    }, [filters.q, searchTerm]);
+
+    const { organism, status, sortKey, sortDir } = filters;
 
     const query = useQuery({
-        queryKey: ['recorded-batches', page, filters],
+        queryKey: ['recorded-batches', page, { q: searchTerm, organism, status, sortKey, sortDir }],
         enabled,
-        queryFn: ({ signal }) => fetchRecordedBatches(page, filters, signal),
+        queryFn: ({ signal }) =>
+            listAnalyses(
+                {
+                    page,
+                    pageSize: PAGE_SIZE,
+                    q: searchTerm || undefined,
+                    organism: organism || undefined,
+                    statuses: STATUSES[status],
+                    // Ordered by the server, so the order holds across pages.
+                    sort: sortKey,
+                    order: sortDir,
+                },
+                signal,
+            ),
         placeholderData: (previous) => previous,
+        // Counts change when a batch is edited or extended elsewhere: show the
+        // cached page at once, but refresh it every time the list comes back.
+        staleTime: 0,
     });
 
     const data = query.data;
-    const batches = data?.batches ?? [];
     const total = data?.total ?? 0;
-    const loading = enabled && query.isPending;
-    const error = query.error ? String(query.error) : null;
+    const totalPages = Math.ceil(total / PAGE_SIZE);
+    const batches = useMemo(() => data?.items ?? [], [data]);
+
+    // Deleting the last batch of the last page leaves `page` past the end.
+    const settled = data !== undefined && !query.isPlaceholderData;
+    useEffect(() => {
+        if (!settled) return;
+        const lastPage = Math.max(1, totalPages);
+        if (page > lastPage) setPage(lastPage);
+    }, [settled, totalPages, page]);
+
+    const error = query.error
+        ? query.error instanceof Error
+            ? query.error.message
+            : String(query.error)
+        : null;
 
     const deleteBatch = useCallback(
         async (batchId: string) => {
             await deleteAnalysis(batchId);
-            firstImageCache.delete(batchId);
+            queryClient.removeQueries({ queryKey: ['analysis-detail', batchId] });
             await queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
         },
         [queryClient],
@@ -148,20 +161,42 @@ export function useRecorded(options: UseRecordedOptions = {}): UseRecordedReturn
 
     const setFilters = useCallback((updates: Partial<RecordedFilters>) => {
         setFiltersState((prev) => ({ ...prev, ...updates }));
+        // A new organism / status / order starts over at page 1; a new search
+        // term resets the page when it commits.
+        if (
+            'organism' in updates ||
+            'status' in updates ||
+            'sortKey' in updates ||
+            'sortDir' in updates
+        ) {
+            setPage(1);
+        }
+    }, []);
+
+    const clearFilters = useCallback(() => {
+        setFiltersState((prev) => ({ ...prev, q: '', organism: '', status: 'all' }));
+        setSearchTerm('');
         setPage(1);
     }, []);
+
+    const { refetch: refetchQuery } = query;
+    const refetch = useCallback(() => void refetchQuery(), [refetchQuery]);
 
     return {
         batches,
         total,
         page,
         pageSize: PAGE_SIZE,
-        totalPages: Math.ceil(total / PAGE_SIZE),
+        totalPages,
         filters,
-        loading,
+        hasActiveFilters: filters.q !== '' || organism !== '' || status !== 'all',
+        loading: enabled && query.isPending,
+        refreshing: query.isPlaceholderData,
         error,
         setPage,
         setFilters,
+        clearFilters,
+        refetch,
         deleteBatch,
     };
 }

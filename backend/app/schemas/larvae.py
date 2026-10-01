@@ -69,6 +69,9 @@ class LarvaeDetectionResult(BaseModel):
         description="URL to the locally saved overlay image, never base64"
     )
     calibration: CalibrationCorners | None = None
+    # True when SAM refined the polygons during this run. Count-only runs
+    # skip SAM; the outlines can be refined later from the result viewer.
+    sam_refined: bool = False
 
 
 class LarvaeBatchDetectionResult(BaseModel):
@@ -173,6 +176,14 @@ class LarvaeImageDetail(BaseModel):
     detections: list[StoredLarvaeAnnotation] = Field(default_factory=list)
     calibration: CalibrationCorners | None = None
     measurements: list[LarvaeMeasurement] = Field(default_factory=list)
+    # Whether SAM has refined this image's model polygons (at inference time
+    # or later via POST .../refine).
+    sam_refined: bool = False
+    # Counts that stay populated on the summary payload (``?summary=true``),
+    # where ``detections`` / ``measurements`` are left empty.
+    detection_count: int = Field(default=0, ge=0)
+    measured_count: int = Field(default=0, ge=0)
+    stale_count: int = Field(default=0, ge=0)
 
 
 class LarvaeBatchDetail(BaseModel):
@@ -187,6 +198,9 @@ class LarvaeBatchDetail(BaseModel):
     # snapshot logic landed (legacy data).
     detection_model: str | None = None
     sam_model: str | None = None
+    # True when the batch was processed in count-only mode (no SAM, no
+    # automatic measurement).
+    count_only: bool = False
     images: list[LarvaeImageDetail] = Field(default_factory=list)
     weight_stats: WeightStats | None = None
 
@@ -210,6 +224,12 @@ class PolygonEdit(BaseModel):
 
     detection_id: str
     polygon: LarvaePolygon
+    # Only read on a ``new:`` entry that brings back a detection the operator
+    # deleted and then restored with undo, so it returns as the model
+    # detection it was instead of as a hand-drawn one.
+    origin: Literal["model", "user"] | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    baseline: LarvaePolygon | None = None
 
 
 class PolygonsUpdate(BaseModel):
@@ -234,3 +254,16 @@ class ImageTotalWeightResult(BaseModel):
     image_id: str
     total_weight_mg: float | None
     measurements_updated: int
+
+
+class RefineResult(BaseModel):
+    """Response for POST /analyses/{batch_id}/images/{image_id}/refine."""
+
+    image_id: str
+    refined: int = Field(ge=0, description="Polygons replaced by a SAM outline")
+    skipped: int = Field(
+        ge=0,
+        description="Detections left untouched (user-drawn, operator-edited, or below the SAM confidence threshold)",
+    )
+    failed: int = Field(ge=0, description="SAM produced no acceptable mask")
+    total: int = Field(ge=0)
