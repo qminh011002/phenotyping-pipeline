@@ -8,7 +8,7 @@ license = "MIT"
 authors = [
     { name = "Phenotyping Team" },
 ]
-
+# ── Web framework ────────────────────────────────────────────────────────
 dependencies = [
     # ── Web framework ────────────────────────────────────────────────────────
     "fastapi>=0.115.0",                # app/main.py, app/routers/*
