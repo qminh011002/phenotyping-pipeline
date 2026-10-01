@@ -13,11 +13,12 @@ const buttonVariants = cva(
                 default:
                     'keycap border border-[var(--keycap-edge)] bg-primary text-primary-foreground [--keycap-edge:color-mix(in_oklab,var(--primary)_70%,black)] hover:bg-primary/90',
                 destructive:
-                    'keycap border border-[var(--keycap-edge)] bg-destructive text-white [--keycap-edge:color-mix(in_oklab,var(--destructive)_70%,black)] hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40',
+                    'keycap border border-[var(--keycap-edge)] bg-destructive text-white [--keycap-edge:color-mix(in_oklab,var(--destructive)_70%,black)] hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-[color-mix(in_oklab,var(--destructive)_78%,black)] dark:[--keycap-edge:color-mix(in_oklab,var(--destructive)_50%,black)] dark:hover:bg-[color-mix(in_oklab,var(--destructive)_86%,black)] dark:focus-visible:ring-destructive/40',
                 outline:
                     'keycap border bg-card hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50',
+                // Neutral grey key — Cancel / dismiss actions in dialogs and popovers.
                 secondary:
-                    'keycap border bg-secondary text-secondary-foreground hover:bg-secondary/80',
+                    'keycap border border-[var(--keycap-edge)] bg-[color-mix(in_oklab,var(--secondary)_97%,black)] text-secondary-foreground [--keycap-edge:color-mix(in_oklab,var(--secondary)_76%,black)] hover:bg-[color-mix(in_oklab,var(--secondary)_92%,black)] dark:bg-secondary dark:[--keycap-edge:color-mix(in_oklab,var(--secondary)_55%,black)] dark:hover:bg-[color-mix(in_oklab,var(--secondary)_88%,white)]',
                 ghost: 'hover:bg-accent hover:text-accent-foreground active:scale-[0.98] transition-[color,background-color] duration-150 ease-out dark:hover:bg-accent/50',
                 link: 'text-primary underline-offset-4 hover:underline transition-colors duration-150 ease-out',
             },

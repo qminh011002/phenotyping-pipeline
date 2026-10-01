@@ -61,7 +61,7 @@ export function ResultViewerDialogs({
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel onClick={onKeepEditing}>Keep editing</AlertDialogCancel>
-                        <AlertDialogAction onClick={onDiscardEdits}>
+                        <AlertDialogAction variant="destructive" onClick={onDiscardEdits}>
                             Discard edits
                         </AlertDialogAction>
                     </AlertDialogFooter>
@@ -103,10 +103,7 @@ export function ResultViewerDialogs({
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel onClick={onCancelReset}>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            onClick={onConfirmReset}
-                        >
+                        <AlertDialogAction variant="destructive" onClick={onConfirmReset}>
                             Reset to model
                         </AlertDialogAction>
                     </AlertDialogFooter>
