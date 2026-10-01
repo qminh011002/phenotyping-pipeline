@@ -39,8 +39,7 @@ _EFFECTIVE_BOXES = """
     END
 """
 
-_IMAGE_REVIEW_SQL = text(
-    """
+_IMAGE_REVIEW_SQL = text("""
     SELECT
         i.id,
         CASE WHEN jsonb_typeof(i.annotations) = 'array'
@@ -56,11 +55,9 @@ _IMAGE_REVIEW_SQL = text(
         ) AS user_added
     FROM analysis_image i
     WHERE i.batch_id = :batch_id
-    """
-)
+    """)
 
-_POLYGON_REVIEW_SQL = text(
-    """
+_POLYGON_REVIEW_SQL = text("""
     SELECT
         d.image_id,
         count(*) FILTER (WHERE d.origin = 'user') AS user_added,
@@ -72,12 +69,10 @@ _POLYGON_REVIEW_SQL = text(
     LEFT JOIN larvae_measurement m ON m.detection_id = d.id
     WHERE i.batch_id = :batch_id
     GROUP BY d.image_id
-    """
-)
+    """)
 
 # width_bucket(x, 0, 1, n) puts x == 1.0 in bucket n + 1; fold it back.
-_BOX_CONFIDENCE_SQL = text(
-    f"""
+_BOX_CONFIDENCE_SQL = text(f"""
     SELECT least(width_bucket((b ->> 'confidence')::float8, 0.0, 1.0, :bins), :bins),
            count(*)
     FROM analysis_image i
@@ -87,11 +82,9 @@ _BOX_CONFIDENCE_SQL = text(
       AND jsonb_typeof(b -> 'confidence') = 'number'
       AND coalesce(b ->> 'origin', 'model') <> 'user'
     GROUP BY 1
-    """
-)
+    """)
 
-_POLYGON_CONFIDENCE_SQL = text(
-    """
+_POLYGON_CONFIDENCE_SQL = text("""
     SELECT least(width_bucket(d.confidence, 0.0, 1.0, :bins), :bins), count(*)
     FROM larvae_detection d
     JOIN analysis_image i ON i.id = d.image_id
@@ -99,11 +92,9 @@ _POLYGON_CONFIDENCE_SQL = text(
       AND i.status = 'completed'
       AND d.origin IS DISTINCT FROM 'user'
     GROUP BY 1
-    """
-)
+    """)
 
-_CLASSES_SQL = text(
-    f"""
+_CLASSES_SQL = text(f"""
     SELECT b ->> 'label' AS label, count(*)
     FROM analysis_image i
     CROSS JOIN LATERAL jsonb_array_elements({_EFFECTIVE_BOXES}) AS b
@@ -112,8 +103,7 @@ _CLASSES_SQL = text(
       AND coalesce(b ->> 'label', '') <> ''
     GROUP BY 1
     ORDER BY 2 DESC, 1
-    """
-)
+    """)
 
 
 def _count_stats(counts: list[int]) -> BatchCountStats:
