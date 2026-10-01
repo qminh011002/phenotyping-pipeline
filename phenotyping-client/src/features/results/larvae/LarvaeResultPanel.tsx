@@ -1419,7 +1419,9 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Keep edits</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleResetConfirmed}>Reset</AlertDialogAction>
+                        <AlertDialogAction variant="destructive" onClick={handleResetConfirmed}>
+                            Reset
+                        </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
@@ -1438,7 +1440,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel onClick={cancelDirtyNav}>Keep editing</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmDiscardNav}>
+                        <AlertDialogAction variant="destructive" onClick={confirmDiscardNav}>
                             Discard edits
                         </AlertDialogAction>
                     </AlertDialogFooter>

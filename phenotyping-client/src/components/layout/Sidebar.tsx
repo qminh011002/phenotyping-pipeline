@@ -5,11 +5,11 @@ import {
     CircleHelp,
     Cpu,
     CreditCard,
-    History,
+    FlaskConical,
+    FolderOpen,
     Home,
     LogOut,
     Moon,
-    Plus,
     Send,
     Settings,
     ShieldCheck,
@@ -48,10 +48,17 @@ import { ProcessingIndicator } from './ProcessingIndicator';
 
 const NAV_ITEMS = [
     { to: '/', icon: Home, label: 'Dashboard', end: true },
-    { to: '/recorded', icon: History, label: 'Recorded', end: false },
     { to: '/models', icon: Cpu, label: 'Models', end: false },
     { to: '/settings', icon: Settings, label: 'Settings', end: false },
 ] as const;
+
+// The sidebar's call-to-action pair, cut like the app's keycap `Button`s.
+// SidebarMenuButton keeps the collapsed-rail sizing and tooltips; these
+// classes swap its flat hover fill for a raised key that presses down.
+const KEYCAP_ACTION =
+    'keycap h-9 gap-2 border font-medium transition-[color,background-color,border-color,box-shadow,transform,width,height,padding] focus-visible:ring-sidebar-ring';
+const KEYCAP_PRIMARY = `${KEYCAP_ACTION} border-[var(--keycap-edge)] bg-primary text-primary-foreground [--keycap-edge:color-mix(in_oklab,var(--primary)_70%,black)] hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground data-[active=true]:bg-primary data-[active=true]:text-primary-foreground`;
+const KEYCAP_OUTLINE = `${KEYCAP_ACTION} bg-card text-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent active:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 data-[active=true]:border-primary/40 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:[--keycap-edge:color-mix(in_oklab,var(--primary)_45%,var(--edge))]`;
 
 interface SidebarProps {
     collapsed?: boolean;
@@ -105,16 +112,29 @@ export function Sidebar({ collapsed: collapsedProp }: SidebarProps) {
             <SidebarContent>
                 <SidebarGroup className="pb-0">
                     <SidebarGroupContent>
-                        <SidebarMenu>
+                        <SidebarMenu className="gap-2">
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     asChild
                                     tooltip="Start analysis"
-                                    className="h-9 justify-start gap-2 bg-primary font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary/90 hover:text-primary-foreground focus-visible:ring-sidebar-ring active:bg-primary/90 active:text-primary-foreground data-[active=true]:bg-primary data-[active=true]:text-primary-foreground"
+                                    className={KEYCAP_PRIMARY}
                                 >
                                     <NavLink to="/analyze" className="px-3">
-                                        <Plus />
+                                        <FlaskConical />
                                         <span>Start analysis</span>
+                                    </NavLink>
+                                </SidebarMenuButton>
+                            </SidebarMenuItem>
+                            <SidebarMenuItem>
+                                <SidebarMenuButton
+                                    asChild
+                                    isActive={location.pathname.startsWith('/recorded')}
+                                    tooltip="Recorded"
+                                    className={KEYCAP_OUTLINE}
+                                >
+                                    <NavLink to="/recorded" className="px-3">
+                                        <FolderOpen />
+                                        <span>Recorded</span>
                                     </NavLink>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>

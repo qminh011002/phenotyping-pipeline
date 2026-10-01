@@ -320,7 +320,7 @@ export function ConfigPanel({ open, onOpenChange, onSaved, organism = 'egg' }: C
 
                         <SheetFooter>
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 onClick={handleReset}
                                 disabled={saving || !isDirty}
                                 className="flex-1"

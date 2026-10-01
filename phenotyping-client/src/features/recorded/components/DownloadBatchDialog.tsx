@@ -139,7 +139,7 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
 
                 <DialogFooter className="mt-2 gap-2 sm:gap-2">
                     <Button
-                        variant="outline"
+                        variant="secondary"
                         onClick={() => onOpenChange(false)}
                         disabled={downloading}
                     >

@@ -181,7 +181,7 @@ export function ModelUploadDialog({
                     {/* Actions */}
                     <div className="flex justify-end gap-2 pt-2">
                         <Button
-                            variant="ghost"
+                            variant="secondary"
                             onClick={() => handleClose(false)}
                             disabled={state === 'uploading'}
                         >

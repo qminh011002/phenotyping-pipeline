@@ -502,7 +502,7 @@ export function LarvaeConfigPanel({
 
                         <SheetFooter>
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 onClick={handleReset}
                                 disabled={saving || !isDirty}
                                 className="flex-1"
