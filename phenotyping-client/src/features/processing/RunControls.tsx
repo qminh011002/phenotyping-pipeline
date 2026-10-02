@@ -9,7 +9,6 @@
 
 import { useState } from 'react';
 import { Pause, Play, Square } from 'lucide-react';
-import { toast } from 'sonner';
 
 import {
     AlertDialog,
@@ -29,6 +28,7 @@ import {
     type CancelMode,
 } from '@/services/processingManager';
 import { useProcessingStore } from '@/stores/processingStore';
+import { toastAction } from '@/lib/toasts';
 
 export interface ControlledRun {
     /** Batch id; null in the first moments of a run, before the server has one. */
@@ -62,10 +62,20 @@ export function RunControls({ run, compact = false, onStopped }: RunControlsProp
         if (!run.id) return;
         setStopping(true);
         try {
-            await stopBatchRun(run.id, mode);
+            await toastAction(stopBatchRun(run.id, mode), {
+                loading: 'Stopping run…',
+                success:
+                    mode === 'keep'
+                        ? { title: 'Run stopped', description: 'Processed images were kept.' }
+                        : {
+                              title: 'Run discarded',
+                              description: 'Nothing from this run was kept.',
+                          },
+                error: 'Could not stop this run',
+            });
             onStopped?.(mode);
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Could not stop this run');
+        } catch {
+            // Reported by toastAction.
         } finally {
             setStopping(false);
         }

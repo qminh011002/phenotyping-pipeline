@@ -14,7 +14,6 @@ import {
     MoreHorizontal,
     Trash2,
 } from 'lucide-react';
-import { toast } from 'sonner';
 
 import { OrganismBadge, StatusBadge, Thumbnail } from '@/components/common';
 import {
@@ -51,6 +50,7 @@ import { useProcessingStore } from '@/stores/processingStore';
 import { getThumbnailUrl } from '@/services/api';
 import type { RecordedBatchSummary } from '../hooks/useRecorded';
 import { addImagesPath, batchPath } from '../lib/paths';
+import { toastAction } from '@/lib/toasts';
 
 export type BatchLayout = 'grid' | 'list';
 
@@ -108,11 +108,14 @@ function BatchCardImpl({ batch, onDelete, layout = 'grid' }: BatchCardProps) {
         if (!onDelete || deleting) return;
         setDeleting(true);
         try {
-            await onDelete(batch.id);
-            toast.success('Batch deleted');
+            await toastAction(onDelete(batch.id), {
+                loading: 'Deleting batch…',
+                success: { title: 'Batch deleted', description: batch.name },
+                error: 'Failed to delete batch',
+            });
             setConfirmOpen(false);
         } catch {
-            toast.error('Failed to delete batch');
+            // Reported by toastAction.
         } finally {
             setDeleting(false);
         }

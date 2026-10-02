@@ -76,7 +76,7 @@ export function SegmentedControl<T extends string | number>({
                             'disabled:pointer-events-none disabled:opacity-50',
                             size === 'sm' ? 'h-6 px-2 text-xs' : 'h-7 px-2.5 text-[13px]',
                             selected
-                                ? 'border border-b-2 border-border border-b-edge bg-card text-foreground'
+                                ? 'border border-b-2 border-border border-b-[var(--key-edge)] bg-key text-foreground dark:border-white/12 dark:border-b-[var(--key-edge)]'
                                 : 'text-muted-foreground hover:text-foreground',
                         )}
                     >

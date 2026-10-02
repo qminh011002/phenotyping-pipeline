@@ -11,6 +11,7 @@ import { organismMeta } from '@/lib/organism';
 import { setImageTotalWeight } from '@/services/api';
 
 import type { Organism, WeightStats } from '@/types/api';
+import { toastAction } from '@/lib/toasts';
 
 interface LarvaeWeightPanelProps {
     organism: Organism;
@@ -61,15 +62,17 @@ export function LarvaeWeightPanel({
         }
         setSaving(true);
         try {
-            await setImageTotalWeight(imageId, { total_weight_mg: payloadValue });
+            await toastAction(setImageTotalWeight(imageId, { total_weight_mg: payloadValue }), {
+                loading: payloadValue == null ? 'Clearing total weight…' : 'Saving total weight…',
+                success:
+                    payloadValue == null
+                        ? 'Cleared total weight for this image'
+                        : { title: 'Total weight saved', description: `${payloadValue} mg` },
+                error: 'Failed to save total weight',
+            });
             onWeightSaved();
-            toast.success(
-                payloadValue == null
-                    ? 'Cleared total weight for this image.'
-                    : 'Total weight saved.',
-            );
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Save failed');
+        } catch {
+            // Reported by toastAction.
         } finally {
             setSaving(false);
         }

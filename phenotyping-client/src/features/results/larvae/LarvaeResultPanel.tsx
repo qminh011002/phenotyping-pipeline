@@ -84,6 +84,7 @@ import { CalibrationManualForm } from './CalibrationManualForm';
 import type { Corners } from './calibrationMath';
 import { MEASURE_STEP_LABEL, calibrationUsable, measureImage, needsMeasuring } from './measureFlow';
 import { usePolygonEdits, type WorkingPolygon } from './usePolygonEdits';
+import { toastAction, errorMessage } from '@/lib/toasts';
 
 const SMOOTH_MIN = 0;
 const SMOOTH_MAX = 5;
@@ -527,6 +528,10 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             if (targets.length === 0) return;
 
             cancelRunRef.current = false;
+            // One toast follows the run: loading now, the outcome at the end.
+            const toastId = toast.loading(
+                scope === 'image' ? 'Measuring larvae…' : `Measuring ${targets.length} images…`,
+            );
             let measured = 0;
             let needCalibration = 0;
             let processed = 0;
@@ -561,7 +566,7 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                     else if (result.outcome === 'needs_calibration') needCalibration += 1;
                 }
             } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Measuring failed');
+                toast.error('Measuring failed', { id: toastId, description: errorMessage(err) });
                 setRun(null);
                 void refreshSummary();
                 return;
@@ -572,11 +577,13 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             markBatchCachesStale(batch.batch_id);
 
             if (scope === 'image') {
-                if (measured === 1) toast.success('Measured');
+                if (measured === 1) toast.success('Measured', { id: toastId });
                 else if (needCalibration === 1) {
-                    toast.warning('No calibration found — set the scale to measure this image.');
+                    toast.warning('No calibration found — set the scale to measure this image.', {
+                        id: toastId,
+                    });
                     setInspectorTab('details');
-                }
+                } else toast.info('No larvae to measure on this image', { id: toastId });
                 return;
             }
             const stopped = cancelRunRef.current && processed < targets.length;
@@ -587,8 +594,8 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
                 );
             }
             if (stopped) parts.push('stopped');
-            if (needCalibration > 0 || stopped) toast.warning(parts.join(' · '));
-            else toast.success(parts.join(' · '));
+            if (needCalibration > 0 || stopped) toast.warning(parts.join(' · '), { id: toastId });
+            else toast.success(parts.join(' · '), { id: toastId });
         },
         [run, refine, flushPendingEdits, adoptServerImage, refreshSummary],
     );
@@ -647,14 +654,23 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             setSavingCal(true);
             try {
                 if (!(await flushPendingEdits())) return;
-                // Backend re-renders the warped image and moves the polygons
-                // into the new frame.
-                await saveCalibration(currentImage.image_id, { corners: sanitizedCorners });
-                await remeasureAfterCalibration(currentImage.image_id);
-                toast.success('Calibration saved · measurements refreshed');
+                const imageId = currentImage.image_id;
+                await toastAction(
+                    async () => {
+                        // Backend re-renders the warped image and moves the
+                        // polygons into the new frame.
+                        await saveCalibration(imageId, { corners: sanitizedCorners });
+                        await remeasureAfterCalibration(imageId);
+                    },
+                    {
+                        loading: 'Saving calibration…',
+                        success: 'Calibration saved · measurements refreshed',
+                        error: 'Failed to save calibration',
+                    },
+                );
                 exitCalibration();
-            } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Failed to save calibration');
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setSavingCal(false);
             }
@@ -668,15 +684,21 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             setSavingCal(true);
             try {
                 if (!(await flushPendingEdits())) return;
-                await saveCalibration(currentImage.image_id, {
-                    mm_per_px_x: mmX,
-                    mm_per_px_y: mmY,
-                });
-                await remeasureAfterCalibration(currentImage.image_id);
-                toast.success('Calibration saved · measurements refreshed');
+                const imageId = currentImage.image_id;
+                await toastAction(
+                    async () => {
+                        await saveCalibration(imageId, { mm_per_px_x: mmX, mm_per_px_y: mmY });
+                        await remeasureAfterCalibration(imageId);
+                    },
+                    {
+                        loading: 'Saving calibration…',
+                        success: 'Calibration saved · measurements refreshed',
+                        error: 'Failed to save calibration',
+                    },
+                );
                 exitCalibration();
-            } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Failed to save calibration');
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setSavingCal(false);
             }
@@ -689,16 +711,31 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setRedetecting(true);
         try {
             if (!(await flushPendingEdits())) return;
-            const updated = await detectCalibration(currentImage.image_id);
-            if (calibrationUsable(updated)) {
-                await remeasureAfterCalibration(currentImage.image_id);
-                toast.success('Calibration detected · measurements refreshed');
-            } else {
-                adoptServerImage(await getLarvaeImage(batchId, currentImage.image_id), true);
-                toast.warning('Auto-detection still failed — try editing corners or manual.');
-            }
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Failed to re-detect calibration');
+            const imageId = currentImage.image_id;
+            await toastAction(
+                async () => {
+                    const updated = await detectCalibration(imageId);
+                    if (calibrationUsable(updated)) {
+                        await remeasureAfterCalibration(imageId);
+                        return true;
+                    }
+                    adoptServerImage(await getLarvaeImage(batchId, imageId), true);
+                    return false;
+                },
+                {
+                    loading: 'Detecting calibration…',
+                    success: (found) =>
+                        found
+                            ? 'Calibration detected · measurements refreshed'
+                            : {
+                                  title: 'Auto-detection still failed — try editing corners or manual.',
+                                  tone: 'warning',
+                              },
+                    error: 'Failed to re-detect calibration',
+                },
+            );
+        } catch {
+            // Reported by toastAction.
         } finally {
             setRedetecting(false);
         }
@@ -1004,7 +1041,14 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setDownloadingCsv(true);
         try {
             await flushPendingEdits();
-            const { blob, filename } = await downloadLarvaeCsv(summary.batch_id, summary.name);
+            const { blob, filename } = await toastAction(
+                downloadLarvaeCsv(summary.batch_id, summary.name),
+                {
+                    loading: 'Preparing CSV…',
+                    success: (csv) => ({ title: 'Download started', description: csv.filename }),
+                    error: 'CSV download failed',
+                },
+            );
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -1013,8 +1057,8 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'CSV download failed');
+        } catch {
+            // Reported by toastAction.
         } finally {
             setDownloadingCsv(false);
         }
@@ -1072,21 +1116,31 @@ export function LarvaeResultPanel({ organism, className }: LarvaeResultPanelProp
         setFinishing(true);
         try {
             if (!(await flushPendingEdits())) return;
-            // An image that was measured keeps its sizes in step with its
-            // outlines. Count-only images are saved as they are.
-            const row = summaryRef.current?.images.find((r) => r.image_id === currentRow.image_id);
-            if (row && row.stale_count > 0 && calibrationUsable(row.calibration)) {
-                await measureLarvae(row.image_id);
-                applyImage(await getLarvaeImage(summary.batch_id, row.image_id));
-            }
-            if (!isSaved) {
-                const updated = await finishBatch(summary.batch_id);
-                setSummary((prev) => (prev ? { ...prev, status: updated.status } : prev));
-            }
-            toast.success('Saved to Records');
+            await toastAction(
+                async () => {
+                    // An image that was measured keeps its sizes in step with its
+                    // outlines. Count-only images are saved as they are.
+                    const row = summaryRef.current?.images.find(
+                        (r) => r.image_id === currentRow.image_id,
+                    );
+                    if (row && row.stale_count > 0 && calibrationUsable(row.calibration)) {
+                        await measureLarvae(row.image_id);
+                        applyImage(await getLarvaeImage(summary.batch_id, row.image_id));
+                    }
+                    if (!isSaved) {
+                        const updated = await finishBatch(summary.batch_id);
+                        setSummary((prev) => (prev ? { ...prev, status: updated.status } : prev));
+                    }
+                },
+                {
+                    loading: 'Saving to Records…',
+                    success: { title: 'Saved to Records', description: summary.name },
+                    error: 'Failed to save to Records',
+                },
+            );
             backTo(batchPath(summary.batch_id), (path) => isBatchPagePath(path, summary.batch_id));
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Failed to save to Records');
+        } catch {
+            // Reported by toastAction.
         } finally {
             setFinishing(false);
         }

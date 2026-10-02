@@ -60,7 +60,7 @@ const NAV_ITEMS = [
 const KEYCAP_ACTION =
     'keycap h-9 gap-2 border font-medium transition-[color,background-color,border-color,box-shadow,transform,width,height,padding] focus-visible:ring-sidebar-ring';
 const KEYCAP_PRIMARY = `${KEYCAP_ACTION} border-[var(--keycap-edge)] bg-primary text-primary-foreground [--keycap-edge:color-mix(in_oklab,var(--primary)_70%,black)] hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground data-[active=true]:bg-primary data-[active=true]:text-primary-foreground`;
-const KEYCAP_OUTLINE = `${KEYCAP_ACTION} bg-card text-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent active:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50 data-[active=true]:border-primary/40 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:[--keycap-edge:color-mix(in_oklab,var(--primary)_45%,var(--edge))]`;
+const KEYCAP_OUTLINE = `${KEYCAP_ACTION} bg-key text-foreground [--keycap-edge:var(--key-edge)] hover:bg-key-hover hover:text-foreground active:bg-key-hover active:text-foreground dark:border-white/12 data-[active=true]:border-primary/40 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:[--keycap-edge:color-mix(in_oklab,var(--primary)_45%,var(--edge))]`;
 
 const ICON_SWAP =
     'absolute inset-0 size-4 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none';

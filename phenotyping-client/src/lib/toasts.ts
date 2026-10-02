@@ -1,45 +1,63 @@
 /**
- * Inference-specific toast helpers.
- * Use these instead of raw toast() calls so all inference-related notifications
- * follow a consistent format and copy style.
+ * Toast helpers.
+ *
+ * `toastAction` is the one way a user-triggered API call reports itself: a
+ * loading toast while the request runs, then the same toast turns into a
+ * success or error message saying what happened. Background work (autosave,
+ * page loads) stays quiet on success and only toasts its errors.
  */
+import type { ReactNode } from 'react';
 import { toast } from '@/components/ui/sonner';
 
-/** Called after inference finishes successfully — one per image. */
-export function toastInferenceComplete(filename: string, count: number, elapsedSeconds: number) {
-    const s =
-        elapsedSeconds < 1
-            ? `${(elapsedSeconds * 1000).toFixed(0)}ms`
-            : `${elapsedSeconds.toFixed(1)}s`;
-    toast.success(`${filename}`, {
-        description: `${count} egg${count !== 1 ? 's' : ''} detected · ${s}`,
-    });
+export interface ToastText {
+    title: string;
+    description?: ReactNode;
+    /** A finished task that still needs attention reports as a warning. */
+    tone?: 'success' | 'warning' | 'info';
 }
 
-/** Called after a batch of images finishes. */
-export function toastBatchComplete(totalImages: number, totalCount: number, totalSeconds: number) {
-    toast.success(`Batch complete`, {
-        description: `${totalImages} image${totalImages !== 1 ? 's' : ''} · ${totalCount} total eggs · ${totalSeconds.toFixed(1)}s`,
-    });
+type Message<A> = string | ToastText | ((arg: A) => string | ToastText);
+
+function resolve<A>(message: Message<A>, arg: A): ToastText {
+    const value = typeof message === 'function' ? message(arg) : message;
+    return typeof value === 'string' ? { title: value } : value;
 }
 
-/** Called when an inference request fails. */
-export function toastInferenceError(filename: string, reason?: string) {
-    toast.error(filename, {
-        description: reason ?? 'Inference failed',
-    });
+/** Human-readable reason from anything a request can throw. */
+export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string' && err) return err;
+    return fallback;
 }
 
-/** Called when config is saved successfully. */
-export function toastConfigSaved() {
-    toast.success('Settings saved', {
-        description: 'Inference config updated for the next analysis run.',
-    });
-}
-
-/** Called when config save fails. */
-export function toastConfigError(reason?: string) {
-    toast.error('Save failed', {
-        description: reason ?? 'Could not update config.',
-    });
+/**
+ * Run `task` behind a loading toast, then report how it went on that same
+ * toast. The task's result is returned and its error re-thrown, so callers
+ * keep their own state handling — they just must not toast again.
+ *
+ * A failure toast uses `error` as its title and the thrown message as its
+ * description, unless `error` is a function that builds both.
+ */
+export async function toastAction<T>(
+    task: Promise<T> | (() => Promise<T>),
+    messages: {
+        loading: string;
+        success: Message<T>;
+        error: Message<unknown>;
+    },
+): Promise<T> {
+    const id = toast.loading(messages.loading);
+    try {
+        const result = await (typeof task === 'function' ? task() : task);
+        const { title, description, tone = 'success' } = resolve(messages.success, result);
+        toast[tone](title, { id, description });
+        return result;
+    } catch (err) {
+        const text = resolve(messages.error, err);
+        toast.error(text.title, {
+            id,
+            description: text.description ?? errorMessage(err),
+        });
+        throw err;
+    }
 }

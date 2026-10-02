@@ -21,6 +21,7 @@ import { organismMeta } from '@/lib/organism';
 import { uploadCustomModel } from '@/services/api';
 import { ApiError } from '@/services/errors';
 import type { Organism } from '@/types/api';
+import { toastAction } from '@/lib/toasts';
 
 interface ModelUploadDialogProps {
     open: boolean;
@@ -30,6 +31,10 @@ interface ModelUploadDialogProps {
 }
 
 type UploadState = 'idle' | 'uploading' | 'success' | 'error';
+
+function uploadErrorMessage(err: unknown): string {
+    return err instanceof ApiError ? (err.message ?? 'Upload failed') : String(err);
+}
 
 export function ModelUploadDialog({
     open,
@@ -74,19 +79,24 @@ export function ModelUploadDialog({
 
         try {
             setProgress(50);
-            await uploadCustomModel(organism, file);
+            await toastAction(uploadCustomModel(organism, file), {
+                loading: `Uploading ${file.name}…`,
+                success: {
+                    title: 'Model uploaded',
+                    description: `${file.name} is ready for ${slotLabel}.`,
+                },
+                error: (err) => ({
+                    title: 'Model upload failed',
+                    description: uploadErrorMessage(err),
+                }),
+            });
             setProgress(100);
 
             setState('success');
-            toast.success('Model uploaded', {
-                description: `${file.name} is ready for ${slotLabel}.`,
-            });
             onSuccess();
         } catch (err) {
             setState('error');
-            const msg = err instanceof ApiError ? (err.message ?? 'Upload failed') : String(err);
-            setErrorMsg(msg);
-            toast.error('Model upload failed', { description: msg });
+            setErrorMsg(uploadErrorMessage(err));
         }
     }, [file, onSuccess, organism, slotLabel]);
 

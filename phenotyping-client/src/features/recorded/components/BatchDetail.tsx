@@ -72,6 +72,7 @@ import { BatchAnalytics } from './BatchAnalytics';
 import { DownloadBatchDialog } from './DownloadBatchDialog';
 import { RunControls } from '@/features/processing/RunControls';
 import { useProcessingStore } from '@/stores/processingStore';
+import { toastAction } from '@/lib/toasts';
 
 // The processed-images grid. These two constants must stay in sync with
 // IMAGE_GRID below — the page size (exactly two rows) is derived from them.
@@ -596,15 +597,13 @@ export function BatchDetail() {
 
     async function rename(next: string) {
         if (!detail) return;
-        try {
-            const updated = await renameBatch(detail.id, next);
-            queryClient.setQueryData(detailKey(detail.id), updated);
-            void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
-            toast.success('Batch renamed');
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Failed to rename batch');
-            throw err;
-        }
+        const updated = await toastAction(renameBatch(detail.id, next), {
+            loading: 'Renaming batch…',
+            success: (batch) => ({ title: 'Batch renamed', description: batch.name }),
+            error: 'Failed to rename batch',
+        });
+        queryClient.setQueryData(detailKey(detail.id), updated);
+        void queryClient.invalidateQueries({ queryKey: ['recorded-batches'] });
     }
 
     // Both back controls close a screen, so neither adds a history entry —

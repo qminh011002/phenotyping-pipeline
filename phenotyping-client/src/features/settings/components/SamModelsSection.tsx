@@ -14,6 +14,7 @@ import { activateSamModel, deleteSamModel, listSamModels, uploadSamModel } from 
 import type { SamModelResponse } from '@/types/api';
 import { ActiveChip, ModelList, ModelListEmpty, ModelRow } from './ModelRow';
 import { Chip, FactList, GroupHeading, SettingsSection } from './SettingsSection';
+import { toastAction } from '@/lib/toasts';
 
 interface SamModelsSectionProps {
     showHeader?: boolean;
@@ -50,13 +51,17 @@ export function SamModelsSection({ showHeader = true }: SamModelsSectionProps = 
             }
             setUploading(true);
             try {
-                const entry = await uploadSamModel(file);
-                toast.success('SAM model uploaded', {
-                    description: `${entry.filename} (${formatBytes(entry.file_size_bytes)})`,
+                await toastAction(uploadSamModel(file), {
+                    loading: `Uploading ${file.name}…`,
+                    success: (entry) => ({
+                        title: 'SAM model uploaded',
+                        description: `${entry.filename} (${formatBytes(entry.file_size_bytes)})`,
+                    }),
+                    error: 'Failed to upload SAM model',
                 });
                 await refresh();
-            } catch (err) {
-                toast.error('Failed to upload SAM model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setUploading(false);
             }
@@ -68,13 +73,17 @@ export function SamModelsSection({ showHeader = true }: SamModelsSectionProps = 
         async (filename: string) => {
             setActivatingFilename(filename);
             try {
-                await activateSamModel(filename);
-                toast.success('SAM model activated', {
-                    description: `${filename} will be used on the next larvae inference.`,
+                await toastAction(activateSamModel(filename), {
+                    loading: 'Activating SAM model…',
+                    success: {
+                        title: 'SAM model activated',
+                        description: `${filename} will be used on the next larvae inference.`,
+                    },
+                    error: 'Failed to activate SAM model',
                 });
                 await refresh();
-            } catch (err) {
-                toast.error('Failed to activate SAM model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setActivatingFilename(null);
             }
@@ -86,11 +95,14 @@ export function SamModelsSection({ showHeader = true }: SamModelsSectionProps = 
         async (filename: string) => {
             setDeletingFilename(filename);
             try {
-                await deleteSamModel(filename);
-                toast.success('SAM model deleted', { description: filename });
+                await toastAction(deleteSamModel(filename), {
+                    loading: 'Deleting SAM model…',
+                    success: { title: 'SAM model deleted', description: filename },
+                    error: 'Failed to delete SAM model',
+                });
                 await refresh();
-            } catch (err) {
-                toast.error('Failed to delete SAM model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setDeletingFilename(null);
             }

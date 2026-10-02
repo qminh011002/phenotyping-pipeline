@@ -64,10 +64,9 @@ export function InlineEditableText({
         try {
             await onSave(next);
             setEditing(false);
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Failed to save';
-            toast.error(msg);
-            // Keep editing open with the user's typing preserved.
+        } catch {
+            // `onSave` reports its own failure; keep editing open with the
+            // user's typing preserved.
             inputRef.current?.focus();
         } finally {
             setSaving(false);
