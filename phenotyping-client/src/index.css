@@ -445,13 +445,14 @@
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(1 0 0 / 10%);
     --edge: oklch(0 0 0 / 60%);
-    /* Lifted off the near-black page so the solid bottom edge reads. */
-    --key: oklch(0.275 0.004 160);
-    --key-hover: oklch(0.315 0.004 160);
-    --key-edge: oklch(0.115 0.004 160);
-    --key-muted: oklch(0.355 0.004 160);
-    --key-muted-hover: oklch(0.395 0.004 160);
-    --key-muted-edge: oklch(0.2 0.004 160);
+    /* Lifted off the near-black page, with a bottom edge that sits between
+       the fill and the page: an edge darker than the page would vanish. */
+    --key: oklch(0.335 0.004 160);
+    --key-hover: oklch(0.375 0.004 160);
+    --key-edge: oklch(0.26 0.004 160);
+    --key-muted: oklch(0.395 0.004 160);
+    --key-muted-hover: oklch(0.435 0.004 160);
+    --key-muted-edge: oklch(0.29 0.004 160);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.62 0.15 155);
 
@@ -599,18 +600,41 @@ h6 {
 /* ═══════════════════════════════════════════════════════════════════════════
    Sonner toast overrides
    ═══════════════════════════════════════════════════════════════════════════ */
-.toaster {
+/* Sonner injects its own unlayered CSS (8px radius, black dark-mode chrome);
+   the doubled attribute selector outranks it. */
+.toaster[data-sonner-toaster][data-sonner-theme] {
     --width: min(24rem, calc(100vw - 2rem));
-    --border-radius: calc(var(--radius) + 0.375rem);
+    /* Rounder than a panel, cut like a keycap (see the `keycap` utility). */
+    --border-radius: calc(var(--radius) + 0.625rem);
+    --normal-bg: var(--card);
+    --normal-bg-hover: var(--accent);
+    --normal-border: var(--border);
+    --normal-border-hover: var(--border);
+    --normal-text: var(--card-foreground);
     font-family: var(--font-sans);
 }
 
 .toaster [data-sonner-toast][data-styled='true'] {
     width: var(--width);
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
     border-color: var(--border);
+    border-bottom: 3px solid var(--edge);
     background: var(--card);
     color: var(--card-foreground);
     box-shadow: var(--shadow-lg);
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-icon] {
+    width: 2rem;
+    height: 2rem;
+    margin: 0;
+    justify-content: center;
+    border-radius: calc(var(--radius) + 2px);
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-title] {
+    font-weight: 600;
 }
 
 .toaster [data-sonner-toast][data-styled='true'] [data-content] {

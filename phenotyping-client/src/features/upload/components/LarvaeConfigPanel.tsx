@@ -27,7 +27,6 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { toast } from '@/components/ui/sonner';
 import { Spinner } from '@/components/common/Spinner';
 import { getPolygonConfig, updatePolygonConfig } from '@/services/api';
 import { organismMeta } from '@/lib/organism';
@@ -40,6 +39,7 @@ import {
     SettingsGroup,
     SliderField,
 } from './settingsFields';
+import { toastAction } from '@/lib/toasts';
 
 const TOOLTIPS = {
     confidence_threshold:
@@ -197,14 +197,19 @@ export function LarvaeConfigPanel({
         }
         setSaving(true);
         try {
-            const updated = await updatePolygonConfig(organism, patch);
+            const updated = await toastAction(updatePolygonConfig(organism, patch), {
+                loading: 'Saving settings…',
+                success: {
+                    title: 'Settings saved',
+                    description: `${organismMeta(organism).label} config updated for the next analysis run.`,
+                },
+                error: `Failed to save ${organism} settings`,
+            });
             queryClient.setQueryData(queryKey, updated);
             onSaved?.(updated);
             onOpenChange(false);
-        } catch (err) {
-            toast.error(`Failed to save ${organism} settings`, {
-                description: err instanceof Error ? err.message : String(err),
-            });
+        } catch {
+            // Reported by toastAction.
         } finally {
             setSaving(false);
         }

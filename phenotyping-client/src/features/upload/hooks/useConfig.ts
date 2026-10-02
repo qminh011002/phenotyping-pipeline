@@ -4,6 +4,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { getBboxConfig, updateBboxConfig } from '@/services/api';
 import type { EggConfig } from '@/types/api';
+import { toastAction } from '@/lib/toasts';
+import { organismMeta } from '@/lib/organism';
 
 export interface ValidationErrors {
     tile_size?: string;
@@ -123,7 +125,14 @@ export function useConfig(organism: 'egg' | 'neonate' = 'egg', enabled = true): 
             try {
                 // `model` is a legacy read-only field; never send it back.
                 const { model: _model, ...payload } = updates;
-                const updated = await updateBboxConfig(organism, payload);
+                const updated = await toastAction(updateBboxConfig(organism, payload), {
+                    loading: 'Saving settings…',
+                    success: {
+                        title: 'Settings saved',
+                        description: `${organismMeta(organism).label} config updated for the next analysis run.`,
+                    },
+                    error: 'Failed to save settings',
+                });
                 setConfig(updated);
                 setValidationErrors({});
                 return true;

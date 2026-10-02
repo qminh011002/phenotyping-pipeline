@@ -7,7 +7,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -24,6 +23,7 @@ import { countLabel } from '@/lib/organism';
 import { cn } from '@/lib/utils';
 import { downloadBatchArchive } from '@/services/api';
 import type { AnalysisBatchDetail, AnalysisImageSummary } from '@/types/api';
+import { toastAction } from '@/lib/toasts';
 
 interface DownloadBatchDialogProps {
     open: boolean;
@@ -82,7 +82,14 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
             // When the user has every image ticked, omit image_ids so the backend
             // knows to include the whole batch (and handles future images too).
             const imageIds = allSelected ? null : Array.from(selected);
-            const { blob, filename } = await downloadBatchArchive(batch.id, imageIds);
+            const { blob, filename } = await toastAction(downloadBatchArchive(batch.id, imageIds), {
+                loading: 'Preparing download…',
+                success: (archive) => ({
+                    title: 'Download started',
+                    description: archive.filename,
+                }),
+                error: 'Failed to download batch',
+            });
 
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
@@ -94,10 +101,9 @@ export function DownloadBatchDialog({ open, onOpenChange, batch }: DownloadBatch
             // Defer the revoke so Chromium has time to start the download.
             setTimeout(() => URL.revokeObjectURL(url), 10_000);
 
-            toast.success('Download started');
             onOpenChange(false);
-        } catch (err) {
-            toast.error(err instanceof Error ? err.message : 'Failed to download batch');
+        } catch {
+            // Reported by toastAction.
         } finally {
             setDownloading(false);
         }

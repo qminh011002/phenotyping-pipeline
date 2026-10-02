@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { toast } from '@/components/ui/sonner';
 import { register } from '@/services/auth';
 import { ApiError } from '@/services/errors';
 import { AuthShell, LINK_CLASS, PasswordToggle } from './LoginPage';
+import { toastAction, errorMessage } from '@/lib/toasts';
 
 export default function RegisterPage() {
     const navigate = useNavigate();
@@ -39,17 +39,20 @@ export default function RegisterPage() {
         if (!canSubmit) return;
         setSubmitting(true);
         try {
-            await register(email.trim(), password, name.trim() || null);
-            toast.success('Account created');
+            await toastAction(register(email.trim(), password, name.trim() || null), {
+                loading: 'Creating account…',
+                success: 'Account created',
+                error: (err) => ({
+                    title: 'Sign-up failed',
+                    description:
+                        err instanceof ApiError && err.code === 'email_taken'
+                            ? 'That email is already registered.'
+                            : errorMessage(err, 'Something went wrong.'),
+                }),
+            });
             navigate('/', { replace: true });
-        } catch (err) {
-            const description =
-                err instanceof ApiError && err.code === 'email_taken'
-                    ? 'That email is already registered.'
-                    : err instanceof Error
-                      ? err.message
-                      : 'Something went wrong.';
-            toast.error('Sign-up failed', { description });
+        } catch {
+            // Reported by toastAction.
         } finally {
             setSubmitting(false);
         }

@@ -67,6 +67,7 @@ import { ResultViewerDialogs } from './ResultViewerDialogs';
 import { ResultViewerHeader } from './ResultViewerHeader';
 import { ShortcutsDialog } from './ShortcutsDialog';
 import { LarvaeResultPanel } from '../larvae/LarvaeResultPanel';
+import { toastAction } from '@/lib/toasts';
 
 interface ResultViewerProps {
     className?: string;
@@ -572,17 +573,26 @@ export function ResultViewer({ className }: ResultViewerProps) {
     const handleResetToModel = useCallback(async () => {
         if (!batchDetail || !currentImageRecord) return;
         setResetDialogOpen(false);
+        const imageId = currentImageRecord.id;
         try {
-            await resetEditedAnnotations(batchDetail.id, currentImageRecord.id);
-            const updatedImage = await getImageDetail(batchDetail.id, currentImageRecord.id);
-            imageDetailCache.current.set(currentImageRecord.id, updatedImage);
+            const updatedImage = await toastAction(
+                async () => {
+                    await resetEditedAnnotations(batchDetail.id, imageId);
+                    return getImageDetail(batchDetail.id, imageId);
+                },
+                {
+                    loading: 'Resetting to model output…',
+                    success: 'Reset to model output',
+                    error: 'Failed to reset',
+                },
+            );
+            imageDetailCache.current.set(imageId, updatedImage);
             bumpCache();
             const newBaseline = (updatedImage.annotations as BBox[] | null) ?? [];
             dispatchHistory({ type: 'reset', boxes: newBaseline });
             setSelectedIdx(null);
-            toast.success('Reset to model output');
         } catch {
-            toast.error('Failed to reset');
+            // Reported by toastAction.
         }
     }, [batchDetail, currentImageRecord, bumpCache]);
 
@@ -771,22 +781,30 @@ export function ResultViewer({ className }: ResultViewerProps) {
             return;
         }
         try {
-            // Persist any uncommitted annotation edits first.
-            if (isDirty && !savingEdits) {
-                await handleSaveEdits();
-            }
-            // If the batch is still in `processing` (e.g. processingManager
-            // didn't get a chance to call /complete because the operator hit
-            // Back early), promote it to `draft` so it shows up in Records.
-            if (batchDetail.status === 'processing') {
-                const updated = await completeBatch(batchDetail.id);
-                const nextDetail = { ...batchDetail, status: updated.status };
-                setBatchDetail(nextDetail);
-                storeBatchDetail(nextDetail);
-            }
-            toast.success('Saved as draft');
+            await toastAction(
+                async () => {
+                    // Persist any uncommitted annotation edits first.
+                    if (isDirty && !savingEdits) {
+                        await handleSaveEdits();
+                    }
+                    // If the batch is still in `processing` (e.g. processingManager
+                    // didn't get a chance to call /complete because the operator hit
+                    // Back early), promote it to `draft` so it shows up in Records.
+                    if (batchDetail.status === 'processing') {
+                        const updated = await completeBatch(batchDetail.id);
+                        const nextDetail = { ...batchDetail, status: updated.status };
+                        setBatchDetail(nextDetail);
+                        storeBatchDetail(nextDetail);
+                    }
+                },
+                {
+                    loading: 'Saving draft…',
+                    success: { title: 'Saved as draft', description: batchDetail.name },
+                    error: 'Failed to save draft',
+                },
+            );
         } catch {
-            toast.error('Failed to save draft');
+            // Reported by toastAction.
         } finally {
             setQuitDialogOpen(false);
             leaveToBatch(batchDetail.id);
@@ -873,24 +891,32 @@ export function ResultViewer({ className }: ResultViewerProps) {
         if (!batchDetail || finishing) return;
         setFinishing(true);
         try {
-            // Always persist any uncommitted edits before exiting, so the
-            // autosave-debounce window can't drop in-flight changes.
-            if (isDirty) {
-                await handleSaveEdits();
-            }
-            // Promote draft → completed only on the first finish. When the
-            // user is editing an already-completed batch (Continue from
-            // /recorded), skip the finish call — the backend would 409.
-            if (batchDetail.status !== 'completed') {
-                const updated = await finishBatch(batchDetail.id);
-                const nextDetail = { ...batchDetail, status: updated.status };
-                setBatchDetail(nextDetail);
-                storeBatchDetail(nextDetail);
-            }
-            toast.success('Saved to Records');
+            await toastAction(
+                async () => {
+                    // Always persist any uncommitted edits before exiting, so the
+                    // autosave-debounce window can't drop in-flight changes.
+                    if (isDirty) {
+                        await handleSaveEdits();
+                    }
+                    // Promote draft → completed only on the first finish. When the
+                    // user is editing an already-completed batch (Continue from
+                    // /recorded), skip the finish call — the backend would 409.
+                    if (batchDetail.status !== 'completed') {
+                        const updated = await finishBatch(batchDetail.id);
+                        const nextDetail = { ...batchDetail, status: updated.status };
+                        setBatchDetail(nextDetail);
+                        storeBatchDetail(nextDetail);
+                    }
+                },
+                {
+                    loading: 'Saving to Records…',
+                    success: { title: 'Saved to Records', description: batchDetail.name },
+                    error: 'Failed to save to Records',
+                },
+            );
             leaveToBatch(batchDetail.id);
         } catch {
-            toast.error('Failed to save to Records');
+            // Reported by toastAction.
         } finally {
             setFinishing(false);
         }

@@ -22,6 +22,7 @@ import {
 import type { CustomModelResponse, Organism, OrganismAssignment } from '@/types/api';
 import { ActiveChip, ModelList, ModelListEmpty, ModelListHeading, ModelRow } from './ModelRow';
 import { Chip, GroupHeading, OrganismLabel, SettingsSection } from './SettingsSection';
+import { toastAction } from '@/lib/toasts';
 
 const MODE_DESCRIPTION: Record<Organism, string> = {
     egg: 'Primary egg-detection weights used for egg counting workflows.',
@@ -399,13 +400,17 @@ export function ModelsSection({ showHeader = true }: ModelsSectionProps = {}) {
             const key = `${organism}:${modelId}`;
             setActionKey(key);
             try {
-                await assignModel(organism, modelId);
-                toast.success('Model activated', {
-                    description: `${organismMeta(organism).label} mode now points to the selected model. Restart the backend to apply changes.`,
+                await toastAction(assignModel(organism, modelId), {
+                    loading: 'Activating model…',
+                    success: {
+                        title: 'Model activated',
+                        description: `${organismMeta(organism).label} mode now points to the selected model. Restart the backend to apply changes.`,
+                    },
+                    error: 'Failed to activate model',
                 });
                 await fetchData();
-            } catch (err) {
-                toast.error('Failed to activate model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setActionKey(null);
             }
@@ -417,13 +422,17 @@ export function ModelsSection({ showHeader = true }: ModelsSectionProps = {}) {
         async (organism: Organism) => {
             setRevertKey(organism);
             try {
-                await assignModel(organism, null);
-                toast.success('Reverted to default model', {
-                    description: `${organismMeta(organism).label} mode will use its built-in default after backend restart.`,
+                await toastAction(assignModel(organism, null), {
+                    loading: 'Reverting to default model…',
+                    success: {
+                        title: 'Reverted to default model',
+                        description: `${organismMeta(organism).label} mode will use its built-in default after backend restart.`,
+                    },
+                    error: 'Failed to revert model',
                 });
                 await fetchData();
-            } catch (err) {
-                toast.error('Failed to revert model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setRevertKey(null);
             }
@@ -435,11 +444,14 @@ export function ModelsSection({ showHeader = true }: ModelsSectionProps = {}) {
         async (modelId: string) => {
             setDeleteKey(modelId);
             try {
-                await deleteCustomModel(modelId);
-                toast.success('Model deleted');
+                await toastAction(deleteCustomModel(modelId), {
+                    loading: 'Deleting model…',
+                    success: 'Model deleted',
+                    error: 'Failed to delete model',
+                });
                 await fetchData();
-            } catch (err) {
-                toast.error('Failed to delete model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setDeleteKey(null);
             }
@@ -456,13 +468,17 @@ export function ModelsSection({ showHeader = true }: ModelsSectionProps = {}) {
 
             setUploadingOrganism(organism);
             try {
-                await uploadCustomModel(organism, file);
-                toast.success('Model uploaded', {
-                    description: `${file.name} uploaded for ${organismMeta(organism).label} mode.`,
+                await toastAction(uploadCustomModel(organism, file), {
+                    loading: `Uploading ${file.name}…`,
+                    success: {
+                        title: 'Model uploaded',
+                        description: `${file.name} uploaded for ${organismMeta(organism).label} mode.`,
+                    },
+                    error: 'Failed to upload model',
                 });
                 await fetchData();
-            } catch (err) {
-                toast.error('Failed to upload model', { description: String(err) });
+            } catch {
+                // Reported by toastAction.
             } finally {
                 setUploadingOrganism(null);
             }

@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/sonner';
 import { login } from '@/services/auth';
 import { ApiError } from '@/services/errors';
+import { toastAction, errorMessage } from '@/lib/toasts';
 
 const LINK_CLASS =
     'rounded-sm font-medium text-primary underline-offset-4 hover:underline focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50';
@@ -31,17 +32,20 @@ export default function LoginPage() {
         if (!canSubmit) return;
         setSubmitting(true);
         try {
-            await login(email.trim(), password);
-            toast.success('Signed in');
+            await toastAction(login(email.trim(), password), {
+                loading: 'Signing in…',
+                success: 'Signed in',
+                error: (err) => ({
+                    title: 'Sign-in failed',
+                    description:
+                        err instanceof ApiError && err.code === 'invalid_credentials'
+                            ? 'Email or password is incorrect.'
+                            : errorMessage(err, 'Something went wrong.'),
+                }),
+            });
             navigate(from, { replace: true });
-        } catch (err) {
-            const description =
-                err instanceof ApiError && err.code === 'invalid_credentials'
-                    ? 'Email or password is incorrect.'
-                    : err instanceof Error
-                      ? err.message
-                      : 'Something went wrong.';
-            toast.error('Sign-in failed', { description });
+        } catch {
+            // Reported by toastAction.
         } finally {
             setSubmitting(false);
         }
