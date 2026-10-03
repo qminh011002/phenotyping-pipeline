@@ -134,7 +134,7 @@ export function ConfigPanel({ open, onOpenChange, onSaved, organism = 'egg' }: C
                         )}
                     </SheetBody>
                 ) : (
-                    <TooltipProvider delayDuration={300}>
+                    <TooltipProvider delayDuration={200}>
                         <SheetBody>
                             <div className="flex flex-col gap-7">
                                 <SettingsGroup title="Detection">
