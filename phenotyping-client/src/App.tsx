@@ -43,7 +43,7 @@ function RouteFallback() {
 // to any route while an analysis is running.
 function RootLayout() {
     return (
-        <TooltipProvider delayDuration={300}>
+        <TooltipProvider delayDuration={200}>
             <Toaster />
             <BatchTracker />
             <Suspense fallback={<RouteFallback />}>
