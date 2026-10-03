@@ -177,7 +177,7 @@ function BrandHeader() {
 function FooterNote() {
     return (
         <p className="mt-8 text-center text-xs text-muted-foreground">
-            Single-tenant desktop build · v0.1.0
+            A project by @13gucci aka Tran Quang Minh for the Genetic Entobel team
         </p>
     );
 }
