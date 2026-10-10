@@ -12,11 +12,16 @@
 //
 // Rendering is arranged so that the common high-frequency events touch as
 // little as possible:
-//   - each polygon is a memoised element whose `points` string is cached per
-//     polygon array, so hover / selection / zoom never re-serialise the
-//     vertex lists of the other few hundred polygons;
-//   - the dim-everything-but-the-polygons mask is static; hovering adds one
-//     extra dim layer with a two-polygon mask instead of rebuilding it;
+//   - the bulk of the polygons — fills, outlines, centerlines, the dim and
+//     hover veils — is drawn by WebGL (polygonGlRenderer) in a handful of
+//     draw calls. A zoom / pan frame only changes the view uniforms; as SVG,
+//     every frame re-rasterised thousands of nodes and a full-image mask;
+//   - only the polygons that are interacted with (selected, hovered,
+//     dragged) are SVG elements, layered on top. Hovering is resolved by
+//     hit-testing the polygon arrays (pickPolygon), which turns the polygon
+//     under the pointer into one of those SVG elements;
+//   - without WebGL2 (or after a lost context) every polygon renders as SVG,
+//     with the same masks, as before;
 //   - pan and drag previews mutate the DOM directly and commit to React
 //     state once, on release.
 
@@ -47,8 +52,11 @@ import {
     isValidPolygon,
     MIN_EDGE_LENGTH_PX,
     MIN_POLYGON_VERTICES,
+    packBBoxes,
+    pickPolygon,
     sqDist,
 } from './polygonOps';
+import { PolygonGlRenderer, type GlFrame, type GlView } from './polygonGlRenderer';
 import type { WorkingPolygon } from './usePolygonEdits';
 import { CalibrationCornerHandles } from './CalibrationCornerEditor';
 import type { Corners } from './calibrationMath';
@@ -60,6 +68,8 @@ const ZOOM_FACTOR = 1.15;
 const EDGE_HIT_PX = 6;
 /** Below this image-space displacement, a polygon pointerdown is treated as a click. */
 const POLYGON_DRAG_THRESHOLD_PX = 4;
+/** Half the idle stroke width, in screen px — the stroke is part of an SVG polygon's hit area. */
+const STROKE_HIT_PX = 0.5;
 
 const POLYGON_COLOR = '#00FFFF';
 
@@ -368,6 +378,97 @@ export function LarvaePolygonEditor({
         for (const wp of polygons) map.set(wp.detection_id, wp);
         return map;
     }, [polygons]);
+    const polygonIndexById = useMemo(
+        () => new Map(polygons.map((wp, i) => [wp.detection_id, i])),
+        [polygons],
+    );
+    const polygonArrays = useMemo(() => polygons.map((wp) => wp.polygon), [polygons]);
+    const polygonBBoxes = useMemo(() => packBBoxes(polygonArrays), [polygonArrays]);
+
+    // ── WebGL bulk layer ────────────────────────────────────────────────────
+    const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const glRef = useRef<PolygonGlRenderer | null>(null);
+    /** WebGL2 is up and its context alive; false → every polygon renders as SVG. */
+    const [glReady, setGlReady] = useState(false);
+    /** Canvas layout size and device-pixel size (the drawing buffer). */
+    const [glSize, setGlSize] = useState<{ css: [number, number]; device: [number, number] }>();
+
+    useEffect(() => {
+        const canvas = glCanvasRef.current;
+        if (!canvas) return;
+        const renderer = PolygonGlRenderer.create(canvas, () => {
+            glRef.current = null;
+            setGlReady(false);
+        });
+        if (!renderer) return;
+        glRef.current = renderer;
+        setGlReady(true);
+        return () => {
+            renderer.dispose();
+            glRef.current = null;
+            setGlReady(false);
+        };
+    }, []);
+
+    useEffect(() => {
+        const canvas = glCanvasRef.current;
+        if (!canvas || typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(([entry]) => {
+            const css = entry.contentBoxSize?.[0];
+            const device = entry.devicePixelContentBoxSize?.[0];
+            const w = css?.inlineSize ?? entry.contentRect.width;
+            const h = css?.blockSize ?? entry.contentRect.height;
+            const dpr = window.devicePixelRatio || 1;
+            const dw = device?.inlineSize ?? Math.round(w * dpr);
+            const dh = device?.blockSize ?? Math.round(h * dpr);
+            setGlSize((prev) =>
+                prev &&
+                prev.css[0] === w &&
+                prev.css[1] === h &&
+                prev.device[0] === dw &&
+                prev.device[1] === dh
+                    ? prev
+                    : { css: [w, h], device: [dw, dh] },
+            );
+        });
+        try {
+            // Exact device pixels, so the canvas maps 1:1 onto the screen.
+            ro.observe(canvas, { box: 'device-pixel-content-box' });
+        } catch {
+            ro.observe(canvas);
+        }
+        return () => ro.disconnect();
+    }, []);
+
+    /** Each polygon's centerline, in polygon order (stale ones are not drawn). */
+    const glCenterlines = useMemo(() => {
+        const byId = new Map<string, LarvaeMeasurement>();
+        for (const m of measurements ?? []) byId.set(m.detection_id, m);
+        return polygons.map((wp) => {
+            const m = byId.get(wp.detection_id);
+            return m && !m.is_stale && m.centerline && m.centerline.length >= 2
+                ? m.centerline
+                : null;
+        });
+    }, [polygons, measurements]);
+
+    useLayoutEffect(() => {
+        if (glReady) glRef.current?.setScene(polygonArrays, glCenterlines);
+    }, [glReady, polygonArrays, glCenterlines]);
+
+    useLayoutEffect(() => {
+        if (glReady && glSize) glRef.current?.setSize(...glSize.css, ...glSize.device);
+    }, [glReady, glSize]);
+
+    /** Everything but the view for the next WebGL frame; null = nothing to draw. */
+    const glFrameRef = useRef<Omit<GlFrame, 'view'> | null>(null);
+    const drawGl = useCallback((v: GlView) => {
+        const renderer = glRef.current;
+        if (!renderer) return;
+        const frame = glFrameRef.current;
+        if (frame) renderer.draw({ ...frame, view: v });
+        else renderer.clear();
+    }, []);
 
     // ── Image load ──────────────────────────────────────────────────────────
     const onDimensionsRef = useRef(onDimensions);
@@ -680,6 +781,15 @@ export function LarvaePolygonEditor({
         ) {
             return;
         }
+        // A press on a WebGL-drawn polygon that is not an SVG element yet
+        // (touch has no hover; or a click that beat the hover re-render).
+        if (tool === 'select' || tool === 'erase') {
+            const id = polygonAtPointer(e.clientX, e.clientY, target);
+            if (id) {
+                onShapeDown(e, id);
+                return;
+            }
+        }
         if (tool === 'draw') return;
         target.setPointerCapture?.(e.pointerId);
         beginPan(e, false);
@@ -709,6 +819,7 @@ export function LarvaePolygonEditor({
                 // every polygon and the mask each frame.
                 const svg = svgRef.current;
                 if (svg) svg.style.transform = `translate(${live.tx - tx}px, ${live.ty - ty}px)`;
+                drawGl({ scale, tx: live.tx, ty: live.ty });
             });
         }
     }
@@ -734,6 +845,7 @@ export function LarvaePolygonEditor({
             if (!drag.forced && tool === 'select') onSelect(null);
             const img = imgWrapRef.current;
             if (img) img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+            drawGl(view);
             return;
         }
         // Commit the final translate; the SVG's delta transform was cleared
@@ -783,7 +895,7 @@ export function LarvaePolygonEditor({
     // pointerdown on the polygon body either starts a translate-drag or seeds
     // a "click intent" so pointerup can resolve to select / insert-vertex.
     // Pointer events (not onClick) so click and drag can be told apart.
-    const handlePolygonPointerDown = (e: ReactPointerEvent<SVGElement>, id: string) => {
+    const handlePolygonPointerDown = (e: ReactPointerEvent<Element>, id: string) => {
         if (e.button !== 0) return;
         if (tool === 'erase') {
             e.stopPropagation();
@@ -852,6 +964,53 @@ export function LarvaePolygonEditor({
         setHoverId((cur) => (cur === id ? null : cur));
     };
 
+    // ── WebGL-mode hit testing ──────────────────────────────────────────────
+    // Polygons drawn by WebGL have no element to receive mouseenter, so the
+    // pointer is hit-tested against the polygon arrays instead. The SVG
+    // elements (selected / hovered) sit on top and are checked first.
+    /** Last pointer position over the editor — re-hit-tested after a zoom or an edit. */
+    const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+
+    /** Id of the polygon under a client point, or null; always null in SVG mode. */
+    function polygonAtPointer(clientX: number, clientY: number, target: Element | null) {
+        if (!glReady || !overlayVisible) return null;
+        if (!target || !containerRef.current?.contains(target)) return null;
+        if (target.closest('[data-vertex-idx], [data-editor-chrome]')) return null;
+        const own = target.closest('[data-polygon-id]')?.getAttribute('data-polygon-id');
+        if (own) return own;
+        const point = clientToImage(clientX, clientY);
+        if (!point) return null;
+        const tolerance = STROKE_HIT_PX / viewRef.current.scale;
+        const idx = pickPolygon(polygonArrays, polygonBBoxes, point, tolerance);
+        return idx >= 0 ? polygons[idx].detection_id : null;
+    }
+
+    function updateHoverAt(clientX: number, clientY: number, target: Element | null) {
+        if (!glReady || tool === 'draw') return;
+        if (polygonDragRef.current || vertexDragRef.current || panRef.current) return;
+        const id = polygonAtPointer(clientX, clientY, target);
+        setHoverId((cur) => (cur === id ? cur : id));
+    }
+
+    function handleContainerPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+        continuePan(e);
+        lastPointerRef.current = { x: e.clientX, y: e.clientY };
+        updateHoverAt(e.clientX, e.clientY, e.target as Element);
+    }
+
+    function handleContainerPointerLeave() {
+        lastPointerRef.current = null;
+        if (!glReady || polygonDragRef.current || vertexDragRef.current || panRef.current) return;
+        setHoverId(null);
+    }
+
+    // A zoom or an edit moves polygons under a still pointer — re-resolve the
+    // hover, as the browser re-dispatches mouseenter for SVG elements.
+    useEffect(() => {
+        const p = lastPointerRef.current;
+        if (p) updateHoverAt(p.x, p.y, document.elementFromPoint(p.x, p.y));
+    }, [view, polygons, glReady]);
+
     // Stable wrappers so the memoised polygon elements don't re-render when
     // these handlers' closures change (selection, tool, view…).
     const latest = useRef({
@@ -867,7 +1026,7 @@ export function LarvaePolygonEditor({
         leave: handlePolygonLeave,
     };
     const onShapeDown = useCallback(
-        (e: ReactPointerEvent<SVGElement>, id: string) => latest.current.down(e, id),
+        (e: ReactPointerEvent<Element>, id: string) => latest.current.down(e, id),
         [],
     );
     const onShapeUp = useCallback(
@@ -962,6 +1121,14 @@ export function LarvaePolygonEditor({
         }
         setVertexDragging(false);
         onInteractionChange?.(false);
+    }
+
+    function handleSvgPointerUp(e: ReactPointerEvent<SVGSVGElement>) {
+        finishVertexDrag();
+        // A body press resolved by hit-testing captured the pointer on the
+        // <svg> itself, so its release lands here rather than on a polygon.
+        const drag = polygonDragRef.current;
+        if (drag) finishPolygonPointer(e, drag.detectionId);
     }
 
     function cancelActiveDrag() {
@@ -1081,6 +1248,50 @@ export function LarvaePolygonEditor({
 
     const centerlineIds = useMemo(() => new Set(polygons.map((p) => p.detection_id)), [polygons]);
 
+    /**
+     * With WebGL, only these polygons are SVG elements (the ones being
+     * interacted with); null = SVG mode, every polygon is.
+     */
+    const svgPolygonIds = useMemo(
+        () =>
+            glReady
+                ? new Set(
+                      [selectedDetectionId, hoverId, draggingPolygonId].filter(
+                          (id): id is string => id !== null && polygonById.has(id),
+                      ),
+                  )
+                : null,
+        [glReady, selectedDetectionId, hoverId, draggingPolygonId, polygonById],
+    );
+    const svgPolygons = svgPolygonIds
+        ? polygons.filter((wp) => svgPolygonIds.has(wp.detection_id))
+        : polygons;
+    const spotlightActive = !draggingActive && !!hoveredPolygon && tool !== 'erase';
+
+    // Repaint the WebGL layer after every commit, before the browser paints,
+    // so it moves in lockstep with the image and the SVG.
+    useLayoutEffect(() => {
+        if (!glReady || !dims || !objectUrl) {
+            glFrameRef.current = null;
+        } else {
+            const indexOf = (ids: (string | null)[]) =>
+                ids.flatMap((id) => {
+                    const i = id === null ? undefined : polygonIndexById.get(id);
+                    return i === undefined ? [] : [i];
+                });
+            glFrameRef.current = {
+                imageWidth: dims.w,
+                imageHeight: dims.h,
+                hidden: indexOf([...(svgPolygonIds ?? [])]),
+                dim: !draggingActive,
+                spotlight: spotlightActive ? indexOf([hoverId, selectedDetectionId]) : null,
+                centerlines: showCenterlines && !!measurements,
+            };
+        }
+        const live = livePanRef.current;
+        drawGl(live ? { scale, tx: live.tx, ty: live.ty } : view);
+    });
+
     const cursor =
         panning || vertexDragging
             ? 'grabbing'
@@ -1102,7 +1313,8 @@ export function LarvaePolygonEditor({
             )}
             onPointerDownCapture={startForcedPan}
             onPointerDown={startPan}
-            onPointerMove={continuePan}
+            onPointerMove={handleContainerPointerMove}
+            onPointerLeave={handleContainerPointerLeave}
             onPointerUp={endPan}
             onPointerCancel={endPan}
             onContextMenu={(e) => {
@@ -1237,7 +1449,30 @@ export function LarvaePolygonEditor({
                             style={{ display: 'block' }}
                         />
                     </div>
+                </>
+            )}
 
+            {/*
+              WebGL layer — every polygon not shown as an SVG element. Kept
+              mounted across image swaps so the context is created once.
+            */}
+            <canvas
+                ref={glCanvasRef}
+                aria-hidden
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    pointerEvents: 'none',
+                    visibility: glReady ? 'visible' : 'hidden',
+                    opacity: overlayVisible ? 1 : 0,
+                    transition: 'opacity 120ms ease-out',
+                }}
+            />
+
+            {dims && objectUrl && (
+                <>
                     {/*
                       Vector overlay — full-viewport SVG, transform on inner
                       <g>. overflow:visible so content outside the SVG box
@@ -1260,7 +1495,7 @@ export function LarvaePolygonEditor({
                             transition: 'opacity 120ms ease-out',
                         }}
                         onPointerMove={handleSvgPointerMove}
-                        onPointerUp={finishVertexDrag}
+                        onPointerUp={handleSvgPointerUp}
                         onPointerCancel={cancelActiveDrag}
                         onClick={handleSvgClick}
                         onDoubleClick={() => {
@@ -1268,63 +1503,81 @@ export function LarvaePolygonEditor({
                         }}
                     >
                         <g ref={gRef} transform={`translate(${tx} ${ty}) scale(${scale})`}>
-                            <defs>
-                                {/* Static: the image minus every polygon. */}
-                                <mask id={`dim-${maskId}`}>
-                                    <rect x={0} y={0} width={dims.w} height={dims.h} fill="white" />
-                                    <MaskCutouts polygons={polygons} />
-                                </mask>
-                                {/* Hover spotlight: everything except the
+                            {/* SVG mode only — the WebGL layer draws both veils. */}
+                            {!glReady && (
+                                <>
+                                    <defs>
+                                        {/* Static: the image minus every polygon. */}
+                                        <mask id={`dim-${maskId}`}>
+                                            <rect
+                                                x={0}
+                                                y={0}
+                                                width={dims.w}
+                                                height={dims.h}
+                                                fill="white"
+                                            />
+                                            <MaskCutouts polygons={polygons} />
+                                        </mask>
+                                        {/* Hover spotlight: everything except the
                                     hovered (and selected) polygon. */}
-                                <mask id={`spot-${maskId}`}>
-                                    <rect x={0} y={0} width={dims.w} height={dims.h} fill="white" />
-                                    {hoveredPolygon && (
-                                        <polygon
-                                            points={pointsFor(hoveredPolygon.polygon)}
-                                            fill="black"
-                                        />
-                                    )}
-                                    {selectedPolygon && selectedPolygon !== hoveredPolygon && (
-                                        <polygon
-                                            points={pointsFor(selectedPolygon.polygon)}
-                                            fill="black"
-                                        />
-                                    )}
-                                </mask>
-                            </defs>
-                            {/*
+                                        <mask id={`spot-${maskId}`}>
+                                            <rect
+                                                x={0}
+                                                y={0}
+                                                width={dims.w}
+                                                height={dims.h}
+                                                fill="white"
+                                            />
+                                            {hoveredPolygon && (
+                                                <polygon
+                                                    points={pointsFor(hoveredPolygon.polygon)}
+                                                    fill="black"
+                                                />
+                                            )}
+                                            {selectedPolygon &&
+                                                selectedPolygon !== hoveredPolygon && (
+                                                    <polygon
+                                                        points={pointsFor(selectedPolygon.polygon)}
+                                                        fill="black"
+                                                    />
+                                                )}
+                                        </mask>
+                                    </defs>
+                                    {/*
                               Dim layers. Skipped during an active drag: the
                               dragged polygon's cut-out would lag behind it,
                               and re-rastering the mask per frame is the
                               dominant cost on dense scenes.
                             */}
-                            {!draggingActive && (
-                                <rect
-                                    x={0}
-                                    y={0}
-                                    width={dims.w}
-                                    height={dims.h}
-                                    fill="black"
-                                    opacity={0.4}
-                                    mask={`url(#dim-${maskId})`}
-                                    pointerEvents="none"
-                                />
-                            )}
-                            {!draggingActive && hoveredPolygon && tool !== 'erase' && (
-                                <rect
-                                    x={0}
-                                    y={0}
-                                    width={dims.w}
-                                    height={dims.h}
-                                    fill="black"
-                                    opacity={0.3}
-                                    mask={`url(#spot-${maskId})`}
-                                    pointerEvents="none"
-                                />
+                                    {!draggingActive && (
+                                        <rect
+                                            x={0}
+                                            y={0}
+                                            width={dims.w}
+                                            height={dims.h}
+                                            fill="black"
+                                            opacity={0.4}
+                                            mask={`url(#dim-${maskId})`}
+                                            pointerEvents="none"
+                                        />
+                                    )}
+                                    {spotlightActive && (
+                                        <rect
+                                            x={0}
+                                            y={0}
+                                            width={dims.w}
+                                            height={dims.h}
+                                            fill="black"
+                                            opacity={0.3}
+                                            mask={`url(#spot-${maskId})`}
+                                            pointerEvents="none"
+                                        />
+                                    )}
+                                </>
                             )}
 
                             {/* Polygons */}
-                            {polygons.map((wp) => {
+                            {svgPolygons.map((wp) => {
                                 const id = wp.detection_id;
                                 const isSelected = id === selectedDetectionId;
                                 const isHovered = id === hoverId;
@@ -1368,7 +1621,7 @@ export function LarvaePolygonEditor({
                             {showCenterlines && measurements && (
                                 <Centerlines
                                     measurements={measurements}
-                                    visibleIds={centerlineIds}
+                                    visibleIds={svgPolygonIds ?? centerlineIds}
                                 />
                             )}
 
