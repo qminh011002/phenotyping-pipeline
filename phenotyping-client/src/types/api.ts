@@ -89,6 +89,8 @@ export interface PolygonSamConfig {
     enabled: boolean;
     model: string;
     crop_padding: number;
+    /** Square size each crop is resized to for SAM's image encoder (1024 = reference). */
+    imgsz?: number;
     confidence_threshold: number;
     device?: Device | null;
 }
@@ -125,6 +127,7 @@ export interface LarvaeConfig {
 export interface PolygonConfigUpdate {
     centerline_method?: CenterlineMethod;
     sam_enabled?: boolean;
+    sam_imgsz?: number;
     device?: Device;
     tile_size?: number;
     overlap?: number;

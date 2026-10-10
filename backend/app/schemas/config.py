@@ -345,12 +345,14 @@ class _PolygonConfigUpdate(BaseModel):
     """Partial update shared by the ``larvae`` and ``pupae`` config blocks.
 
     Every field is optional; only the ones present are written to
-    inference_config.yaml. ``sam_enabled`` is flat here but lives under
-    ``<organism>.sam.enabled`` in YAML — the router routes it accordingly.
+    inference_config.yaml. ``sam_enabled`` / ``sam_imgsz`` are flat here but
+    live under ``<organism>.sam.enabled`` / ``.imgsz`` in YAML — the router
+    routes them accordingly.
     """
 
     centerline_method: CenterlineMethod | None = None
     sam_enabled: bool | None = None
+    sam_imgsz: int | None = Field(default=None, ge=256, le=1024, multiple_of=32)
     device: Device | None = None
     tile_size: int | None = Field(default=None, gt=0)
     # Capped below 1.0 — an overlap of 1.0 gives a zero tile stride.

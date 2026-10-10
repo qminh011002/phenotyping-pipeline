@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -173,6 +174,18 @@ async def get_larvae_config() -> LarvaeConfig:
         ) from exc
 
 
+_SAM_REQUEST_FIELDS = {"sam_enabled": "enabled", "sam_imgsz": "imgsz"}
+
+
+def _pop_sam_patch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Pop the flat ``sam_*`` fields from ``payload`` into a SAM-block patch."""
+    return {
+        key: payload.pop(field)
+        for field, key in _SAM_REQUEST_FIELDS.items()
+        if field in payload
+    }
+
+
 @router.put(
     "/larvae",
     response_model=LarvaeConfig,
@@ -181,15 +194,13 @@ async def get_larvae_config() -> LarvaeConfig:
 async def update_larvae_config(update: LarvaeConfigUpdateRequest) -> LarvaeConfig:
     cfg_mgr = get_pipeline_config()
     payload = update.model_dump(exclude_none=True)
-    # ``sam_enabled`` is a flat field on the request but lives under
-    # ``larvae.sam.enabled`` in YAML — route it through the dedicated patch.
-    sam_enabled = payload.pop("sam_enabled", None)
+    # ``sam_enabled`` / ``sam_imgsz`` are flat fields on the request but live
+    # under ``larvae.sam`` in YAML — route them through the dedicated patch.
+    sam_patch = _pop_sam_patch(payload)
     try:
         merged = await asyncio.to_thread(cfg_mgr.update_larvae, payload)
-        if sam_enabled is not None:
-            merged = await asyncio.to_thread(
-                cfg_mgr.update_larvae_sam, {"enabled": sam_enabled}
-            )
+        if sam_patch:
+            merged = await asyncio.to_thread(cfg_mgr.update_larvae_sam, sam_patch)
     except Exception as exc:
         logger.exception("PUT /config/larvae failed")
         raise HTTPException(
@@ -229,13 +240,11 @@ async def get_pupae_config() -> PupaeConfig:
 async def update_pupae_config(update: PupaeConfigUpdateRequest) -> PupaeConfig:
     cfg_mgr = get_pipeline_config()
     payload = update.model_dump(exclude_none=True)
-    sam_enabled = payload.pop("sam_enabled", None)
+    sam_patch = _pop_sam_patch(payload)
     try:
         merged = await asyncio.to_thread(cfg_mgr.update_pupae, payload)
-        if sam_enabled is not None:
-            merged = await asyncio.to_thread(
-                cfg_mgr.update_pupae_sam, {"enabled": sam_enabled}
-            )
+        if sam_patch:
+            merged = await asyncio.to_thread(cfg_mgr.update_pupae_sam, sam_patch)
     except Exception as exc:
         logger.exception("PUT /config/pupae failed")
         raise HTTPException(
