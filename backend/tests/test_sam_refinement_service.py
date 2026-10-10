@@ -175,3 +175,54 @@ def test_refine_one_rejects_sam_mask_below_iou_guard(tmp_path):
         executor.shutdown(wait=False)
 
     assert out is None
+
+
+def test_sam_imgsz_defaults_to_reference_size_and_is_validated():
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.config import LarvaeSamConfig, PupaeSamConfig
+
+    assert LarvaeSamConfig().imgsz == 1024
+    assert PupaeSamConfig().imgsz == 1024
+    assert LarvaeSamConfig(imgsz=640).imgsz == 640
+    for bad in (1000, 2048, 128):  # not a multiple of 32 / too large / too small
+        with pytest.raises(ValidationError):
+            LarvaeSamConfig(imgsz=bad)
+
+
+def test_refine_candidates_forwards_configured_imgsz(tmp_path):
+    executor = ThreadPoolExecutor(max_workers=1)
+    svc = SamRefinementService(executor=executor, weights_dir=tmp_path)
+    svc._ensure_model = MagicMock(return_value=object())
+    svc._refine_one = MagicMock(return_value=None)
+    cfg = _larvae_cfg(0.1)
+    cfg.sam.imgsz = 640
+
+    image = np.zeros((128, 128, 3), dtype=np.uint8)
+    try:
+        svc.refine_candidates(image, [{"bbox": (10, 10, 40, 40), "confidence": 0.9}], cfg)
+    finally:
+        executor.shutdown(wait=False)
+
+    assert svc._refine_one.call_args.kwargs["imgsz"] == 640
+
+
+def test_refine_one_runs_sam_at_requested_imgsz(tmp_path):
+    executor = ThreadPoolExecutor(max_workers=1)
+    svc = SamRefinementService(executor=executor, weights_dir=tmp_path)
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+    candidate = {
+        "bbox": (10, 10, 30, 30),
+        "polygon": np.array([[10, 10], [30, 10], [30, 30], [10, 30]], dtype=np.int32),
+        "area": 400,
+        "confidence": 0.95,
+    }
+    model = _fake_sam(np.ones((20, 20), dtype=np.uint8))
+
+    try:
+        svc._refine_one(model, image, candidate, padding=0, imgsz=768)
+    finally:
+        executor.shutdown(wait=False)
+
+    assert model.call_args.kwargs["imgsz"] == 768

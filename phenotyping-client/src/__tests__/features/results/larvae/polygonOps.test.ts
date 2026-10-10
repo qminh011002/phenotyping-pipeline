@@ -2,11 +2,15 @@ import { describe, it, expect } from 'vitest';
 
 import {
     deleteVertex,
+    distanceToOutline,
     findClosestEdge,
     hasSelfIntersection,
     insertVertex,
     isValidPolygon,
     moveVertex,
+    packBBoxes,
+    pickPolygon,
+    pointInPolygon,
     polygonArea,
     polygonBBox,
     projectOnSegment,
@@ -153,6 +157,65 @@ describe('polygonOps', () => {
     describe('polygonArea', () => {
         it('uses the shoelace formula', () => {
             expect(polygonArea(SQUARE)).toBe(100);
+        });
+    });
+
+    describe('pointInPolygon', () => {
+        it('tests the inside of a square', () => {
+            expect(pointInPolygon(SQUARE, [5, 5])).toBe(true);
+            expect(pointInPolygon(SQUARE, [11, 5])).toBe(false);
+            expect(pointInPolygon(SQUARE, [5, -1])).toBe(false);
+        });
+
+        it('ignores vertex order', () => {
+            expect(pointInPolygon([...SQUARE].reverse(), [5, 5])).toBe(true);
+        });
+
+        it('fills both lobes of a bowtie (nonzero, like SVG)', () => {
+            const bowtie: LarvaePolygon = [
+                [0, 0],
+                [10, 10],
+                [10, 0],
+                [0, 10],
+            ];
+            // Lobes left and right of the crossing at (5, 5).
+            expect(pointInPolygon(bowtie, [2, 5])).toBe(true);
+            expect(pointInPolygon(bowtie, [8, 5])).toBe(true);
+            expect(pointInPolygon(bowtie, [5, 1])).toBe(false);
+        });
+
+        it('fills a region wound twice once, not as a hole (nonzero, not even-odd)', () => {
+            // Two laps around the same square: winding 2 inside.
+            const twice: LarvaePolygon = [...SQUARE, ...SQUARE];
+            expect(pointInPolygon(twice, [5, 5])).toBe(true);
+        });
+    });
+
+    describe('distanceToOutline', () => {
+        it('measures to the nearest edge, closing edge included', () => {
+            expect(distanceToOutline(SQUARE, [5, 5])).toBe(5);
+            expect(distanceToOutline(SQUARE, [-3, 5])).toBe(3);
+            expect(distanceToOutline(SQUARE, [13, 14])).toBe(5);
+        });
+    });
+
+    describe('pickPolygon', () => {
+        const right: LarvaePolygon = SQUARE.map(([x, y]) => [x + 5, y]);
+        const polygons = [SQUARE, right];
+        const bboxes = packBBoxes(polygons);
+
+        it('returns the topmost (last painted) polygon under the point', () => {
+            expect(pickPolygon(polygons, bboxes, [7, 5], 0.5)).toBe(1);
+            expect(pickPolygon(polygons, bboxes, [2, 5], 0.5)).toBe(0);
+        });
+
+        it('counts the stroke as part of the hit area', () => {
+            expect(pickPolygon(polygons, bboxes, [15.4, 5], 0.5)).toBe(1);
+            expect(pickPolygon(polygons, bboxes, [15.6, 5], 0.5)).toBe(-1);
+        });
+
+        it('returns -1 on empty space', () => {
+            expect(pickPolygon(polygons, bboxes, [40, 40], 0.5)).toBe(-1);
         });
     });
 });

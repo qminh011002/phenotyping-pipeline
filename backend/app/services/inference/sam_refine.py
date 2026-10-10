@@ -207,8 +207,13 @@ class SamRefinementService:
         min_area_ratio: float = 0.6,
         max_area_ratio: float = 1.3,
         min_iou_vs_yolo: float = 0.5,
+        imgsz: int = 1024,
     ) -> dict[str, Any] | None:
-        """Return a new candidate with refined polygon, or None on failure."""
+        """Return a new candidate with refined polygon, or None on failure.
+
+        ``imgsz`` is the square size the crop is resized to for SAM's image
+        encoder (see ``LarvaeSamConfig.imgsz``).
+        """
         x_min, y_min, x_max, y_max = candidate["bbox"]
         h, w = image.shape[:2]
         cx1 = max(0, int(x_min) - padding)
@@ -236,10 +241,16 @@ class SamRefinementService:
 
                 with torch.inference_mode():
                     results = model(
-                        crop, bboxes=[local_bbox], verbose=False, half=False
+                        crop,
+                        bboxes=[local_bbox],
+                        verbose=False,
+                        half=False,
+                        imgsz=imgsz,
                     )
             except ImportError:
-                results = model(crop, bboxes=[local_bbox], verbose=False, half=False)
+                results = model(
+                    crop, bboxes=[local_bbox], verbose=False, half=False, imgsz=imgsz
+                )
         except (RuntimeError, ValueError) as exc:
             logger.debug("SAM inference error: %s", exc)
             return None
@@ -349,6 +360,7 @@ class SamRefinementService:
         min_ratio = float(sam_cfg.min_area_ratio)
         max_ratio = float(sam_cfg.max_area_ratio)
         min_iou = float(sam_cfg.min_iou_vs_yolo)
+        imgsz = int(sam_cfg.imgsz)
 
         refined: list[dict[str, Any]] = list(candidates)
         n_refined = 0
@@ -375,6 +387,7 @@ class SamRefinementService:
                     min_area_ratio=min_ratio,
                     max_area_ratio=max_ratio,
                     min_iou_vs_yolo=min_iou,
+                    imgsz=imgsz,
                 )
                 if new is None:
                     n_failed += 1

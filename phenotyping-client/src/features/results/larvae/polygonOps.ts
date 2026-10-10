@@ -275,3 +275,72 @@ export function polygonArea(poly: LarvaePolygon): number {
     }
     return Math.abs(s) / 2;
 }
+
+/**
+ * Whether `point` is inside the polygon under the nonzero fill rule — SVG's
+ * default, so self-intersecting outlines answer like a `<polygon>` would.
+ */
+export function pointInPolygon(poly: LarvaePolygon, point: Point2D): boolean {
+    const [px, py] = point;
+    const n = poly.length;
+    let wind = 0;
+    for (let i = 0; i < n; i++) {
+        const [ax, ay] = poly[i];
+        const [bx, by] = poly[(i + 1) % n];
+        const side = (bx - ax) * (py - ay) - (px - ax) * (by - ay);
+        if (ay <= py) {
+            if (by > py && side > 0) wind++;
+        } else if (by <= py && side < 0) {
+            wind--;
+        }
+    }
+    return wind !== 0;
+}
+
+/** Distance from `point` to the polygon's outline (closing edge included). */
+export function distanceToOutline(poly: LarvaePolygon, point: Point2D): number {
+    const n = poly.length;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+        best = Math.min(best, sqSegDist(point, poly[i], poly[(i + 1) % n]));
+    }
+    return Math.sqrt(best);
+}
+
+/** [x1, y1, x2, y2] of every polygon, packed for fast scans. */
+export function packBBoxes(polygons: readonly LarvaePolygon[]): Float64Array {
+    const out = new Float64Array(polygons.length * 4);
+    polygons.forEach((poly, i) => out.set(polygonBBox(poly), i * 4));
+    return out;
+}
+
+/**
+ * Index of the topmost polygon (last in paint order) whose fill or stroke is
+ * under `point` — what hit-testing the SVG `<polygon>`s would return. A
+ * bounding-box scan rules out all but a handful before the exact tests.
+ * `strokeTolerance` is half the stroke width, in image pixels.
+ */
+export function pickPolygon(
+    polygons: readonly LarvaePolygon[],
+    bboxes: Float64Array,
+    point: Point2D,
+    strokeTolerance: number,
+): number {
+    const [x, y] = point;
+    const tol = strokeTolerance;
+    for (let i = polygons.length - 1; i >= 0; i--) {
+        const o = i * 4;
+        if (
+            x < bboxes[o] - tol ||
+            x > bboxes[o + 2] + tol ||
+            y < bboxes[o + 1] - tol ||
+            y > bboxes[o + 3] + tol
+        ) {
+            continue;
+        }
+        const poly = polygons[i];
+        if (poly.length < 2) continue;
+        if (pointInPolygon(poly, point) || distanceToOutline(poly, point) <= tol) return i;
+    }
+    return -1;
+}

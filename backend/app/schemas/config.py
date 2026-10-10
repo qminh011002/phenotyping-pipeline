@@ -72,6 +72,12 @@ class LarvaeSamConfig(BaseModel):
     enabled: bool = True
     model: str = "mobile_sam.pt"
     crop_padding: int = Field(default=50, ge=0)
+    # Square size each crop is resized to before SAM's image encoder — the
+    # encoder is ~96% of SAM's time and its cost grows with imgsz². 1024 is the
+    # reference pipeline. On the production CPU (i7-10700, 190 real larvae vs
+    # 1024): 768 ≈ 1.9× and 640 ≈ 3× faster, median length / width / area
+    # within ~1% (sub-pixel), but not byte-identical to 1024.
+    imgsz: int = Field(default=1024, ge=256, le=1024, multiple_of=32)
     confidence_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
     device: Device | None = None
 
@@ -207,6 +213,7 @@ class PupaeSamConfig(BaseModel):
     enabled: bool = True
     model: str = "mobile_sam.pt"
     crop_padding: int = Field(default=50, ge=0)
+    imgsz: int = Field(default=1024, ge=256, le=1024, multiple_of=32)
     confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     device: Device | None = None
     min_area_ratio: float = Field(default=0.6, gt=0.0, le=1.0)
