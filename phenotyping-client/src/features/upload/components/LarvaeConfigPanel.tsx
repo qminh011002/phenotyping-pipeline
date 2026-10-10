@@ -62,7 +62,28 @@ const TOOLTIPS = {
         'Centerline extraction algorithm. Pipeline-compat (distance-ridge Dijkstra + polynomial fit) reproduces the pipeline’s length numbers exactly — use this to match the reference. Hybrid (medial axis + 2-pass geodesic + B-spline) is more robust on curved larvae but its B-spline smoothing shortens the curve by ~15%. Legacy uses medial-axis longest path with Dijkstra fallback.',
     sam_enabled:
         'Refine YOLO polygons with SAM after detection. Gives tighter pixel-level boundaries. Only used by “Count + measure” runs — “Count only” runs always skip it, and you can refine later from the result viewer.',
+    sam_imgsz:
+        'Size each detection crop is resized to before SAM refines its outline. SAM is most of a “Count + measure” run on CPU, and its cost grows with the square of this size. 1024 matches the reference pipeline. On the production server 768 is ~2× and 640 ~3× faster, with length / width / area typically within ~1% (under a pixel) of 1024 — close, but not identical.',
 } as const;
+
+/** SAM input sizes offered in the sheet, with what each trades. */
+const SAM_IMGSZ_OPTIONS: Array<{ value: number; label: string; hint: string }> = [
+    {
+        value: 1024,
+        label: '1024 px (matches reference output)',
+        hint: 'Reference size — slowest, identical to the original pipeline.',
+    },
+    {
+        value: 768,
+        label: '768 px (~2× faster)',
+        hint: '~2× faster SAM; sizes typically within ~1% of 1024.',
+    },
+    {
+        value: 640,
+        label: '640 px (~3× faster)',
+        hint: '~3× faster SAM; sizes typically within ~1% of 1024, slightly coarser outlines.',
+    },
+];
 
 /** The fields this sheet edits — a flat view of the server config. */
 interface Draft {
@@ -77,6 +98,7 @@ interface Draft {
     calibration_object_h_mm: number;
     centerline_method: CenterlineMethod;
     sam_enabled: boolean;
+    sam_imgsz: number;
 }
 
 function toDraft(cfg: LarvaeConfig): Draft {
@@ -92,6 +114,7 @@ function toDraft(cfg: LarvaeConfig): Draft {
         calibration_object_h_mm: cfg.calibration_object_h_mm,
         centerline_method: cfg.centerline_method ?? 'pipeline_compat',
         sam_enabled: cfg.sam?.enabled ?? true,
+        sam_imgsz: cfg.sam?.imgsz ?? 1024,
     };
 }
 
@@ -396,6 +419,44 @@ export function LarvaeConfigPanel({
                                                 {draft.sam_enabled ? 'Enabled' : 'Disabled'}
                                             </span>
                                         </div>
+                                    </LabeledField>
+
+                                    <LabeledField
+                                        htmlFor="larvae-sam-imgsz"
+                                        label="SAM input size"
+                                        tooltip={TOOLTIPS.sam_imgsz}
+                                        hint={
+                                            SAM_IMGSZ_OPTIONS.find(
+                                                (o) => o.value === draft.sam_imgsz,
+                                            )?.hint ?? 'Custom size set on the server.'
+                                        }
+                                    >
+                                        <Select
+                                            value={String(draft.sam_imgsz)}
+                                            onValueChange={(v) => update('sam_imgsz', Number(v))}
+                                            disabled={saving || !draft.sam_enabled}
+                                        >
+                                            <SelectTrigger id="larvae-sam-imgsz" className="w-full">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {SAM_IMGSZ_OPTIONS.map((o) => (
+                                                    <SelectItem
+                                                        key={o.value}
+                                                        value={String(o.value)}
+                                                    >
+                                                        {o.label}
+                                                    </SelectItem>
+                                                ))}
+                                                {!SAM_IMGSZ_OPTIONS.some(
+                                                    (o) => o.value === draft.sam_imgsz,
+                                                ) && (
+                                                    <SelectItem value={String(draft.sam_imgsz)}>
+                                                        {draft.sam_imgsz} px (custom)
+                                                    </SelectItem>
+                                                )}
+                                            </SelectContent>
+                                        </Select>
                                     </LabeledField>
 
                                     <LabeledField

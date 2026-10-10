@@ -166,3 +166,42 @@ class TestPutConfig:
         assert response.status_code == 200
         data = response.json()
         assert data["tile_size"] == 512
+
+
+@pytest.fixture
+def seeded_larvae(temp_pipeline_config):
+    """Give the temp config a larvae section (its required fields have no defaults)."""
+    temp_pipeline_config.update_larvae(
+        {
+            "tile_size": 512,
+            "overlap": 0.5,
+            "confidence_threshold": 0.4,
+            "batch_size": 24,
+        }
+    )
+
+
+@pytest.mark.usefixtures("seeded_larvae")
+class TestPutLarvaeSam:
+    @pytest.mark.asyncio
+    async def test_update_sam_imgsz_lands_in_sam_block(self, config_client):
+        """The flat ``sam_imgsz`` field is written to larvae.sam.imgsz."""
+        response = await config_client.put("/config/larvae", json={"sam_imgsz": 768})
+        assert response.status_code == 200
+        sam = response.json()["sam"]
+        assert sam["imgsz"] == 768
+        assert sam["enabled"] is True
+
+        # A later sam_enabled-only update keeps the chosen size.
+        response = await config_client.put(
+            "/config/larvae", json={"sam_enabled": False}
+        )
+        assert response.json()["sam"] == {**sam, "enabled": False}
+
+    @pytest.mark.asyncio
+    async def test_update_invalid_sam_imgsz_returns_422(self, config_client):
+        for bad in (700, 2048):
+            response = await config_client.put(
+                "/config/larvae", json={"sam_imgsz": bad}
+            )
+            assert response.status_code == 422
